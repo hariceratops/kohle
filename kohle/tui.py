@@ -2,8 +2,8 @@
 from textual.app import App, ComposeResult
 from textual.widgets import Button, Input, Static
 
-from services.categories import add_debit_category
-from db import session_local
+from kohle.services.categories import add_debit_category
+from kohle.db import session_local
 
 
 class DebitCategoryApp(App):

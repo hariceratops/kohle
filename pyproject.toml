@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kohle"
+version = "0.1.0"
+description = "Personal expense manager"
+authors = [
+    { name="Hari", email="you@example.com" }
+]
+readme = "README.md"
+requires-python = ">=3.10"
+
+# Runtime dependencies (packages needed to run Kohle)
+dependencies = [
+    "alembic==1.18.3",
+    "click==8.3.1",
+    "greenlet==3.3.1",
+    "linkify-it-py==2.0.3",
+    "Mako==1.3.10",
+    "markdown-it-py==4.0.0",
+    "MarkupSafe==3.0.3",
+    "mdit-py-plugins==0.5.0",
+    "mdurl==0.1.2",
+    "numpy==2.4.2",
+    "packaging==26.0",
+    "pandas==3.0.0",
+    "platformdirs==4.5.1",
+    "Pygments==2.19.2",
+    "python-dateutil==2.9.0.post0",
+    "rich==14.3.1",
+    "six==1.17.0",
+    "SQLAlchemy==2.0.46",
+    "textual==7.5.0",
+    "typing_extensions==4.15.0",
+    "uc-micro-py==1.0.3"
+]
+
+# Optional development dependencies (for testing, linting, formatting)
+[project.optional-dependencies]
+dev = [
+    "pytest==9.0.2",
+    "iniconfig==2.3.0",
+    "pluggy==1.6.0"
+]
+
+# CLI / TUI entry points
+[project.scripts]
+kohle-cli = "kohle.cli:main"
+kohle-tui = "kohle.tui:main"
+
+# Set packages to include
+[tool.setuptools.packages.find]
+where = ["."]
+exclude = ["tests*","archive*"]
+

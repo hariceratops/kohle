@@ -1,8 +1,8 @@
 # kohle/cli.py
 import click
 from sqlalchemy.orm import Session
-from db import session_local
-from services.categories import add_debit_category
+from kohle.db import session_local
+from kohle.services.categories import add_debit_category
 
 @click.group()
 def cli():

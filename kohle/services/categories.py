@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from typing import Tuple
 from difflib import SequenceMatcher
 
-from models import DebitCategory
+from kohle.models import DebitCategory
 from sqlalchemy.orm import Session
 
 
