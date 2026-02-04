@@ -10,7 +10,7 @@ authors = [
     { name="Hari", email="you@example.com" }
 ]
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 
 # Runtime dependencies (packages needed to run Kohle)
 dependencies = [
@@ -33,8 +33,9 @@ dependencies = [
     "six==1.17.0",
     "SQLAlchemy==2.0.46",
     "textual==7.5.0",
+    "textual-dev>=1.8.0",
     "typing_extensions==4.15.0",
-    "uc-micro-py==1.0.3"
+    "uc-micro-py==1.0.3",
 ]
 
 # Optional development dependencies (for testing, linting, formatting)
@@ -47,7 +48,7 @@ dev = [
 
 # CLI / TUI entry points
 [project.scripts]
-kohle-cli = "kohle.cli:main"
+kohle-cli = "kohle.cli:cli"
 kohle-tui = "kohle.tui:main"
 
 # Set packages to include

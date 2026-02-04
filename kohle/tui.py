@@ -39,6 +39,10 @@ class DebitCategoryApp(App):
         self.query_one("#output").update(out)
 
 
-if __name__ == "__main__":
+def main():
     DebitCategoryApp().run()
+
+
+if __name__ == "__main__":
+    main()
 
