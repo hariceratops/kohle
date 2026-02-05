@@ -1,29 +1,35 @@
-# tests/test_debit_category_service.py
 import pytest
-from kohle.services.categories import add_debit_category, CategoryAddResult
-from kohle.models import DebitCategory
+from kohle.db.connection import base
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from kohle.db.uow import UnitOfWork
+from kohle.services.debit_categories import add_debit_category
+from kohle.services.errors import EmptyCategoryError, DuplicateCategoryError
 
 
-def test_add_new_category(db_session):
-    result = add_debit_category(db_session, "Groceries")
-    assert isinstance(result, CategoryAddResult)
-    assert result.added is True
-    assert result.warnings == ()
-
-    cat = db_session.query(DebitCategory).filter_by(category="Groceries").one()
-    assert cat is not None
+# In-memory SQLite
+TEST_DB = "sqlite:///:memory:"
+engine = create_engine(TEST_DB)
+TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+base.metadata.create_all(bind=engine)
 
 
-def test_add_duplicate_category(db_session):
-    add_debit_category(db_session, "Rent")
-    result = add_debit_category(db_session, "rent")
-    assert result.added is False
-    assert result.warnings == ()
+@pytest.fixture
+def uow():
+    return UnitOfWork(TestingSessionLocal)
 
+def test_add_valid_category(uow):
+    result = add_debit_category(uow, "Groceries")
+    assert result.is_ok
 
-def test_similar_category_warns(db_session):
-    add_debit_category(db_session, "Transport")
-    result = add_debit_category(db_session, "Transportation")
-    assert result.added is True
-    assert "Transport" in result.warnings
+def test_add_empty_category(uow):
+    result = add_debit_category(uow, "")
+    assert result.is_err
+    assert isinstance(result.unwrap_err(), EmptyCategoryError)
+
+def test_add_duplicate_category(uow):
+    add_debit_category(uow, "Transport")
+    result = add_debit_category(uow, "Transport")
+    assert result.is_err
+    assert isinstance(result.unwrap_err(), DuplicateCategoryError)
 

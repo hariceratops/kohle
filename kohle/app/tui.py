@@ -1,9 +1,8 @@
-# kohle/tui.py
 from textual.app import App, ComposeResult
 from textual.widgets import Button, Input, Static
-
-from kohle.services.categories import add_debit_category
-from kohle.db import session_local
+from kohle.services.debit_categories import add_debit_category
+from kohle.db.uow import UnitOfWork
+from kohle.db.connection import session_local
 
 
 class DebitCategoryApp(App):
@@ -17,24 +16,15 @@ class DebitCategoryApp(App):
         yield Static("", id="output")
 
     def on_button_pressed(self, event):
-        session = session_local()
+        uow = UnitOfWork(session_local)
         name = self.input.value
-        try:
-            result = add_debit_category(session, name)
-        except ValueError as e:
-            self.query_one("#output").update(f"❌ {e}")
-            return
-        finally:
-            session.close()
+        result = add_debit_category(uow, name)
 
         out = ""
-        if result.added:
-            out += f"✅ Category '{name}' added\n"
+        if result.is_ok:
+            out += f"✅ Category '{name}' added with ID {result.unwrap()}\n"
         else:
-            out += f"⚠ Category '{name}' already exists\n"
-
-        for w in result.warnings:
-            out += f"⚠ Similar category exists: {w}\n"
+            out += f"❌ {result.unwrap_err()}\n"
 
         self.query_one("#output").update(out)
 

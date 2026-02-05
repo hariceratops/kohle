@@ -1,5 +1,5 @@
 from sqlalchemy import Column, Integer, String
-from kohle.db import base
+from kohle.db.connection import base
 
 class DebitCategory(base):
     __tablename__ = "debit_categories"

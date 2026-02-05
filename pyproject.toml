@@ -48,8 +48,8 @@ dev = [
 
 # CLI / TUI entry points
 [project.scripts]
-kohle-cli = "kohle.cli:cli"
-kohle-tui = "kohle.tui:main"
+kohle-cli = "kohle.app.cli:cli"
+kohle-tui = "kohle.app.tui:main"
 
 # Set packages to include
 [tool.setuptools.packages.find]
