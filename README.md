@@ -2,6 +2,9 @@
 A command line money manager  
 Kohle ist umgangssprachlich für 'Geld' im Deutschen
 
+> [!WARNING]
+> The app is highly personalized
+
 ### Running
 To run the app, install the application into a uv venv, activate the venv and run the application
 ```bash
