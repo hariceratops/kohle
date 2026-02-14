@@ -1,11 +1,10 @@
-from textual.app import App
-from textual.widgets import Static, Footer
-from textual.containers import Vertical
-from textual.command import Hit, Hits, Provider
 from functools import partial
+from textual.command import Hit, Hits, Provider
 from kohle.app.tui.screens.category_screen import CategoriesScreen
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from kohle.app.tui.tui import KohleApp
 
-# from kohle.app.tui.provider import AppPalleteCommands
 
 class AppPalleteCommands(Provider):
     async def search(self, query: str) -> Hits:
@@ -19,23 +18,4 @@ class AppPalleteCommands(Provider):
         if score > 0:
             yield Hit(score, matcher.highlight(command_name), partial(app.push_screen, CategoriesScreen()), help="Open the categories management screen",)
 
-
-class KohleApp(App):
-    COMMANDS = App.COMMANDS | {AppPalleteCommands}
-
-    def compose(self):
-        with Vertical():
-            yield Static("Welcome to Kohle!", id="welcome", expand=True)
-            yield Footer()
-
-    def on_mount(self):
-        pass
-
-
-def main():
-    KohleApp().run()
-
-
-if __name__ == "__main__":
-    main()
 

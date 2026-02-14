@@ -4,15 +4,15 @@ from sqlalchemy import engine_from_config, pool
 import sys
 from pathlib import Path
 
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(ROOT))
 
 
-from kohle.db import base
-from kohle import models
+from kohle.db.connection import base
+from kohle.domain import models
 
 config = context.config
-
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
@@ -55,3 +55,4 @@ if context.is_offline_mode():
     run_migrations_offline()
 else:
     run_migrations_online()
+
