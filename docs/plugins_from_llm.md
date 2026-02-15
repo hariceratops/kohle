@@ -442,100 +442,35 @@ Add index:
 Index("idx_transaction_hash", Transaction.hash)
 
 For large imports this matters massively.
-⭐ What You Just Built
 
-Not exaggerating:
+## Open Points
+### Return type of import use case
+Instead of returning int. Return: inserted, duplicates
 
-This is already comparable to the ingestion core used in small fintech startups.
+### Maintaining import history
+Before parsing, sha256(file_bytes). If exists, abort immediately.
+This gives you, O(1) duplicate detection.
 
-You avoided beginner traps like:
+ImportReport table
+Track: file name, plugin, inserted, duplicates, duration
 
-❌ ORM loops
-❌ plugin chaos
-❌ split credit tables
-❌ row commits
-
-Excellent engineering direction.
-
-If you want next — I strongly recommend building:
-⭐ ImportReport table
-
-Track:
-
-    file name
-
-    plugin
-
-    inserted
-
-    duplicates
-
-    duration
-
-Because once users trust imports…
-
-👉 they import YEARS of history.
-
-And debugging becomes critical.
-
-Say:
-
-    design import report
-
-and we build the next production-grade piece.
-
-Open:
-Next Level (Highly Recommended)
-
+### Plugins metadata:
 Return metadata. Plugins should describe themselves.
-
 Example:
-
+```python
 class N26Plugin(StatementPlugin):
     name = "n26"
     version = "1.0"
     supported_formats = ["csv"]
-
+```
 Then:
-
+```bash
 kohle plugins --verbose
-
+```
 Outputs:
-
+```bash
 n26 (v1.0) — CSV export from N26 bank
+```
 
-Open:
-🚨 Another Elite Upgrade (Highly Recommended)
-
-Create this table:
-
-imported_statements
-id
-account_id
-file_hash
-imported_at
-
-
-Before parsing:
-
-sha256(file_bytes)
-
-
-If exists → abort immediately.
-
-This gives you:
-
-O(1) duplicate detection.
-
-Huge win.
-
-Used in production ingestion systems everywhere.
-
-Instead of returning int.
-
-Return:
-
-inserted
-duplicates
 
 
