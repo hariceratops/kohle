@@ -8,7 +8,7 @@ from kohle.use_cases.debit_categories import list_debit_categories
 class CategoriesScreen(Screen):
     BINDINGS = [
         Binding("ctrl+a", "add_category", "Add Category"),
-        Binding("escape", "pop_screen", "Back"),
+        Binding("escape", "app.pop_screen", "Back"),
     ]
 
     def compose(self):
