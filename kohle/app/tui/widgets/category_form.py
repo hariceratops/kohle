@@ -6,28 +6,7 @@ from kohle.use_cases.debit_categories import add_debit_category
 
 
 class AddCategoryForm(ModalScreen):
-    DEFAULT_CSS = """
-    AddCategoryForm > Center {
-        width: 100%;
-        height: 100%;
-        align: center middle;  /* ensures true centering */
-    }
-
-    #dialog {
-        width: 50%;
-        min-width: 40;
-        height: auto;
-        padding: 1 2;
-        border: round $accent;
-        background: $surface;
-    }
-
-    Input {
-        width: 100%;
-        margin-top: 1;
-    }
-    """
-
+    CSS_PATH = "../styles/category_form.tcss"
     BINDINGS = [
         Binding("escape", "dismiss", "Cancel"),
     ]
