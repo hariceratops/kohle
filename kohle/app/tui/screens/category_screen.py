@@ -6,6 +6,7 @@ from kohle.use_cases.debit_categories import list_debit_categories
 
 
 class CategoriesScreen(Screen):
+    # todo switching between tabs doesnt seem to work
     BINDINGS = [
         Binding("ctrl+a", "add_category", "Add Category"),
         Binding("escape", "app.pop_screen", "Back"),

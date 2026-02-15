@@ -11,7 +11,9 @@ def add_debit_category_service(uow: UnitOfWork[int], name: str) -> Result[int, C
     def op(session: Session) -> int:
         category = DebitCategory(category=name)
         session.add(category)
-        session.flush()  # triggers DB validation
+        # triggers DB validation, todo: is such operations allowed in the 
+        # in the services and confined to infrastucture
+        session.flush()
         return category.id
 
     result = uow.run(op)
