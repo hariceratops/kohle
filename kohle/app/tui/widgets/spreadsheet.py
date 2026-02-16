@@ -48,23 +48,17 @@ class EditableTable(Container):
     def compose(self) -> ComposeResult:
         table = DataTable(id="table")
         table.add_column("Name", key="name")
-
         # Simulated DB rows (primary key, value)
         rows = [
             (101, "Alice"),
             (102, "Bob"),
             (103, "Charlie"),
         ]
-
         for pk, value in rows:
             table.add_row(value, key=str(pk))
-
         yield table
         yield Input(id="editor")
 
-    # --------------------------------------------------
-    # Helpers
-    # --------------------------------------------------
 
     def table(self) -> DataTable:
         return self.query_one("#table", DataTable)
@@ -81,10 +75,6 @@ class EditableTable(Container):
         cell_key = table.coordinate_to_cell_key(coord)
         return cell_key.row_key, cell_key.column_key
 
-    # --------------------------------------------------
-    # Geometry (correct API usage)
-    # --------------------------------------------------
-
     def position_editor(self):
         table = self.table()
         editor = self.editor()
@@ -98,7 +88,6 @@ class EditableTable(Container):
 
         columns = list(table.columns.values())
 
-        # -------- X position --------
         x = 0
         for col in columns[:col_index]:
             x += col.get_render_width(table)
@@ -116,8 +105,8 @@ class EditableTable(Container):
         y = header_height + row_index * row_height
 
         # -------- apply scroll offsets --------
-        # x -= table.scroll_x
-        # y -= table.scroll_y
+        x -= table.scroll_x
+        y -= table.scroll_y
         logging.debug(f"x={x}")
         logging.debug(f"y={y}")
         # logging.debug(x)
@@ -141,9 +130,7 @@ class EditableTable(Container):
     def show_editor(self, value=""):
         editor = self.editor()
         editor.value = value
-
         self.position_editor()
-
         editor.styles.display = "block"
         editor.focus()
 
@@ -151,22 +138,18 @@ class EditableTable(Container):
         self.editor().styles.display = "none"
         self.table().focus()
 
-    # --------------------------------------------------
-    # Actions
-    # --------------------------------------------------
-
     def action_add_row(self):
         self.edit_mode = "add"
         self.edit_row_key = None
+        # add dummy row with dummy data and key, commit real data and then delete the 
+        # temp row
         self.show_editor()
 
     def action_edit_row(self):
         row_key, _ = self.get_cursor_keys()
         if row_key is None:
             return
-
         value = self.table().get_row(row_key)[0]
-
         self.edit_mode = "edit"
         self.edit_row_key = row_key
         self.show_editor(value)
@@ -179,23 +162,16 @@ class EditableTable(Container):
         self.table().remove_row(row_key)
         self.app.notify(f"DELETE id={row_key}")
 
-    # --------------------------------------------------
-    # Input handling
-    # --------------------------------------------------
-
     def on_input_submitted(self, event: Input.Submitted):
         value = event.value.strip()
         table = self.table()
-
         if not value:
             self.hide_editor()
             return
-
         if self.edit_mode == "add":
             new_id = max(int(k) for k in table.rows.keys()) + 1
             table.add_row(value, key=str(new_id))
             self.app.notify(f"INSERT id={new_id}")
-
         elif self.edit_mode == "edit":
             table.update_cell(self.edit_row_key, "name", value)
             table.refresh(layout=True)
@@ -203,18 +179,12 @@ class EditableTable(Container):
 
         self.hide_editor()
 
-    # --------------------------------------------------
-
     def on_key(self, event):
         if event.key == "escape":
             if self.editor().styles.display != "none":
                 self.hide_editor()
                 event.stop()
 
-
-# --------------------------------------------------
-# Demo app
-# --------------------------------------------------
 
 class DemoApp(App):
 
