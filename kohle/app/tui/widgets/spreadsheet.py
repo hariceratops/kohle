@@ -42,6 +42,10 @@ class EditableTable(Container):
         super().__init__()
         self.edit_mode = None
         self.edit_row_key = None
+        self.on_row_added_callback = None
+        self.on_row_deleted_callback = None
+        self.on_row_edited_callback = None
+        self.on_mount_callback = None
 
     # --------------------------------------------------
 
@@ -140,9 +144,13 @@ class EditableTable(Container):
 
     def action_add_row(self):
         self.edit_mode = "add"
-        self.edit_row_key = None
+        self.edit_row_key = "__new__"
         # add dummy row with dummy data and key, commit real data and then delete the 
         # temp row
+        empty_row = [""] * len(list(self.table().columns.keys()))
+        self.table().add_row(*empty_row, key="__new__")
+        row_index = self.table().row_count - 1
+        self.table().move_cursor(row=row_index, column=0)
         self.show_editor()
 
     def action_edit_row(self):
@@ -169,7 +177,8 @@ class EditableTable(Container):
             self.hide_editor()
             return
         if self.edit_mode == "add":
-            new_id = max(int(k) for k in table.rows.keys()) + 1
+            new_id = max(int(k.value) for k in table.rows.keys() if k.value != "__new__") + 1
+            table.remove_row("__new__")
             table.add_row(value, key=str(new_id))
             self.app.notify(f"INSERT id={new_id}")
         elif self.edit_mode == "edit":
