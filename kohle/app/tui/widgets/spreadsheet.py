@@ -151,11 +151,9 @@ class Spreadsheet(Container):
         col_idx = coord.column
         columns = list(self.table.columns.values())
         logging.debug(columns)
-        x = sum(c.get_render_width(self.table) for c in columns[:col_idx])
         width = columns[col_idx].get_render_width(self.table)
-        y = 1 + row_idx
-        x -= self.table.scroll_x
-        y -= self.table.scroll_y
+        x = sum(c.get_render_width(self.table) for c in columns[:col_idx]) - self.table.scroll_x
+        y = 1 + row_idx - self.table.scroll_y
         return CellGeometry(x=x, y=y, width=width, height=1)
 
     def action_edit_cell(self):
@@ -173,8 +171,7 @@ class Spreadsheet(Container):
         self._temp_row_key = f"__{uuid.uuid4().hex}__"
         empty = [""] * len(self.table.columns)
         self.table.add_row(*empty, key=self._temp_row_key)
-        row = self.table.row_count - 1
-        self.table.move_cursor(row=row, column=0)
+        self.table.move_cursor(row=self.table.row_count - 1, column=0)
         geom = self.compute_cell_geometry()
         self.editor.post_message(SpreadsheetCellEditor.StartEdit(self.editor, "", geom))
 
@@ -195,7 +192,6 @@ class Spreadsheet(Container):
 
         elif self.mode is EditMode.ADD:
             new_key = self.controller.request_add([value])
-            logging.debug(new_key)
             if new_key is not None:
                 self.table.remove_row(self._temp_row_key)
                 self.table.add_row(value, key=new_key)
