@@ -302,7 +302,6 @@ class Spreadsheet(Container):
         self.table.move_cursor(row=self.table.row_count - 1, column=0)
 
     def abort_append(self):
-        # todo delete temp row
         self.editor.stop()
         self.table.remove_row(self._temp_row_key)
         self.table.refresh(layout=True)
