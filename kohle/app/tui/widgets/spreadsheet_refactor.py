@@ -79,9 +79,6 @@ class SpreadsheetStateMachine(StateMachine):
         self.owner = owner
         self.append_index = 0
 
-    def on_cursor_movement(self):
-        pass
-
     def on_ctrl_e(self):
         self.owner.start_edit()
 
@@ -124,8 +121,8 @@ class SpreadsheetStateMachine(StateMachine):
     def on_delete_rejected(self):
         self.owner.abort_delete()
 
-    def on_new_row_commit_approved(self):
-        self.owner.finish_append()
+    def on_new_row_commit_approved(self, record, key):
+        self.owner.finish_append(record, key)
 
     def on_new_row_commit_rejected(self):
         self.owner.abort_append()
@@ -195,17 +192,6 @@ class Spreadsheet(Container):
 
     def column_count(self):
         return len(self.table.columns.values())
-
-        assert self.context is not None
-        return self.context
-
-    def on_key(self, event):
-        match event.key:
-            # todo : add more keys to handle
-            case "Up" | "Down" :
-                self.machine.send("cursor_updated")
-            case _:
-                pass
 
     def action_ctrl_e(self):
         self.machine.send("ctrl_e")
@@ -290,14 +276,19 @@ class Spreadsheet(Container):
         self.editor.show(self.get_context())
 
     def request_new_row_commit(self):
-        ok = self.controller.request_add([])
+        # possible bug
+        coordinates = self.table.cursor_coordinate
+        record = self.table.get_row_at(coordinates.row)
+        ok = self.controller.request_add(record)
         if ok:
-            self.machine.send("new_row_commit_approved")
+            self.machine.send("new_row_commit_approved", record, ok)
         else:
             self.machine.send("new_row_commit_rejected")
 
-    def finish_append(self):
+    def finish_append(self, record, ok):
         self.editor.stop()
+        self.table.remove_row(self._temp_row_key)
+        self.table.add_row(*record, key=ok)
         self.table.refresh(layout=True)
         self.table.move_cursor(row=self.table.row_count - 1, column=0)
 
@@ -339,10 +330,41 @@ class MemoryController:
         return False
 
 
+class MemoryController1:
+    def __init__(self):
+        self.rows = {"101": ["Alice", "sde1"], "102": ["Bob", "sde2"], "103": ["Charlie", "sde2"]}
+        self.columns = {"name": "Name", "role": "Role"}
+
+    def populate_columns(self):
+        for k, v in self.columns.items():
+            yield ColumnData(k, v)
+
+    def populate_rows(self):
+        for k, v in self.rows.items():
+            yield RowData(k, v)
+
+    def request_add(self, values):
+        new = uuid.uuid4().hex[:8]
+        self.rows[new] = list(values)
+        return new
+
+    def request_edit(self, row_key, column_key, new_value):
+        if row_key in self.rows:
+            self.rows[row_key][0] = new_value
+            return True
+        return False
+
+    def request_delete(self, row_key):
+        if row_key in self.rows:
+            del self.rows[row_key]
+            return True
+        return False
+
+
 class DemoApp(App):
     def compose(self):
         yield Header()
-        yield Spreadsheet(MemoryController())
+        yield Spreadsheet(MemoryController1())
         yield Footer()
 
 
