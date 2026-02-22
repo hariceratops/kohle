@@ -29,6 +29,7 @@ class UnitOfWork(Generic[T]):
         except IntegrityError as e:
             self.session.rollback()
             constraint = getattr(e.orig, "args", [None])[0] or str(e)
+            print(constraint)
             return Result.err(UniqueViolation(constraint=constraint))
 
         except Exception as e:

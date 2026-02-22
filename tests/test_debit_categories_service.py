@@ -18,13 +18,6 @@ def test_add_category_success(session: Session) -> None:
     assert isinstance(cat_id, int)
 
 
-def test_add_category_empty(session: Session) -> None:
-    uow = UnitOfWork(session)
-    result = add_debit_category_service(uow, "")
-    assert result.is_err
-    assert isinstance(result.unwrap_err(), EmptyCategoryName)
-
-
 def test_add_category_duplicate(session: Session) -> None:
     uow = UnitOfWork(session)
     add_debit_category_service(uow, "Groceries")

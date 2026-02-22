@@ -18,7 +18,7 @@ def bulk_insert_transactions_service(uow: UnitOfWork[int], rows: list[dict]) -> 
         uow.run(op)
         .map(lambda v: v)
         .map_err(lambda err: (
-            DuplicationTransactionError() if check_if_unique_constraint_failed(err, "transaction.hash")
+            DuplicationTransactionError() if check_if_unique_constraint_failed(err, "transactions.hash")
             else TransactionError(str(err))
         ))
     )
