@@ -52,6 +52,9 @@ dev = [
 kohle-cli = "kohle.app.cli.cli:cli"
 kohle-tui = "kohle.app.tui.tui:main"
 
+[project.entry-points."kohle.plugins"]
+kohle-deutsche-bank = "kohle.app.plugins.kohle_deutsche_bank_importer:DeustcheBankStatementImporter"
+
 # Set packages to include
 [tool.setuptools.packages.find]
 where = ["."]
