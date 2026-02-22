@@ -1,10 +1,4 @@
-import pytest
-
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, Session
-from sqlalchemy.pool import StaticPool
-
-from kohle.db.connection import base
+from sqlalchemy.orm import Session
 from kohle.services.debit_categories_services import (
     add_debit_category_service,
     list_debit_categories_service,
@@ -14,29 +8,6 @@ from kohle.domain.domain_errors import (
     EmptyCategoryName,
     DuplicateCategory,
 )
-
-
-@pytest.fixture
-def session() -> Session:
-    """
-    Shared in-memory SQLite DB for each test.
-
-    StaticPool ensures all sessions use ONE connection,
-    otherwise SQLite ':memory:' would create multiple DBs.
-    """
-    engine = create_engine(
-        "sqlite://",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    base.metadata.create_all(bind=engine)
-    SessionLocal = sessionmaker(bind=engine)
-    sess: Session = SessionLocal()
-    try:
-        yield sess
-    finally:
-        sess.close()
-        base.metadata.drop_all(bind=engine)
 
 
 def test_add_category_success(session: Session) -> None:

@@ -6,8 +6,7 @@ from sqlalchemy import pool
 from alembic import context
 
 from kohle.db.connection import base
-from kohle.domain import models
-
+import kohle.domain.models
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(ROOT))
@@ -21,7 +20,6 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-target_metadata = None
 target_metadata = base.metadata
 
 

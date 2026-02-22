@@ -22,6 +22,7 @@ class UnitOfWork(Generic[T]):
     def run(self, op: Callable[[Session], T]) -> Result[T, InfrastructureError]:
         try:
             value = op(self.session)
+            self.session.flush()  # triggers DB validation
             self.session.commit()
             return Result.ok(value)
 
