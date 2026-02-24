@@ -36,7 +36,9 @@ dependencies = [
     "textual-dev>=1.8.0",
     "typing_extensions==4.15.0",
     "uc-micro-py==1.0.3",
-    "python-statemachine"
+    "python-statemachine",
+    "tabulate",
+    "pyparsing"
 ]
 
 # Optional development dependencies (for testing, linting, formatting)
