@@ -29,7 +29,10 @@
 - [ ] Example Deutsche Bank plugin
 - [ ] Plugin as subprocess
 
-### Asset Modelling
+### Asset 
+- [ ] Modelling
+
+### Catergorization
 - [ ] Catergorization Engine
 - [ ] Category hierarchy?
 - [ ] Budgetting
