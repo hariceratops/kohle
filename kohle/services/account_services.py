@@ -1,3 +1,4 @@
+from typing import List
 from sqlalchemy.orm import Session
 from kohle.domain.models import Account
 from kohle.infrastructure.uow import UnitOfWork
@@ -23,6 +24,7 @@ def add_account_service(uow: UnitOfWork[int], name: str, iban: str) -> Result[in
         ))
     )
 
+
 def get_account_by_name_service(uow: UnitOfWork[Account], name: str) -> Result[Account, AccountError]:
     def op(session: Session) -> Account:
         return (session.query(Account).filter(Account.name == name).one_or_none())
@@ -36,3 +38,12 @@ def get_account_by_name_service(uow: UnitOfWork[Account], name: str) -> Result[A
         )
     )
 
+
+def list_accounts_service(uow: UnitOfWork[List[Account]]) -> Result[List[Account], AccountError]:
+    def op(session: Session) -> List[Account]:
+        return session.query(Account).order_by(Account.name).all()
+    return (
+        uow.run(op)
+        .map_err(lambda err: AccountError(str(err)))
+    )
+ 

@@ -1,10 +1,11 @@
 import click
+from tabulate import tabulate
 from kohle.infrastructure.uow import UnitOfWork
 from kohle.db.connection import session_local
-from kohle.use_cases.debit_categories import add_debit_category, list_debit_categories
-from kohle.use_cases.accounts import add_account
 from kohle.plugin.plugin_manager import load_plugins
-from kohle.use_cases.transactions import import_transaction_statement 
+from kohle.use_cases.debit_categories import add_debit_category, list_debit_categories
+from kohle.use_cases.accounts import add_account, list_accounts
+from kohle.use_cases.transactions import import_transaction_statement, query_transaction_by_period
 
 @click.group()
 def cli():
@@ -44,6 +45,17 @@ def add_account_cmd(name: str, iban: str):
             click.echo(f"Failed: {res.unwrap_err()}")
 
 
+@cli.command()
+def list_accounts_cmd():
+    with UnitOfWork(session_local()) as uow:
+        res = list_accounts(uow)
+        if res.is_ok:
+            for c in res.unwrap():
+                click.echo(f"{c['id']}: name={c['name']}, iban={c['iban']}")
+        else:
+            click.echo(f"Failed: {res.unwrap_err()}")
+
+
 @cli.command
 def list_importer_plugins():
     plugins = load_plugins()
@@ -55,7 +67,7 @@ def list_importer_plugins():
         click.echo(name)
 
 
-@cli.command
+@cli.command()
 @click.argument("plugin", required=True)
 @click.argument('account_name')
 @click.argument('csv_file', type=click.Path(exists=True))
@@ -67,6 +79,24 @@ def import_statement(plugin_name: str, account_name: str, csv_file):
     statement = plugin.import_statement(csv_file)
     with UnitOfWork(session_local()) as uow:
         res = import_transaction_statement(uow, account_name, statement)
+        if res.ok:
+            click.echo(f"Import succeded, {res.unwrap()} transactions imported")
+        else:
+            click.echo(f"Import failed, reason = {res.unwrap_err()}")
+
+
+@click.command()
+@click.argument('account_name')
+@click.argument("start")
+@click.argument("end")
+def transactions_between(account_name, start, end):
+    """Get all transactions between two dates."""
+    with UnitOfWork(session_local()) as uow:
+        res = query_transaction_by_period(uow, account_name, start, end)
+        if res.is_ok:
+            click.echo(tabulate(res.unwrap()))
+        else:
+            click.echo(f"Querying for the period failed {res.unwrap_err()}")
 
 
 if __name__ == "__main__":

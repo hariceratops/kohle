@@ -1,7 +1,7 @@
-from typing import Iterable, Set
+from typing import Iterable, Set, List
 from sqlalchemy.orm import Session
 from sqlalchemy import insert
-from kohle.domain.models import Transaction
+from kohle.domain.models import Transaction, Account
 from kohle.infrastructure.uow import UnitOfWork
 from kohle.domain.domain_errors import TransactionError, DuplicationTransactionError
 from kohle.infrastructure.infra_errors import check_if_unique_constraint_failed
@@ -24,7 +24,8 @@ def bulk_insert_transactions_service(uow: UnitOfWork[int], rows: list[dict]) -> 
     )
 
 
-def existing_transactions_service(uow: UnitOfWork[Set[str]], hashes: Iterable[str]) -> Result[Set[str], TransactionError]:
+def existing_transactions_service(uow: UnitOfWork[Set[str]], hashes: Iterable[str]) \
+        -> Result[Set[str], TransactionError]:
     def op(session: Session) -> Set[str]:
         rows = (
             session.query(Transaction.hash)
@@ -37,4 +38,31 @@ def existing_transactions_service(uow: UnitOfWork[Set[str]], hashes: Iterable[st
         uow.run(op)
         .map_err(lambda err: TransactionError(str(err)))
     )
+
+
+def query_transactions_by_period_service(uow: UnitOfWork[List[dict]],
+                                       account_id: int, 
+                                       start_date,
+                                       end_date) \
+                -> Result[List[dict], TransactionError]:
+    def op(session: Session) -> List[dict]:
+        transactions = (
+            session.query(Transaction)
+            .filter(Transaction.date.between(start_date, end_date))
+            .filter(Account.account_id == account_id)
+            .order_by(Transaction.date.asc())
+            .all()
+        )
+        return [{
+            "id": t.id,
+            "date": t.date,
+            "description": t.description,
+            "amount": t.amount,
+        } for t in transactions]
+
+    return (
+        uow.run(op)
+        .map_err(lambda err: TransactionError(str(err)))
+    )
+
 

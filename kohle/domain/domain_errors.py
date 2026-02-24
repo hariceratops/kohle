@@ -66,3 +66,25 @@ class DuplicationTransactionError(TransactionError):
     def __str__(self) -> str:
         return "Duplicate transactions found"
 
+
+class InvalidDateError(Exception):
+    def __init__(self, date_str: str) -> None:
+        super().__init__()
+        self.date_str = date_str
+
+    def __str__(self) -> str:
+        return f"Unable to parse date from str {self.date_str}"
+
+
+class EndDatePrecedesStartDateError(Exception):
+    def __init__(self, start_date: str, end_date: str) -> None:
+        super().__init__()
+        self.start_date = start_date
+        self.end_date = end_date
+
+    def __str__(self) -> str:
+        return f"End date {self.end_date} precedes start_date {self.start_date}"
+
+QueryTransactionByPeriodError = InvalidDateError | TransactionError | EndDatePrecedesStartDateError | AccountNotFoundError
+
+
