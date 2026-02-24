@@ -9,5 +9,5 @@ class StatementImporterPlugin(ABC):
         pass
 
     @abstractmethod
-    def import_statement(self, csv_path: str) -> pd.DataFrame:
+    def import_statement(self, statement_path: str) -> pd.DataFrame:
         pass
