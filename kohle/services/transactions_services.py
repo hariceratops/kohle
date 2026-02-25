@@ -49,7 +49,7 @@ def query_transactions_by_period_service(uow: UnitOfWork[List[dict]],
         transactions = (
             session.query(Transaction)
             .filter(Transaction.date.between(start_date, end_date))
-            .filter(Account.account_id == account_id)
+            .filter(Transaction.account_id == account_id)
             .order_by(Transaction.date.asc())
             .all()
         )
