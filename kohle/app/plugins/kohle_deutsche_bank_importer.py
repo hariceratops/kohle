@@ -333,6 +333,3 @@ class DeustcheBankStatementImporter(StatementImporterPlugin):
                     .astype({"amount": float})
             return df
 
-d = DeustcheBankStatementImporter()
-d.import_statement("/home/hari/code/Transactions_701_0539247_00_20260223_214049.csv")
-
