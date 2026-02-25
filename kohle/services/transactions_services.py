@@ -11,7 +11,6 @@ from kohle.core.result import Result
 def bulk_insert_transactions_service(uow: UnitOfWork[int], rows: list[dict]) -> Result[int, TransactionError]:
     def op(session: Session) -> int:
         _ = session.execute(insert(Transaction), rows)
-        session.flush()  # triggers DB validation
         return len(rows)
 
     return (
