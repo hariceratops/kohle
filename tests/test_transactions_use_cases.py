@@ -7,8 +7,45 @@ from kohle.use_cases.transactions import import_transaction_statement
 from kohle.domain.domain_errors import (
     AccountNotFoundError,
     TransactionError,
+    DataframeValidationError
 )
 from kohle.domain.models import Account, Transaction
+
+
+def test_import_missing_column(session: Session) -> None:
+    uow = UnitOfWork(session)
+
+    account = Account(name="Alice", iban="DE123")
+    session.add(account)
+    session.commit()
+
+    df = pd.DataFrame([
+        { "date": pd.Timestamp(2024, 1, 1), "description": "A", "iban": "DE123" }
+    ])  # amount column missing
+
+    result = import_transaction_statement(uow, "Alice", df)
+    assert result.is_err
+    assert isinstance(result.unwrap_err(), DataframeValidationError)
+
+
+def test_import_type_mismatch(session: Session) -> None:
+    uow = UnitOfWork(session)
+
+    account = Account(name="Alice", iban="DE123")
+    session.add(account)
+    session.commit()
+
+    df = pd.DataFrame([
+        { 
+            "date": pd.Timestamp(2024, 1, 1),
+            "amount": "not_a_float",  # type mismatch
+            "description": "A",
+            "iban": "DE123"
+        }
+    ])
+    result = import_transaction_statement(uow, "Alice", df)
+    assert result.is_err
+    assert isinstance(result.unwrap_err(), DataframeValidationError)
 
 
 def test_import_success_new_transactions(session: Session) -> None:
@@ -18,8 +55,8 @@ def test_import_success_new_transactions(session: Session) -> None:
     session.flush()
     session.commit()
     df = pd.DataFrame([
-        { "date": date(2024, 1, 1), "amount": 10.0, "description": "A" },
-        { "date": date(2024, 1, 2), "amount": 20.0, "description": "B" },
+        { "date": pd.Timestamp(2024, 1, 1), "amount": 10.0, "description": "A", "iban": "DE123" },
+        { "date": pd.Timestamp(2024, 1, 2), "amount": 20.0, "description": "B", "iban": "DE123" },
     ])
     result = import_transaction_statement(uow, "Alice", df)
     assert result.is_ok
@@ -29,7 +66,7 @@ def test_import_success_new_transactions(session: Session) -> None:
 def test_import_account_not_found(session: Session) -> None:
     uow = UnitOfWork(session)
     df = pd.DataFrame([
-        { "date": date(2024, 1, 1), "amount": 10.0, "description": "A" }
+        { "date": pd.Timestamp(2024, 1, 1), "amount": 10.0, "description": "A", "iban": "DE123" }
     ])
     result = import_transaction_statement(uow, "Missing", df)
     assert result.is_err
@@ -43,7 +80,7 @@ def test_import_no_new_transactions(session: Session) -> None:
     session.commit()
 
     df = pd.DataFrame([
-        { "date": date(2024, 1, 1), "amount": 10.0, "description": "A" }
+        { "date": pd.Timestamp(2024, 1, 1), "amount": 10.0, "description": "A", "iban": "DE123" }
     ])
 
     result1 = import_transaction_statement(uow, "Alice", df)
@@ -62,12 +99,12 @@ def test_import_bulk_insert_overlapping(session: Session) -> None:
     session.commit()
 
     df = pd.DataFrame([
-        { "date": date(2024, 1, 1), "amount": 10.0, "description": "A" }
+        { "date": pd.Timestamp(2024, 1, 1), "amount": 10.0, "description": "A", "iban": "DE123" }
     ])
     result = import_transaction_statement(uow, "Alice", df)
     df = pd.DataFrame([
-        { "date": date(2024, 1, 1), "amount": 10.0, "description": "A" },
-        { "date": date(2024, 1, 1), "amount": 20.0, "description": "B" }
+        { "date": pd.Timestamp(2024, 1, 1), "amount": 10.0, "description": "A", "iban": "DE123" },
+        { "date": pd.Timestamp(2024, 1, 1), "amount": 20.0, "description": "B", "iban": "DE123" }
     ])
     result_overlapping = import_transaction_statement(uow, "Alice", df)
 

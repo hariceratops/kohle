@@ -1,15 +1,24 @@
+from typing import List, Dict, Optional, Union
+from pandas.api.types import (
+    is_integer_dtype,
+    is_float_dtype,
+    is_string_dtype,
+    is_datetime64_any_dtype,
+    is_bool_dtype,
+)
 import hashlib
 from datetime import date
 import pandas as pd
-from typing import List
 from kohle.infrastructure.uow import UnitOfWork
 from kohle.core.result import Result
 from kohle.domain.domain_errors import (
-    TransactionError, 
-    AccountNotFoundError, 
+    ImportStatementError,
     InvalidDateError, 
     EndDatePrecedesStartDateError,
-    QueryTransactionByPeriodError
+    QueryTransactionByPeriodError,
+    DataframeValidationError,
+    DataframeMissingColumn,
+    DataframeColumnTypeMismatch
 )
 from kohle.services.account_services import get_account_by_name_service
 from kohle.services.transactions_services import (
@@ -19,10 +28,58 @@ from kohle.services.transactions_services import (
 )
 
 
+
+def validate_df_schema(df: pd.DataFrame, expected_schema: Dict[str, str]) -> Optional[DataframeValidationError]:
+    # 1️⃣ Missing columns
+    missing = [col for col in expected_schema if col not in df.columns]
+    if missing:
+        return DataframeMissingColumn(missing)
+
+    # 2️⃣ Type mismatches
+    mismatches: Dict[str, str] = {}
+
+    for col, expected_type in expected_schema.items():
+        series = df[col]
+
+        valid = (
+            (expected_type == "int" and is_integer_dtype(series))
+            or (expected_type == "float" and is_float_dtype(series))
+            or (expected_type == "string" and is_string_dtype(series))
+            or (expected_type == "datetime" and is_datetime64_any_dtype(series))
+            or (expected_type == "bool" and is_bool_dtype(series))
+        )
+
+        if not valid:
+            mismatches[col] = str(series.dtype)
+
+    if mismatches:
+        return DataframeColumnTypeMismatch(mismatches)
+
+    return None
+
+
+def parse_date(input_date: str) -> Result[date, InvalidDateError]:
+    try:
+        parsed = date.fromisoformat(input_date)
+        return Result.ok(parsed)
+    except ValueError:
+        return Result.err(InvalidDateError(input_date))
+
+
 def import_transaction_statement(uow: UnitOfWork, 
                                  account_name: str, 
                                  df: pd.DataFrame) \
-        -> Result[int, AccountNotFoundError | TransactionError]:
+        -> Result[int, ImportStatementError]:
+    dataframe_schema = {
+        "description": "string",
+        "amount": "float",
+        "date": "datetime",
+        "iban": "string"
+    }
+    df_validation_res = validate_df_schema(df, dataframe_schema)
+    if df_validation_res:
+        return Result.err(df_validation_res)
+
     account_id_result = (
         get_account_by_name_service(uow, account_name)
         .map(lambda account: account.id)
@@ -49,14 +106,6 @@ def import_transaction_statement(uow: UnitOfWork,
 
     records = new_transactions.to_dict("records")
     return bulk_insert_transactions_service(uow, records).map(lambda v: v).map_err(lambda e: e)
-
-
-def parse_date(input_date: str) -> Result[date, InvalidDateError]:
-    try:
-        parsed = date.fromisoformat(input_date)
-        return Result.ok(parsed)
-    except ValueError:
-        return Result.err(InvalidDateError(input_date))
 
 
 def query_transaction_by_period(uow: UnitOfWork,

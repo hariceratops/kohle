@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 from io import StringIO
 import pandas as pd
+import numpy as np
 from statemachine import StateMachine, State
 from kohle.core.result import Result
 from kohle.plugin.importer_plugin import StatementImporterPlugin
@@ -272,6 +273,10 @@ class StatementParser:
             return Result.err(CsvError(str(e)))
 
 
+description_date_pattern = (
+    r"(\d{2}-\d{2}-\d{4}T\d{2}:\d{2}:\d{2})"
+)
+
 class DeustcheBankStatementImporter(StatementImporterPlugin):
     @property
     def name(self) -> str:
@@ -286,10 +291,10 @@ class DeustcheBankStatementImporter(StatementImporterPlugin):
             df = statement_data.transactions.\
                     pipe(lambda df: df.rename(columns={
                        'Beneficiary / Originator': 'beneficiary',
-                       'Payment Details': 'details',
+                       'Payment Details': 'description',
                        'Debit': 'debit',
                        'Credit': 'credit',
-                       'IBAN': 'iban',
+                       'IBAN / Account Number': 'iban',
                        'Booking date': 'booking_date',
                        'Value date': 'value_date',
                        'Transaction Type': 'transaction_type',
@@ -304,13 +309,30 @@ class DeustcheBankStatementImporter(StatementImporterPlugin):
                        'Number of cheques': 'number_of_cheques',
                        'Currency': 'currency'
                    })) \
+                   .assign(
+                        date=lambda d: np.where(
+                            d["transaction_type"] == "Debit Card Payment",
+                            pd.to_datetime(
+                                d["description"].str.extract(description_date_pattern)[0],
+                                format="%d-%m-%YT%H:%M:%S",
+                                errors="raise",
+                            ),
+                            pd.to_datetime(d["booking_date"]),
+                        )
+                    ) \
                    .fillna({ 'debit': 0, 'credit': 0 }) \
+                   .pipe(lambda d: d.assign(amount=np.where(d["debit"] != 0, d["debit"], d["credit"]))) \
+                   .pipe(lambda d: d.assign(amount=lambda e: pd.to_numeric(e["amount"].astype(str).str.replace(".", "", regex=False).str.replace(",", ".", regex=False), errors="coerce")))\
                    .drop(columns=[
-                        'beneficiary', 'details', 'iban', 'booking_date', 'value_date',
+                        'beneficiary', 'transaction_type', 'booking_date',
                         'bic', 'customer_reference', 'mandate_reference', 'creditor_id',
                         'compensation_amount', 'original_amount', 'ultimate_creditor',
-                        'number_of_transactions', 'number_of_cheques'
-                    ])
-
+                        'number_of_transactions', 'number_of_cheques', "debit", "credit",
+                        "currency",
+                    ])\
+                    .astype({"amount": float})
             return df
+
+d = DeustcheBankStatementImporter()
+d.import_statement("/home/hari/code/Transactions_701_0539247_00_20260223_214049.csv")
 

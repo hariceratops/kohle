@@ -68,7 +68,7 @@ def list_importer_plugins():
 
 
 @cli.command()
-@click.argument("plugin", required=True)
+@click.argument("plugin_name", required=True)
 @click.argument('account_name')
 @click.argument('csv_file', type=click.Path(exists=True))
 def import_statement(plugin_name: str, account_name: str, csv_file):
@@ -79,7 +79,7 @@ def import_statement(plugin_name: str, account_name: str, csv_file):
     statement = plugin.import_statement(csv_file)
     with UnitOfWork(session_local()) as uow:
         res = import_transaction_statement(uow, account_name, statement)
-        if res.ok:
+        if res.is_ok:
             click.echo(f"Import succeded, {res.unwrap()} transactions imported")
         else:
             click.echo(f"Import failed, reason = {res.unwrap_err()}")

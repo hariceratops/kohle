@@ -1,3 +1,7 @@
+from dataclasses import dataclass
+from typing import List, Dict, Union
+
+
 class CategoryError(Exception):
     pass
 
@@ -85,6 +89,23 @@ class EndDatePrecedesStartDateError(Exception):
     def __str__(self) -> str:
         return f"End date {self.end_date} precedes start_date {self.start_date}"
 
-QueryTransactionByPeriodError = InvalidDateError | TransactionError | EndDatePrecedesStartDateError | AccountNotFoundError
+
+@dataclass
+class DataframeMissingColumn:
+    columns: List[str]
 
 
+@dataclass
+class DataframeColumnTypeMismatch:
+    mismatches: Dict[str, str]  # column -> actual dtype
+
+
+DataframeValidationError = Union[DataframeMissingColumn, DataframeColumnTypeMismatch]
+
+QueryTransactionByPeriodError = \
+        InvalidDateError | \
+        TransactionError | \
+        EndDatePrecedesStartDateError | \
+        AccountNotFoundError
+
+ImportStatementError = AccountNotFoundError | TransactionError | DataframeValidationError
