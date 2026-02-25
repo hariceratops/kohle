@@ -7,6 +7,8 @@ from statemachine import StateMachine, State
 from kohle.core.result import Result
 from kohle.plugin.importer_plugin import StatementImporterPlugin
 from pyparsing import Literal, Regex, Suppress, StringEnd, DelimitedList
+from decimal import Decimal
+import numbers
 
 
 semicolon = Suppress(";")
@@ -277,6 +279,23 @@ description_date_pattern = (
     r"(\d{2}-\d{2}-\d{4}T\d{2}:\d{2}:\d{2})"
 )
 
+def parse_amount(raw) -> Decimal:
+    if raw is None:
+        return None
+
+    if isinstance(raw, Decimal):
+        return raw
+
+    if isinstance(raw, numbers.Number):
+        return Decimal(str(raw))
+
+    if isinstance(raw, str):
+        cleaned = raw.strip().replace(",", "")
+        return Decimal(cleaned)
+
+    raise TypeError(f"Unsupported type for amount: {type(raw)}")
+
+
 class DeustcheBankStatementImporter(StatementImporterPlugin):
     @property
     def name(self) -> str:
@@ -322,7 +341,7 @@ class DeustcheBankStatementImporter(StatementImporterPlugin):
                     ) \
                    .fillna({ 'debit': 0, 'credit': 0 }) \
                    .pipe(lambda d: d.assign(amount=np.where(d["debit"] != 0, d["debit"], d["credit"]))) \
-                   .pipe(lambda d: d.assign(amount=lambda e: pd.to_numeric(e["amount"].astype(str).str.replace(".", "", regex=False).str.replace(",", ".", regex=False), errors="coerce")))\
+                   .pipe(lambda d: d.assign(amount=d["amount"].apply(parse_amount))) \
                    .drop(columns=[
                         'beneficiary', 'transaction_type', 'booking_date',
                         'bic', 'customer_reference', 'mandate_reference', 'creditor_id',

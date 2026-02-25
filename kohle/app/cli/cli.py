@@ -7,9 +7,11 @@ from kohle.use_cases.debit_categories import add_debit_category, list_debit_cate
 from kohle.use_cases.accounts import add_account, list_accounts
 from kohle.use_cases.transactions import import_transaction_statement, query_transaction_by_period
 
+
 @click.group()
 def cli():
     pass
+
 
 @cli.command()
 @click.argument("name")
@@ -17,7 +19,7 @@ def add_category_cmd(name: str):
     with UnitOfWork(session_local()) as uow:
         res = add_debit_category(uow, name)
         if res.is_ok:
-            click.echo(f"Added category id {res.unwrap()}")
+            click.echo(f"Added category {name} with id {res.unwrap()}")
         else:
             click.echo(f"Failed: {res.unwrap_err()}")
 
@@ -27,8 +29,7 @@ def list_categories_cmd():
     with UnitOfWork(session_local()) as uow:
         res = list_debit_categories(uow)
         if res.is_ok:
-            for c in res.unwrap():
-                click.echo(f"{c['id']}: {c['category']}")
+            click.echo(tabulate(res.unwrap()))
         else:
             click.echo(f"Failed: {res.unwrap_err()}")
 
@@ -40,7 +41,7 @@ def add_account_cmd(name: str, iban: str):
     with UnitOfWork(session_local()) as uow:
         res = add_account(uow, name, iban)
         if res.is_ok:
-            click.echo(f"Added category id {res.unwrap()}")
+            click.echo(f"Added account {name}, {iban} with id {res.unwrap()}")
         else:
             click.echo(f"Failed: {res.unwrap_err()}")
 
@@ -56,7 +57,7 @@ def list_accounts_cmd():
             click.echo(f"Failed: {res.unwrap_err()}")
 
 
-@cli.command
+@cli.command()
 def list_importer_plugins():
     plugins = load_plugins()
 
@@ -85,16 +86,15 @@ def import_statement(plugin_name: str, account_name: str, csv_file):
             click.echo(f"Import failed, reason = {res.unwrap_err()}")
 
 
-@click.command()
+@cli.command()
 @click.argument('account_name')
 @click.argument("start")
 @click.argument("end")
-def transactions_between(account_name, start, end):
-    """Get all transactions between two dates."""
+def transactions_in_period(account_name, start, end):
     with UnitOfWork(session_local()) as uow:
         res = query_transaction_by_period(uow, account_name, start, end)
         if res.is_ok:
-            click.echo(tabulate(res.unwrap()))
+            click.echo(tabulate(res.unwrap(), floatfmt=".2f"))
         else:
             click.echo(f"Querying for the period failed {res.unwrap_err()}")
 
