@@ -1,5 +1,10 @@
 from abc import ABC, abstractmethod
 import pandas as pd
+from kohle.core.result import Result
+
+
+class ImportError(Exception):
+    pass
 
 
 class StatementImporterPlugin(ABC):
@@ -9,5 +14,5 @@ class StatementImporterPlugin(ABC):
         pass
 
     @abstractmethod
-    def import_statement(self, statement_path: str) -> pd.DataFrame:
+    def import_statement(self, statement_path: str) -> Result[pd.DataFrame, ImportError]:
         pass

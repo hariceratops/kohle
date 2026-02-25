@@ -1,3 +1,4 @@
+import sys
 import click
 from tabulate import tabulate
 from kohle.infrastructure.uow import UnitOfWork
@@ -76,10 +77,16 @@ def import_statement(plugin_name: str, account_name: str, csv_file):
     plugins = load_plugins()
     if plugin_name not in plugins:
         click.echo(f"Plugin not found")
+
     plugin = plugins[plugin_name]
-    statement = plugin.import_statement(csv_file)
+    statement_res = plugin.import_statement(csv_file)
+    if statement_res.is_err:
+        click.echo(f"Statement processing failed, reason = {statement_res.unwrap_err()}")
+        sys.exit(1)
+
+    df = statement_res.unwrap()
     with UnitOfWork(session_local()) as uow:
-        res = import_transaction_statement(uow, account_name, statement)
+        res = import_transaction_statement(uow, account_name, df)
         if res.is_ok:
             click.echo(f"Import succeded, {res.unwrap()} transactions imported")
         else:

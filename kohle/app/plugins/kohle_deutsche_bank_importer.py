@@ -5,7 +5,7 @@ import pandas as pd
 import numpy as np
 from statemachine import StateMachine, State
 from kohle.core.result import Result
-from kohle.plugin.importer_plugin import StatementImporterPlugin
+from kohle.plugin.importer_plugin import StatementImporterPlugin, ImportError
 from pyparsing import Literal, Regex, Suppress, StringEnd, DelimitedList
 from decimal import Decimal
 import numbers
@@ -77,11 +77,11 @@ closing_balance_line = (
     + Literal("EUR")
 )
 
-class ParseError:
-    pass
+# class ImportError:
+#     pass
 
 
-class MissingFieldError(ParseError):
+class MissingFieldError(ImportError):
     def __init__(self, field: str):
         self.field = field
 
@@ -89,17 +89,17 @@ class MissingFieldError(ParseError):
         return f"Field {self.field} is missing"
 
 
-class MissingSectionError(ParseError):
+class MissingSectionError(ImportError):
     def __init__(self, section: str):
         self.section = section
 
 
-class InvalidStructureError(ParseError):
+class InvalidStructureError(ImportError):
     def __init__(self, message: str):
         self.message = message
 
 
-class CsvError(ParseError):
+class CsvError(ImportError):
     def __init__(self, message: str):
         self.message = message
 
@@ -141,7 +141,7 @@ class StatementParser:
         self.sm = StatementStateMachine()
         self.ctx = ParserContext()
 
-    def parse(self, text: str) -> Result[StatementData, ParseError]:
+    def parse(self, text: str) -> Result[StatementData, ImportError]:
         self.ctx = ParserContext()
         self.sm = StatementStateMachine()
         self.ctx.lines = text.splitlines()
@@ -153,14 +153,14 @@ class StatementParser:
 
             result = self._dispatch_line(idx, line)
             if result.is_err:
-                return result
+                return Result.err(result.unwrap_err())
 
             if self.sm.current_state == self.sm.done:
                 break
 
         return self._finalize()
 
-    def _dispatch_line(self, idx: int, line: str) -> Result[None, ParseError]:
+    def _dispatch_line(self, idx: int, line: str) -> Result[None, ImportError]:
         state = self.sm.current_state
 
         if state == self.sm.init:
@@ -174,13 +174,13 @@ class StatementParser:
 
         return Result.ok(None)
 
-    def _handle_init(self, line: str) -> Result[None, ParseError]:
+    def _handle_init(self, line: str) -> Result[None, ImportError]:
         if account_line.matches(line):
             self.ctx.data.update(account_line.parse_string(line).as_dict())
             self.sm.to_meta()
         return Result.ok(None)
 
-    def _handle_meta(self, idx: int, line: str) -> Result[None, ParseError]:
+    def _handle_meta(self, idx: int, line: str) -> Result[None, ImportError]:
         if csv_header.matches(line):
             parsed = csv_header.parse_string(line).as_list()
             if parsed != expected_columns:
@@ -203,7 +203,7 @@ class StatementParser:
 
         return Result.ok(None)
 
-    def _handle_csv(self, idx: int, line: str) -> Result[None, ParseError]:
+    def _handle_csv(self, idx: int, line: str) -> Result[None, ImportError]:
         if closing_balance_line.matches(line):
             self.ctx.data.update(closing_balance_line.parse_string(line).as_dict())
             self.ctx.table_end = idx
@@ -212,14 +212,14 @@ class StatementParser:
 
         return Result.ok(None)
 
-    def _finalize(self) -> Result[StatementData, ParseError]:
+    def _finalize(self) -> Result[StatementData, ImportError]:
         validation = self._validate_required()
         if validation.is_err:
-            return validation
+            return Result.err(validation.unwrap_err())
 
         table_result = self._extract_table()
         if table_result.is_err:
-            return table_result
+            return Result.err(table_result.unwrap_err())
 
         df = table_result.unwrap()
 
@@ -237,7 +237,7 @@ class StatementParser:
 
         return Result.ok(statement)
 
-    def _validate_required(self) -> Result[None, ParseError]:
+    def _validate_required(self) -> Result[None, ImportError]:
         required = [
             "account_number",
             "iban",
@@ -264,7 +264,7 @@ class StatementParser:
 
         return Result.ok(None)
 
-    def _extract_table(self) -> Result[pd.DataFrame, ParseError]:
+    def _extract_table(self) -> Result[pd.DataFrame, ImportError]:
         try:
             table_text = "\n".join(
                 self.ctx.lines[self.ctx.table_start:self.ctx.table_end]
@@ -279,21 +279,18 @@ description_date_pattern = (
     r"(\d{2}-\d{2}-\d{4}T\d{2}:\d{2}:\d{2})"
 )
 
-def parse_amount(raw) -> Decimal:
+
+def parse_amount(raw) -> Optional[Decimal]:
     if raw is None:
         return None
-
     if isinstance(raw, Decimal):
         return raw
-
     if isinstance(raw, numbers.Number):
         return Decimal(str(raw))
-
     if isinstance(raw, str):
         cleaned = raw.strip().replace(",", "")
         return Decimal(cleaned)
-
-    raise TypeError(f"Unsupported type for amount: {type(raw)}")
+    return None
 
 
 class DeustcheBankStatementImporter(StatementImporterPlugin):
@@ -301,11 +298,12 @@ class DeustcheBankStatementImporter(StatementImporterPlugin):
     def name(self) -> str:
         return "kohle-deutsche-bank"
 
-    def import_statement(self, statement_path) -> pd.DataFrame:
+    def import_statement(self, statement_path) -> Result[pd.DataFrame, ImportError]:
         with open(statement_path, "r") as f:
             parsing_res = StatementParser().parse(f.read())
             if parsing_res.is_err:
-                print(parsing_res.unwrap_err())
+                return Result.err(parsing_res.unwrap_err())
+
             statement_data = parsing_res.unwrap()
             df = statement_data.transactions.\
                     pipe(lambda df: df.rename(columns={
@@ -350,5 +348,6 @@ class DeustcheBankStatementImporter(StatementImporterPlugin):
                         "currency",
                     ])\
                     .astype({"amount": float})
-            return df
+            
+            return Result.ok(df)
 
