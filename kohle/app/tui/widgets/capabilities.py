@@ -3,11 +3,6 @@ from sqlalchemy.inspection import inspect
 from kohle.core.result import Result
 from kohle.infrastructure.sqlalchemy_model_adapter import SQLAlchemyModelAdapter
 from kohle.infrastructure.uow import UnitOfWork
-from kohle.domain.models import DebitCategory
-from kohle.use_cases.debit_categories import (
-    add_debit_category,
-    list_debit_categories,
-)
 
 
 E = TypeVar("E")
@@ -15,34 +10,37 @@ T = TypeVar("T")
 PK = TypeVar("PK")
 
 
-class SpreadsheetCapabilities(Protocol):
+class SpreadsheetCapabilities(Protocol[E]):
     def populate_columns(self) -> Iterable[dict[str, Any]]: ...
-    def populate_rows(self) -> Result[list[dict[str, str]], E]: ...
-    def request_add(self, values: Sequence[str]) -> Result[str, E]: ...
+    def populate_rows(self, uow: UnitOfWork) -> Result[list[dict[str, str]], E]: ...
+    def request_add(self, uow: UnitOfWork, values: Sequence[str]) -> Result[str, E]: ...
+    def request_delete(self, uow: UnitOfWork, key: str) -> Result[str, E]: ...
+    def request_edit(self, uow: UnitOfWork, row_key: str, column_key: str, value: str) -> Result[str, E]: ...
 
 
-class SpreadsheetController:
+class SpreadsheetController[E]:
     def __init__(self, capabilities: SpreadsheetCapabilities) -> None:
         self.capabilities = capabilities
     def populate_columns(self) -> Iterable[dict[str, Any]]:
         return self.capabilities.populate_columns()
-    def populate_rows(self) -> Result[list[dict[str, str]], E]:
-        return self.capabilities.populate_rows()
-    def request_add(self, values: Sequence[str]) -> Result[str, E]:
-        return self.capabilities.request_add(values)
+    def populate_rows(self, uow: UnitOfWork) -> Result[list[dict[str, str]], E]:
+        return self.capabilities.populate_rows(uow)
+    def request_add(self, uow: UnitOfWork, values: Sequence[str]) -> Result[str, E]:
+        return self.capabilities.request_add(uow, values)
+    def request_delete(self, uow: UnitOfWork, key: str) -> Result[str, E]:
+        return self.capabilities.request_delete(uow, key)
+    def request_edit(self, uow: UnitOfWork, row_key: str, column_key: str, value: str) -> Result[str, E]:
+        return self.capabilities.request_edit(uow, row_key, column_key, value)
 
 
-class ModelSpreadsheetCapabilities:
-
+class ModelSpreadsheetCapabilities[E, T]:
     def __init__(
         self,
         model_cls: Type[T],
-        uow: UnitOfWork,
-        list_use_case: Callable[[UnitOfWork], Result[list[T], E]],
+        list_use_case: Callable[[UnitOfWork], Result[list[dict[str, Any]], E]],
         add_use_case: Callable[[UnitOfWork, T], Result[PK, E]],
     ) -> None:
         self.model_cls = model_cls
-        self.uow = uow
         self.list_use_case = list_use_case
         self.add_use_case = add_use_case
         self.mapper = inspect(model_cls)
@@ -59,19 +57,11 @@ class ModelSpreadsheetCapabilities:
             for column in self.columns
         ]
 
-    def populate_rows(self) -> Result[list[dict[str, str]], E]:
-        res = self.list_use_case(self.uow)
-        if res.is_err:
-            return Result.err(res.unwrap_err())
-        rows = [
-            SQLAlchemyModelAdapter.to_string_dict(instance)
-            for instance in res.unwrap()
-        ]
-        return Result.ok(rows)
+    def populate_rows(self, uow: UnitOfWork) -> Result[list[dict[str, str]], E]:
+        return self.list_use_case(uow)
 
-    def request_add(self, values: Sequence[str]) -> Result[str, E]:
+    def request_add(self, uow: UnitOfWork, values: Sequence[str]) -> Result[str, E]:
         editable_columns = [c for c in self.columns if not c.primary_key]
-
         if len(values) != len(editable_columns):
             return Result.err(Exception("Invalid column count"))
 
@@ -79,13 +69,12 @@ class ModelSpreadsheetCapabilities:
             column.key: value
             for column, value in zip(editable_columns, values)
         }
-
         model_instance = SQLAlchemyModelAdapter.from_string_dict(
             self.model_cls,
             data,
         )
 
-        res = self.add_use_case(self.uow, model_instance)
+        res = self.add_use_case(uow, model_instance)
         if res.is_err:
             return Result.err(res.unwrap_err())
 
@@ -100,6 +89,12 @@ class ModelSpreadsheetCapabilities:
             values.append(SQLAlchemyModelAdapter._convert_to_string(value))
 
         return values[0] if len(values) == 1 else ",".join(values)
+
+    def request_delete(self, uow: UnitOfWork, key: str) -> Result[str, E]:
+        return Result.ok("")
+
+    def request_edit(self, uow: UnitOfWork, row_key: str, column_key: str, value: str) -> Result[str, E]:
+        return Result.ok("")
 
 
 # Example Wiring for DebitCategory
