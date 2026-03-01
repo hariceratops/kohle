@@ -1,11 +1,11 @@
 ## Roadmap
 
 ### Infrastructure
-- [ ] Autoflush
+- [x] Autoflush
 
 ### Services
-- [ ] Query Transactions
-- [ ] Query Accounts
+- [x] Query Transactions - Basic
+- [x] Query Accounts
 - [ ] Updates + Deletes design
 
 ### Model Updates
@@ -18,15 +18,16 @@
 ### UI-Model Interaction
 - [ ] Convert record of strings to model and vice versa
 - [ ] Controller protocol
-- [ ] Refactor Spreadsheet/TableEditor code
 
 ### UI
-- [ ] TreeTable
+- [ ] Refactor Spreadsheet/TableEditor code
+- [ ] TreeTable?
 - [ ] DialogBox
 
 ### Importer plugin
-- [ ] Plugin introduction
-- [ ] Example Deutsche Bank plugin
+- [x] Plugin introduction
+- [x] Example Deutsche Bank plugin
+- [ ] Check for importer robustness
 - [ ] Plugin as subprocess
 
 ### Asset 
@@ -34,5 +35,18 @@
 
 ### Catergorization
 - [ ] Catergorization Engine
+- [ ] Querying by category
 - [ ] Category hierarchy?
 - [ ] Budgetting
+
+### Documentation
+- [ ] Generate cli documentation automatically - sphinx / mkdocs + click
+
+### App initialization
+- [ ] Migration
+- [ ] Mandatory configurations
+- [ ] Check in top
+
+### Deployment
+- [ ] Git hooks for tests and documentation generation
+
