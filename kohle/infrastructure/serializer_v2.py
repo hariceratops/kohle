@@ -3,9 +3,31 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, List, Optional, TypeVar, Generic
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy import event, Integer, String, ForeignKey
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, Mapper
 from sqlalchemy.inspection import inspect
 from sqlalchemy import Integer, String, ForeignKey
+from typing import Optional
+
+
+def validate_mapper(mapper: Mapper, class_) -> None:
+    if hasattr(class_, "__abstract__") and class_.__abstract__:
+        return
+
+    primary_keys = mapper.primary_key
+    if len(primary_keys) != 1:
+        raise TypeError(f"{class_.__name__} must have exactly one primary key column")
+
+    for relationship in mapper.relationships:
+        if relationship.uselist:
+            raise TypeError(f"{class_.__name__}.{relationship.key} must not be a list relationship")
+
+
+event.listen(Mapper, "mapper_configured", validate_mapper)
+
+
+class Base(DeclarativeBase):
+    pass
 
 
 class RelationshipMode(Enum):
@@ -23,41 +45,16 @@ class RelationshipConfig:
 RelationshipPolicy = Dict[str, RelationshipConfig]
 
 
-class NoListRelationshipMixin:
-    @classmethod
-    def __declare_last__(cls) -> None:
-        mapper = inspect(cls)
-        for relationship in mapper.relationships:
-            if relationship.uselist:
-                raise TypeError(
-                    f"{cls.__name__}.{relationship.key} must not be a list relationship"
-                )
-
-
-class SinglePrimaryKeyMixin:
-    @classmethod
-    def __declare_last__(cls) -> None:
-        mapper = inspect(cls)
-        if len(mapper.primary_key) != 1:
-            raise TypeError(
-                f"{cls.__name__} must have exactly one primary key column"
-            )
-
-
-class SerializableModel(NoListRelationshipMixin, SinglePrimaryKeyMixin):
-    __abstract__ = True
-
-
-class Base(DeclarativeBase):
-    pass
-
-
-T = TypeVar("T", bound=SerializableModel)
+T = TypeVar("T")
 
 
 class Serializer(Generic[T]):
     @staticmethod
-    def to_dict(instance: T, policy: RelationshipPolicy, max_depth: int = 1, depth: int = 0) -> Dict[str, Any]:
+    def to_dict(instance: T, policy: RelationshipPolicy, max_depth: int = 1) -> Dict[str, Any]:
+        return Serializer._serialize_impl(instance, policy, max_depth, 0)
+
+    @staticmethod
+    def _serialize_impl(instance: T, policy: RelationshipPolicy, max_depth: int, depth: int) -> Dict[str, Any]:
         mapper = inspect(instance.__class__)
         result: Dict[str, Any] = {}
 
@@ -68,37 +65,30 @@ class Serializer(Generic[T]):
             return result
 
         for relationship in mapper.relationships:
-            config = policy.get(
-                relationship.key,
-                RelationshipConfig(RelationshipMode.ID_ONLY),
-            )
-
-            if config.mode == RelationshipMode.EXCLUDE:
-                continue
-
+            config = policy.get(relationship.key, RelationshipConfig(RelationshipMode.ID_ONLY))
             value = getattr(instance, relationship.key)
 
-            if value is None:
-                result[relationship.key] = None
-                continue
+            match config.mode:
+                case RelationshipMode.EXCLUDE:
+                    continue
 
-            if config.mode == RelationshipMode.ID_ONLY:
-                result[relationship.key] = getattr(value, "id")
+                case _ if value is None:
+                    result[relationship.key] = None
 
-            elif config.mode == RelationshipMode.EXPAND:
-                nested = Serializer.to_dict(
-                    value,
-                    policy,
-                    max_depth,
-                    depth + 1,
-                )
+                case RelationshipMode.ID_ONLY:
+                    result[relationship.key] = getattr(value, "id")
 
-                if config.fields is None:
-                    result[relationship.key] = nested
-                else:
-                    result[relationship.key] = {
-                        k: v for k, v in nested.items() if k in config.fields
-                    }
+                case RelationshipMode.EXPAND:
+                    nested = Serializer._serialize_impl(value, policy, max_depth, depth + 1)
+                    result[relationship.key] = (
+                        nested
+                        if config.fields is None
+                        else {
+                            k: v
+                            for k, v in nested.items()
+                            if k in config.fields
+                        }
+                    )
 
         return result
 
@@ -116,6 +106,7 @@ class DictionaryNormalizer:
             else:
                 for row in rows:
                     row[key] = value
+
         return rows
 
     @staticmethod
@@ -128,15 +119,11 @@ class DictionaryNormalizer:
                 result.update(DictionaryNormalizer._flatten(value, new_key))
             else:
                 result[new_key] = value
+
         return result
 
 
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
-from sqlalchemy import Integer, String, ForeignKey
-from typing import Optional
-
-
-class Company(Base, SerializableModel):
+class Company(Base):
     __tablename__ = "companies"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -148,7 +135,7 @@ class Company(Base, SerializableModel):
     )
 
 
-class User(Base, SerializableModel):
+class User(Base):
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -166,7 +153,7 @@ class User(Base, SerializableModel):
     )
 
 
-class Profile(Base, SerializableModel):
+class Profile(Base):
     __tablename__ = "profiles"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -184,7 +171,7 @@ class Profile(Base, SerializableModel):
     )
 
 
-class Address(Base, SerializableModel):
+class Address(Base):
     __tablename__ = "addresses"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
