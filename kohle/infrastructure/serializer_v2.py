@@ -200,11 +200,10 @@ class Serializer(Generic[T]):
 
         return instance
 
-
 class RecordFlattener:
 
     @staticmethod
-    def flatten(record: Record) -> list[Record]:
+    def flatten(record: Record) -> Record:
         flat_fields: Dict[str, Any] = {}
 
         def walk(prefix: str, fields: Dict[str, Any]) -> None:
@@ -228,9 +227,87 @@ class RecordFlattener:
 
         walk("", record.fields)
 
-        return [Record(id=record.id, fields=flat_fields)]
+        return Record(id=record.id, fields=flat_fields)
 
 
+class FlattenedDeserializer:
+
+    @staticmethod
+    def deserialize(
+        model: type[T],
+        record: Record,
+        policy: RelationshipPolicy,
+    ) -> T:
+        instance = model()
+
+        mapper = inspect(model)
+        pk_column = mapper.primary_key[0]
+        setattr(instance, pk_column.key, record.id)
+
+        flat_fields = record.fields
+
+        for column in mapper.columns:
+            key = column.key
+            if key == pk_column.key:
+                continue
+
+            if key in flat_fields:
+                setattr(instance, key, flat_fields[key])
+
+        relationship_keys = {
+            rel.key: rel for rel in mapper.relationships
+        }
+
+        for rel_key, rel in relationship_keys.items():
+            config = policy.get(
+                rel_key,
+                RelationshipConfig(RelationshipMode.ID_ONLY),
+            )
+
+            if config.mode == RelationshipMode.EXCLUDE:
+                continue
+
+            related_model = rel.mapper.class_
+            related_mapper = inspect(related_model)
+            related_pk = related_mapper.primary_key[0]
+
+            if config.mode == RelationshipMode.ID_ONLY:
+                id_key = f"{rel_key}.id"
+                if id_key in flat_fields:
+                    related_instance = related_model()
+                    setattr(
+                        related_instance,
+                        related_pk.key,
+                        flat_fields[id_key],
+                    )
+                    setattr(instance, rel_key, related_instance)
+
+            elif config.mode == RelationshipMode.EXPAND:
+                related_instance = related_model()
+
+                prefix = f"{rel_key}."
+
+                for key, value in flat_fields.items():
+                    if key.startswith(prefix):
+                        sub_key = key[len(prefix):]
+
+                        if sub_key == "id":
+                            setattr(
+                                related_instance,
+                                related_pk.key,
+                                value,
+                            )
+                        else:
+                            if config.fields is None or sub_key in config.fields:
+                                setattr(
+                                    related_instance,
+                                    sub_key,
+                                    value,
+                                )
+
+                setattr(instance, rel_key, related_instance)
+
+        return instance
 
 class Base(DeclarativeBase):
     pass
@@ -312,5 +389,5 @@ reconstructed = Serializer.deserialize(
 print(structured)
 print(rows)
 print(reconstructed)
-
+print(FlattenedDeserializer.deserialize(User, rows, policy))
 
