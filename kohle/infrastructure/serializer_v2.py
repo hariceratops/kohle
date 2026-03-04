@@ -2,124 +2,238 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, List, Optional, TypeVar, Generic
-from sqlalchemy import event, Integer, String, ForeignKey
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, Mapper
+from typing import Any, Dict, Generic, Optional, TypeVar, Union
+
 from sqlalchemy.inspection import inspect
-from sqlalchemy import Integer, String, ForeignKey
-from typing import Optional
-
-
-def validate_mapper(mapper: Mapper, class_) -> None:
-    if hasattr(class_, "__abstract__") and class_.__abstract__:
-        return
-
-    primary_keys = mapper.primary_key
-    if len(primary_keys) != 1:
-        raise TypeError(f"{class_.__name__} must have exactly one primary key column")
-
-    for relationship in mapper.relationships:
-        if relationship.uselist:
-            raise TypeError(f"{class_.__name__}.{relationship.key} must not be a list relationship")
-
-
-class Base(DeclarativeBase):
-    pass
-
-
-event.listen(Base, "mapper_configured", validate_mapper, propagate=True)
-
-class RelationshipMode(Enum):
-    ID_ONLY = "id_only"
-    EXCLUDE = "exclude"
-    EXPAND = "expand"
-
-
-@dataclass(frozen=True)
-class RelationshipConfig:
-    mode: RelationshipMode
-    fields: Optional[List[str]] = None
-
-
-RelationshipPolicy = Dict[str, RelationshipConfig]
+from sqlalchemy import ForeignKey, Integer, String
+from sqlalchemy.orm import (
+    DeclarativeBase,
+    Mapped,
+    mapped_column,
+    relationship,
+)
 
 
 T = TypeVar("T")
 
 
+@dataclass(slots=True)
+class Record:
+    id: Any
+    fields: Dict[str, Any]
+
+
+@dataclass(slots=True)
+class RelationshipId:
+    id: Any
+
+
+@dataclass(slots=True)
+class RelationshipView:
+    fields: Dict[str, Any]
+
+
+@dataclass(slots=True)
+class RelationshipFull:
+    id: Any
+    fields: Dict[str, Any]
+
+
+RelationshipValue = Union[
+    RelationshipId,
+    RelationshipView,
+    RelationshipFull,
+]
+
+
+class RelationshipMode(Enum):
+    EXCLUDE = "exclude"
+    ID_ONLY = "id_only"
+    EXPAND = "expand"
+
+
+@dataclass(slots=True)
+class RelationshipConfig:
+    mode: RelationshipMode
+    fields: Optional[set[str]] = None
+
+
+RelationshipPolicy = Dict[str, RelationshipConfig]
+
+
 class Serializer(Generic[T]):
-    @staticmethod
-    def to_dict(instance: T, policy: RelationshipPolicy, max_depth: int = 1) -> Dict[str, Any]:
-        return Serializer._serialize_impl(instance, policy, max_depth, 0)
 
     @staticmethod
-    def _serialize_impl(instance: T, policy: RelationshipPolicy, max_depth: int, depth: int) -> Dict[str, Any]:
+    def serialize(
+        instance: T,
+        policy: RelationshipPolicy,
+        max_depth: int = 1,
+    ) -> Record:
+        return Serializer._serialize_impl(
+            instance=instance,
+            policy=policy,
+            max_depth=max_depth,
+            depth=0,
+        )
+
+    @staticmethod
+    def _serialize_impl(
+        instance: T,
+        policy: RelationshipPolicy,
+        max_depth: int,
+        depth: int,
+    ) -> Record:
         mapper = inspect(instance.__class__)
-        result: Dict[str, Any] = {}
+        pk_column = mapper.primary_key[0]
+        record_id = getattr(instance, pk_column.key)
 
-        for column in mapper.columns:
-            result[column.key] = getattr(instance, column.key)
+        fields: Dict[str, Any] = {
+            column.key: getattr(instance, column.key)
+            for column in mapper.columns
+            if column.key != pk_column.key
+        }
 
         if depth >= max_depth:
-            return result
+            return Record(id=record_id, fields=fields)
 
         for relationship in mapper.relationships:
-            config = policy.get(relationship.key, RelationshipConfig(RelationshipMode.ID_ONLY))
+            config = policy.get(
+                relationship.key,
+                RelationshipConfig(RelationshipMode.ID_ONLY),
+            )
+
             value = getattr(instance, relationship.key)
 
-            match config.mode:
-                case RelationshipMode.EXCLUDE:
-                    continue
+            if config.mode == RelationshipMode.EXCLUDE:
+                continue
 
-                case _ if value is None:
-                    result[relationship.key] = None
+            if value is None:
+                fields[relationship.key] = None
+                continue
 
-                case RelationshipMode.ID_ONLY:
-                    result[relationship.key] = getattr(value, "id")
+            related_mapper = inspect(value.__class__)
+            related_pk = related_mapper.primary_key[0]
+            related_id = getattr(value, related_pk.key)
 
-                case RelationshipMode.EXPAND:
-                    nested = Serializer._serialize_impl(value, policy, max_depth, depth + 1)
-                    result[relationship.key] = (
-                        nested
-                        if config.fields is None
-                        else {
-                            k: v
-                            for k, v in nested.items()
-                            if k in config.fields
-                        }
+            if config.mode == RelationshipMode.ID_ONLY:
+                fields[relationship.key] = RelationshipId(id=related_id)
+
+            elif config.mode == RelationshipMode.EXPAND:
+                nested_fields: Dict[str, Any] = {}
+
+                if config.fields is None:
+                    for col in related_mapper.columns:
+                        if col.key != related_pk.key:
+                            nested_fields[col.key] = getattr(value, col.key)
+                else:
+                    for col in related_mapper.columns:
+                        if (
+                            col.key in config.fields
+                            and col.key != related_pk.key
+                        ):
+                            nested_fields[col.key] = getattr(value, col.key)
+
+                if "id" in (config.fields or set()):
+                    fields[relationship.key] = RelationshipFull(
+                        id=related_id,
+                        fields=nested_fields,
+                    )
+                else:
+                    fields[relationship.key] = RelationshipView(
+                        fields=nested_fields,
                     )
 
-        return result
-
-
-class DictionaryNormalizer:
-    @staticmethod
-    def normalize(data: Dict[str, Any]) -> List[Dict[str, Any]]:
-        rows: List[Dict[str, Any]] = [{}]
-
-        for key, value in data.items():
-            if isinstance(value, dict):
-                flattened = DictionaryNormalizer._flatten(value, key)
-                for row in rows:
-                    row.update(flattened)
-            else:
-                for row in rows:
-                    row[key] = value
-
-        return rows
+        return Record(id=record_id, fields=fields)
 
     @staticmethod
-    def _flatten(data: Dict[str, Any], prefix: str) -> Dict[str, Any]:
-        result: Dict[str, Any] = {}
+    def deserialize(
+        model: type[T],
+        record: Record,
+    ) -> T:
+        instance = model()
+        mapper = inspect(model)
+        pk_column = mapper.primary_key[0]
 
-        for key, value in data.items():
-            new_key = f"{prefix}.{key}"
-            if isinstance(value, dict):
-                result.update(DictionaryNormalizer._flatten(value, new_key))
-            else:
-                result[new_key] = value
+        setattr(instance, pk_column.key, record.id)
 
-        return result
+        for column in mapper.columns:
+            key = column.key
+            if key == pk_column.key:
+                continue
+            if key in record.fields:
+                setattr(instance, key, record.fields[key])
+
+        for relationship in mapper.relationships:
+            key = relationship.key
+            if key not in record.fields:
+                continue
+
+            value = record.fields[key]
+
+            if value is None:
+                setattr(instance, key, None)
+                continue
+
+            related_model = relationship.mapper.class_
+
+            if isinstance(value, RelationshipId):
+                related_instance = related_model()
+                related_mapper = inspect(related_model)
+                related_pk = related_mapper.primary_key[0]
+                setattr(related_instance, related_pk.key, value.id)
+                setattr(instance, key, related_instance)
+
+            elif isinstance(value, RelationshipView):
+                related_instance = related_model()
+                for k, v in value.fields.items():
+                    setattr(related_instance, k, v)
+                setattr(instance, key, related_instance)
+
+            elif isinstance(value, RelationshipFull):
+                related_instance = related_model()
+                related_mapper = inspect(related_model)
+                related_pk = related_mapper.primary_key[0]
+                setattr(related_instance, related_pk.key, value.id)
+                for k, v in value.fields.items():
+                    setattr(related_instance, k, v)
+                setattr(instance, key, related_instance)
+
+        return instance
+
+
+class RecordFlattener:
+
+    @staticmethod
+    def flatten(record: Record) -> list[Record]:
+        flat_fields: Dict[str, Any] = {}
+
+        def walk(prefix: str, fields: Dict[str, Any]) -> None:
+            for key, value in fields.items():
+                path = f"{prefix}{key}" if prefix == "" else f"{prefix}.{key}"
+
+                if isinstance(value, RelationshipId):
+                    flat_fields[f"{path}.id"] = value.id
+
+                elif isinstance(value, RelationshipView):
+                    for sub_key, sub_value in value.fields.items():
+                        flat_fields[f"{path}.{sub_key}"] = sub_value
+
+                elif isinstance(value, RelationshipFull):
+                    flat_fields[f"{path}.id"] = value.id
+                    for sub_key, sub_value in value.fields.items():
+                        flat_fields[f"{path}.{sub_key}"] = sub_value
+
+                else:
+                    flat_fields[path] = value
+
+        walk("", record.fields)
+
+        return [Record(id=record.id, fields=flat_fields)]
+
+
+
+class Base(DeclarativeBase):
+    pass
 
 
 class Company(Base):
@@ -151,6 +265,8 @@ class User(Base):
         uselist=False,
     )
 
+    def __str__(self) -> str:
+        return f"{self.id} {self.name} {self.company.name}"
 
 class Profile(Base):
     __tablename__ = "profiles"
@@ -163,58 +279,38 @@ class Profile(Base):
         back_populates="profile",
         uselist=False,
     )
-
-    address: Mapped[Optional["Address"]] = relationship(
-        back_populates="profile",
-        uselist=False,
-    )
-
-
-class Address(Base):
-    __tablename__ = "addresses"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    city: Mapped[str] = mapped_column(String)
-    country: Mapped[str] = mapped_column(String)
-    profile_id: Mapped[int] = mapped_column(ForeignKey("profiles.id"))
-
-    profile: Mapped[Profile] = relationship(
-        back_populates="address",
-        uselist=False,
-    )
+ 
+policy: RelationshipPolicy = {
+    "company": RelationshipConfig(
+        mode=RelationshipMode.EXPAND,
+        fields={"name"},
+    ),
+    "profile": RelationshipConfig(
+        mode=RelationshipMode.ID_ONLY,
+        fields={"bio"},
+    ),
+}
 
 company = Company(id=1, name="Acme")
 user = User(id=10, name="Alice", company=company)
 profile = Profile(id=100, bio="Engineer", user=user)
-address = Address(id=1000, city="Berlin", country="DE", profile=profile)
 
 company.user = user
 user.profile = profile
-profile.address = address
 
-
-policy: RelationshipPolicy = {
-    "company": RelationshipConfig(
-        mode=RelationshipMode.EXPAND,
-        fields=["name"],
-    ),
-    "profile": RelationshipConfig(
-        mode=RelationshipMode.EXPAND,
-        fields=["bio", "address"],
-    ),
-    "address": RelationshipConfig(
-        mode=RelationshipMode.EXPAND,
-        fields=["city", "country"],
-    ),
-}
-
-structured = Serializer.to_dict(
+structured = Serializer.serialize(
     instance=user,
     policy=policy,
     max_depth=2,
 )
-
-rows = DictionaryNormalizer.normalize(structured)
+rows = RecordFlattener.flatten(structured)
+reconstructed = Serializer.deserialize(
+    User,
+    structured,
+)
 
 print(structured)
 print(rows)
+print(reconstructed)
+
+
