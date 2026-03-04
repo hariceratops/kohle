@@ -23,12 +23,11 @@ def validate_mapper(mapper: Mapper, class_) -> None:
             raise TypeError(f"{class_.__name__}.{relationship.key} must not be a list relationship")
 
 
-event.listen(Mapper, "mapper_configured", validate_mapper)
-
-
 class Base(DeclarativeBase):
     pass
 
+
+event.listen(Base, "mapper_configured", validate_mapper, propagate=True)
 
 class RelationshipMode(Enum):
     ID_ONLY = "id_only"
