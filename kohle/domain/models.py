@@ -1,6 +1,6 @@
 from sqlalchemy import Column, Integer, String, UniqueConstraint, ForeignKey, Date, Numeric
 from kohle.db.connection import base
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 
 class DebitCategory(base):
@@ -22,6 +22,8 @@ class Account(base):
     name = Column(String, nullable=False, unique=True)
     iban = Column(String, nullable=False, unique=True)
 
+    transactions = relationship("Transaction", back_populates="account")
+
     __table_args__ = (
         UniqueConstraint("name", name="uq_account_name"),
         UniqueConstraint("iban", name="uq_account_iban"),
@@ -40,3 +42,4 @@ class Transaction(base):
     date = Column(Date, nullable=False)
     amount = Column(Numeric(12, 2), nullable=False)
 
+    account = relationship("Account")
