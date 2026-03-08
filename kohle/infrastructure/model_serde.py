@@ -117,7 +117,6 @@ class PolicyBuilder(Generic[T]):
         return self
 
     def build(self) -> Result[Policy[T], str]:
-
         if self._error:
             return Result.err(self._error)
 
@@ -126,9 +125,7 @@ class PolicyBuilder(Generic[T]):
         if isinstance(root, PassOnly):
             missing = set(self._relations) - root.fields
             if missing:
-                return Result.err(
-                    f"PassOnly root must include relations: {missing}"
-                )
+                return Result.err(f"PassOnly root must include relations: {missing}")
 
         return Policy.create(self.model, root, self._relations)
 
