@@ -7,7 +7,9 @@ from datetime import datetime
 from decimal import Decimal
 import enum
 from kohle.core.result import Result
+from typing import Type, TypeVar, Generic, Dict
 
+T = TypeVar("T")
 
 # todo tests
 # todo bound generic to kohlebase
@@ -17,6 +19,9 @@ from kohle.core.result import Result
 # todo rename wherever possible
 # todo handle error if keys not present?
 # todo make policy strong type
+# todo cache inspect results
+# todo improve visitor
+# todo fix all type errors and warnings
 
 
 T = TypeVar("T")
@@ -30,6 +35,7 @@ class PassAll: pass
 @dataclass(slots=True)
 class PassOnly:
     fields: Set[str]
+
 
 RootFilter = Union[Drop, PassId, PassAll, PassOnly]
 
@@ -76,6 +82,55 @@ class Policy(Generic[T]):
             validated_foreign[key] = res.unwrap()
 
         return Result.ok(cls(root_policy, validated_foreign))
+
+    @staticmethod
+    def for_model(model: Type[T]) -> PolicyBuilder[T]:
+        return PolicyBuilder(model)
+
+
+class PolicyBuilder(Generic[T]):
+
+    def __init__(self, model: Type[T]) -> None:
+        self.model: Type[T] = model
+        self._root: Optional[RootFilter] = None
+        self._relations: Dict[str, Policy] = {}
+        self._error: Optional[str] = None
+
+    def _set_root(self, root: RootFilter) -> PolicyBuilder[T]:
+        if self._root is not None:
+            self._error = "Conflicting root filters specified"
+            return self
+        self._root = root
+        return self
+
+    def only(self, *fields: str) -> PolicyBuilder[T]:
+        return self._set_root(PassOnly(set(fields)))
+
+    def pass_all(self) -> PolicyBuilder[T]:
+        return self._set_root(PassAll())
+
+    def drop(self) -> PolicyBuilder[T]:
+        return self._set_root(Drop())
+
+    def relation(self, name: str, policy: Policy) -> PolicyBuilder[T]:
+        self._relations[name] = policy
+        return self
+
+    def build(self) -> Result[Policy[T], str]:
+
+        if self._error:
+            return Result.err(self._error)
+
+        root: RootFilter = self._root or PassAll()
+
+        if isinstance(root, PassOnly):
+            missing = set(self._relations) - root.fields
+            if missing:
+                return Result.err(
+                    f"PassOnly root must include relations: {missing}"
+                )
+
+        return Policy.create(self.model, root, self._relations)
 
 
 class PolicyTraversal:
@@ -194,7 +249,6 @@ def flattened_columns(model: Type, policy: Policy) -> List[str]:
         columns.append(f"{relation_name}.id")
 
     PolicyTraversal.walk(model, policy, visit_column, visit_relation)
-
     return columns
 
 
@@ -227,33 +281,23 @@ class FlattenedDeserializer(Generic[T]):
         Reconstructs a SQLAlchemy model instance from a flattened Record
         using the validated Policy tree.
         """
-
         instance = model()
-
         mapper = inspect(model)
         pk_column = mapper.primary_key[0]
 
         # set root id
         setattr(instance, pk_column.key, record.id)
-
         flat = record.fields or {}
-
         # cache created relation instances
         relation_instances: Dict[str, Any] = {}
 
         def visit_column(path: str, column):
-
             if path not in flat:
                 return
 
             value = flat[path]
-
             target_type = column.type.python_type
-
-            converted = FlattenedDeserializer._convert_from_string(
-                target_type,
-                value
-            )
+            converted = FlattenedDeserializer._convert_from_string(target_type, value)
 
             # root column
             if "." not in path:
@@ -262,16 +306,13 @@ class FlattenedDeserializer(Generic[T]):
 
             # nested column
             relation_name, field_name = path.split(".", 1)
-
             related_instance = relation_instances.get(relation_name)
             if related_instance is None:
                 return
-
             setattr(related_instance, field_name, converted)
 
 
         def visit_relation(prefix: str, relationship, sub_policy):
-
             relation_name = prefix[:-1]
             id_key = f"{relation_name}.id"
 
@@ -281,26 +322,12 @@ class FlattenedDeserializer(Generic[T]):
             related_model = relationship.mapper.class_
             related_mapper = inspect(related_model)
             related_pk = related_mapper.primary_key[0]
-
             related_instance = related_model()
-
-            setattr(
-                related_instance,
-                related_pk.key,
-                flat[id_key]
-            )
-
+            setattr(related_instance, related_pk.key, flat[id_key])
             setattr(instance, relation_name, related_instance)
-
             relation_instances[relation_name] = related_instance
 
-        PolicyTraversal.walk(
-            model,
-            policy,
-            visit_column,
-            visit_relation
-        )
-
+        PolicyTraversal.walk(model, policy, visit_column, visit_relation)
         return instance
 
 
@@ -386,6 +413,7 @@ user = User(id=10, name="Alice", company=company)
 profile = Profile(id=100, bio="Engineer", user=user)
 company.user = user
 user.profile = profile
+# this is not intuitive
 user_policy = Policy(
     PassOnly({"name", "company"}),
     {
@@ -407,4 +435,15 @@ print(f"Structured: {structured}")
 print(f"Flattened: {flattened}")
 print(f"Reconstructed: {reconstructed}")
 print(f"Flat columns: {flat_columns}")
+user_policy = (
+    Policy
+    .for_model(User)
+    .only("name", "company")
+    .relation("company", Policy(PassOnly({"name"}), {}))
+    .build()
+    .unwrap()
+)
+
+flat_columns = flattened_columns(User, user_policy)
+print(f"With builder, flattened_columns: {flat_columns}")
 
