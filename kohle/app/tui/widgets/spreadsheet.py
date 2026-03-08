@@ -13,11 +13,10 @@ from textual.message import Message
 from statemachine import StateMachine, State
 
 from kohle.core.result import Result
+from kohle.infrastructure.model_serde import Record, Policy
 from kohle.app.tui.widgets.capabilities import SpreadsheetController, ModelSpreadsheetCapabilities
-from kohle.infrastructure.uow import UnitOfWork
 from kohle.domain.models import DebitCategory
 from kohle.use_cases.debit_categories import add_debit_category, list_debit_categories
-from kohle.db.connection import session_local
 from textual.logging import TextualHandler
 
 logging.basicConfig(level="NOTSET", handlers=[TextualHandler()])
@@ -121,8 +120,7 @@ class Spreadsheet(Container):
         self.editor = SpreadsheetCellEditor()
         self.machine = SpreadsheetStateMachine(self)
         self.ctx: Optional[CellContext] = None
-        self._append_buffer: list[str] = []
-        self._temp_row_key: Optional[str] = None
+        self._temp_record: Record = Record(f"{uuid.uuid4().hex}", {})
 
     def compose(self) -> ComposeResult:
         yield self.table
@@ -132,11 +130,11 @@ class Spreadsheet(Container):
         for column in self.controller.populate_columns():
             self.table.add_column(column["key"], key=str(column["key"]))
 
-        with UnitOfWork(session_local()) as uow:
-            result = self.controller.populate_rows(uow)
-            if result.is_ok:
-                for row in result.unwrap():
-                    self.table.add_row(*row.values(), key=row["id"])
+        result = self.controller.populate_rows()
+        if result.is_ok:
+            for row in result.unwrap():
+                fields = row.fields if row.fields else {}
+                self.table.add_row(*fields.values(), key=row.id)
 
     def action_ctrl_e(self) -> None:
         self.machine.send("ctrl_e")
@@ -146,17 +144,17 @@ class Spreadsheet(Container):
 
     def action_ctrl_d(self) -> None:
         row_key, _ = self.to_table_key()
-        with UnitOfWork(session_local()) as uow:
-            res = self.controller.request_delete(uow, row_key)
-            if res.is_ok:
-                self.table.remove_row(row_key)
+        res = self.controller.request_delete(row_key)
+        if res.is_ok:
+            self.table.remove_row(row_key)
 
     def on_spreadsheet_cell_editor_cell_edited(self, event: SpreadsheetCellEditor.CellEdited) -> None:
         if self.machine.current_state == self.machine.editing:
             self.machine.send("submit_edit", event.value)
         else:
-            self._append_buffer.append(event.value)
-            if len(self._append_buffer) >= self.column_count():
+            row_key, _ = self.to_table_key()
+            self._temp_record[row_key] = event.value
+            if len(self._temp_record) >= self.column_count():
                 self.machine.send("submit_append", event.value)
             else:
                 self.machine.send("submit_one", event.value)
@@ -170,17 +168,17 @@ class Spreadsheet(Container):
 
     def commit_edit(self, value: str) -> None:
         row_key, column_key = self.to_table_key()
-        with UnitOfWork(session_local()) as uow:
-            result = self.controller.request_edit(uow, row_key, column_key, value)
-            if result.is_ok:
-                self.table.update_cell(row_key, column_key, value)
+        result = self.controller.request_edit(row_key, column_key, value)
+        if result.is_ok:
+            self.table.update_cell(row_key, column_key, value)
         self.editor.hide()
 
+    def _reset_temp_record(self) -> None:
+        self._temp_record.id = f"{uuid.uuid4().hex}"
+        self._temp_record.fields = {}
+
     def start_append(self) -> None:
-        self._append_buffer = []
-        self._temp_row_key = f"__{uuid.uuid4().hex}__"
-        empty = [""] * self.column_count()
-        self.table.add_row(*empty, key=self._temp_row_key)
+        self.table.add_row(*self._temp_record.fields.values(), key=self._temp_record.id)
         self.table.move_cursor(row=self.table.row_count - 1, column=0)
         self.ctx = self._get_context()
         self.editor.show(self.ctx)
@@ -189,21 +187,19 @@ class Spreadsheet(Container):
         row_key, column_key = self.to_table_key()
         self.table.update_cell(row_key, column_key, value)
 
-        if len(self._append_buffer) >= self.column_count():
-            with UnitOfWork(session_local()) as uow:
-                result = self.controller.request_add(uow, self._append_buffer)
-                if result.is_ok:
-                    self.table.remove_row(self._temp_row_key)
-                    self._temp_row_key = None
+        if len(self._temp_record) >= self.column_count():
+            result = self.controller.request_add(self._temp_record)
+            if result.is_ok:
+                self.table.remove_row(self._temp_record.id)
+                self._reset_temp_record()
             self.editor.hide()
         else:
             self._move_next_column()
 
     def abort_current(self) -> None:
         self.editor.hide()
-        if self._temp_row_key:
-            self.table.remove_row(self._temp_row_key)
-            self._temp_row_key = None
+        # todo make it only for appending mode
+        self._reset_temp_record()
 
     def column_count(self) -> int:
         return len(self.table.columns)
@@ -227,13 +223,19 @@ class Spreadsheet(Container):
         width = columns[coord.column].get_render_width(self.table)
         row_key, column_key = self.to_table_key()
         value = str(self.table.get_cell(row_key, column_key))
-        return CellContext(
-            geometry=CellGeometry(x, y, width, 1),
-            value=value,
-        )
+        return CellContext(geometry=CellGeometry(x, y, width, 1), value=value)
 
+
+debit_category_policy = (
+    Policy
+    .for_model(DebitCategory)
+    .only("category")
+    .build()
+    .unwrap()
+)
 
 capabilities = ModelSpreadsheetCapabilities(
+    serde_policy=debit_category_policy,
     model_cls=DebitCategory,
     list_use_case=list_debit_categories,
     add_use_case=add_debit_category,
