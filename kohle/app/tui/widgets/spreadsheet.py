@@ -152,8 +152,8 @@ class Spreadsheet(Container):
         if self.machine.current_state == self.machine.editing:
             self.machine.send("submit_edit", event.value)
         else:
-            row_key, _ = self.to_table_key()
-            self._temp_record[row_key] = event.value
+            _, col_key = self.to_table_key()
+            self._temp_record[col_key] = event.value
             if len(self._temp_record) >= self.column_count():
                 self.machine.send("submit_append", event.value)
             else:

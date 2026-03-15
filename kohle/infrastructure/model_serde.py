@@ -45,6 +45,23 @@ class Record:
     id: str
     fields: Optional[Dict[str, Union[str, "Record"]]] = None
 
+    def __len__(self):
+        return len(self.fields) if self.fields else 0
+
+    # todo handle gracefully
+    def __getitem__(self, key):
+        return self.fields[key]
+
+    # todo handle gracefully
+    def __setitem__(self, key, value):
+        self.fields[key] = value
+
+
+@dataclass(slots=True)
+class SingleRecord:
+    id: str
+    fields: Tuple[str, str]
+
 
 class Policy(Generic[T]):
     def __init__(self, root_policy, root_foreign_policy: Dict[str, "Policy"]) -> None:
@@ -350,6 +367,83 @@ class FlattenedDeserializer(Generic[T]):
         return target_type(value)
 
 
+class PlainDeserializer:
+    @staticmethod
+    def deserialize(model: Type[T], record: Record, policy: Policy[T]) -> Record:
+        """
+        Converts flattened Record[str] → Record[typed] using SQLAlchemy
+        column types discovered through the policy traversal.
+        """
+
+        flat = record.fields or {}
+        converted: Dict[str, Any] = {}
+
+        def visit_column(path: str, column):
+            if path not in flat:
+                return
+
+            value = flat[path]
+            target_type = column.type.python_type
+
+            converted[path] = PlainDeserializer._convert_from_string(
+                target_type,
+                value
+            )
+
+        def visit_relation(prefix: str, relationship, sub_policy):
+            relation_name = prefix[:-1]
+            id_key = f"{relation_name}.id"
+
+            if id_key not in flat:
+                return
+
+            related_model = relationship.mapper.class_
+            related_mapper = inspect(related_model)
+            related_pk = related_mapper.primary_key[0]
+
+            target_type = related_pk.type.python_type
+
+            converted[id_key] = PlainDeserializer._convert_from_string(
+                target_type,
+                flat[id_key]
+            )
+
+        PolicyTraversal.walk(model, policy, visit_column, visit_relation)
+
+        return Record(
+            id=record.id,
+            fields=converted
+        )
+
+    @staticmethod
+    def _convert_from_string(target_type: Type, value: str) -> Any:
+        if value == "":
+            return None
+
+        if value is None:
+            return None
+
+        if target_type is bool:
+            return value.lower() in ("true", "1", "yes")
+
+        if target_type is int:
+            return int(value)
+
+        if target_type is float:
+            return float(value)
+
+        if target_type is Decimal:
+            return Decimal(value)
+
+        if target_type is datetime:
+            return datetime.fromisoformat(value)
+
+        if issubclass(target_type, enum.Enum):
+            return target_type[value]
+
+        return target_type(value)
+
+
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy import ForeignKey, Integer, String
 
@@ -426,11 +520,13 @@ p = res.unwrap()
 
 structured = Serializer.serialize(user, p)
 flattened = RecordFlattener.flatten(structured) if structured else None
-reconstructed = FlattenedDeserializer.deserialize(User, flattened, p) if flattened else None
+reconstructed_f = FlattenedDeserializer.deserialize(User, flattened, p) if flattened else None
+reconstructed = PlainDeserializer.deserialize(User, flattened, p) if flattened else None
 flat_columns = flattened_columns(User, p)
 print(f"Structured: {structured}")
 print(f"Flattened: {flattened}")
 print(f"Reconstructed: {reconstructed}")
+print(f"Reconstructed_f: {reconstructed_f}")
 print(f"Flat columns: {flat_columns}")
 user_policy = (
     Policy
@@ -443,4 +539,4 @@ user_policy = (
 
 flat_columns = flattened_columns(User, user_policy)
 print(f"With builder, flattened_columns: {flat_columns}")
-
+#
