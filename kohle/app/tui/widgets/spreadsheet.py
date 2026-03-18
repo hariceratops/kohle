@@ -36,7 +36,7 @@ class CellContext:
     value: str
 
 
-class SpreadsheetCellEditor(Input):
+class TableCellEditor(Input):
     class CellEdited(Message):
         def __init__(self, value: str) -> None:
             super().__init__()
@@ -67,7 +67,7 @@ class SpreadsheetCellEditor(Input):
             self.post_message(self.CellEditCancelled())
 
 
-class SpreadsheetStateMachine(StateMachine):
+class TableEditorStateMachine(StateMachine):
     navigation = State("navigation", initial=True)
     editing = State("editing")
     appending = State("appending")
@@ -79,7 +79,7 @@ class SpreadsheetStateMachine(StateMachine):
     submit_append = appending.to(navigation)
     submit_one = appending.to.itself()
 
-    def __init__(self, owner: Spreadsheet) -> None:
+    def __init__(self, owner: TableEditor) -> None:
         super().__init__()
         self.owner = owner
 
@@ -106,7 +106,7 @@ class SpreadsheetStateMachine(StateMachine):
 # todo collect value as string dictionary
 # todo pass around temp key
 # todo remove uow from ui
-class Spreadsheet(Container):
+class TableEditor(Container):
     BINDINGS = [
         Binding("ctrl+e", "ctrl_e"),
         Binding("ctrl+a", "ctrl_a"),
@@ -117,8 +117,8 @@ class Spreadsheet(Container):
         super().__init__()
         self.controller = controller
         self.table = DataTable()
-        self.editor = SpreadsheetCellEditor()
-        self.machine = SpreadsheetStateMachine(self)
+        self.editor = TableCellEditor()
+        self.machine = TableEditorStateMachine(self)
         self.ctx: Optional[CellContext] = None
         self._temp_record: Record = Record(f"{uuid.uuid4().hex}", {})
 
@@ -148,7 +148,7 @@ class Spreadsheet(Container):
         if res.is_ok:
             self.table.remove_row(row_key)
 
-    def on_spreadsheet_cell_editor_cell_edited(self, event: SpreadsheetCellEditor.CellEdited) -> None:
+    def on_spreadsheet_cell_editor_cell_edited(self, event: TableCellEditor.CellEdited) -> None:
         if self.machine.current_state == self.machine.editing:
             self.machine.send("submit_edit", event.value)
         else:
@@ -159,7 +159,7 @@ class Spreadsheet(Container):
             else:
                 self.machine.send("submit_one", event.value)
 
-    def on_spreadsheet_cell_editor_cell_edit_cancelled(self, _: SpreadsheetCellEditor.CellEditCancelled) -> None:
+    def on_spreadsheet_cell_editor_cell_edit_cancelled(self, _: TableCellEditor.CellEditCancelled) -> None:
         self.machine.send("cancel")
 
     def start_edit(self) -> None:
@@ -247,7 +247,7 @@ controller = SpreadsheetController(capabilities)
 class DemoApp(App):
     def compose(self) -> ComposeResult:
         yield Header()
-        yield Spreadsheet(controller)
+        yield TableEditor(controller)
         yield Footer()
 
 
