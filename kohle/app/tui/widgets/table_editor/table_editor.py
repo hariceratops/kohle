@@ -162,7 +162,7 @@ class TableEditor(Container):
             else:
                 self.machine.send("submit_one", event.value)
 
-    def on_spreadsheet_cell_editor_cell_edit_cancelled(self, _: TableCellEditor.CellEditCancelled) -> None:
+    def on_table_cell_editor_cell_edit_cancelled(self, _: TableCellEditor.CellEditCancelled) -> None:
         self.machine.send("cancel")
 
     def start_edit(self) -> None:
