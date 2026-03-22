@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from typing import Optional, Sequence
+from typing import Optional
 import logging
 
 from textual.app import App, ComposeResult
@@ -12,9 +12,12 @@ from textual.binding import Binding
 from textual.message import Message
 from statemachine import StateMachine, State
 
+from kohle.app.tui.widgets.table_editor.row_adder import RowAdder, RowAdderBuilder
+from kohle.app.tui.widgets.table_editor.table_controller import TableControllerBuilder
+from kohle.app.tui.widgets.table_editor.table_edit_policy import EditPolicyBuilder
 from kohle.core.result import Result
-from kohle.infrastructure.model_serde import Record, Policy
-from kohle.app.tui.widgets.capabilities import SpreadsheetController, ModelSpreadsheetCapabilities
+from kohle.infrastructure.model_serde import Record, SerdePolicy
+from kohle.app.tui.widgets.table_editor.table_controller import TableControllerBuilder, TableController
 from kohle.domain.models import DebitCategory
 from kohle.use_cases.debit_categories import add_debit_category, list_debit_categories
 from textual.logging import TextualHandler
@@ -113,7 +116,7 @@ class TableEditor(Container):
         Binding("ctrl+d", "ctrl_d"),
     ]
 
-    def __init__(self, controller: SpreadsheetController) -> None:
+    def __init__(self, controller: TableController) -> None:
         super().__init__()
         self.controller = controller
         self.table = DataTable()
@@ -148,7 +151,7 @@ class TableEditor(Container):
         if res.is_ok:
             self.table.remove_row(row_key)
 
-    def on_spreadsheet_cell_editor_cell_edited(self, event: TableCellEditor.CellEdited) -> None:
+    def on_table_cell_editor_cell_edited(self, event: TableCellEditor.CellEdited) -> None:
         if self.machine.current_state == self.machine.editing:
             self.machine.send("submit_edit", event.value)
         else:
@@ -191,6 +194,8 @@ class TableEditor(Container):
             result = self.controller.request_add(self._temp_record)
             if result.is_ok:
                 self.table.remove_row(self._temp_record.id)
+                self.table.add_row(*self._temp_record.fields.values(), key=result.unwrap())
+                self.table.move_cursor(row=self.table.row_count - 1, column=0)
                 self._reset_temp_record()
             self.editor.hide()
         else:
@@ -226,28 +231,40 @@ class TableEditor(Container):
         return CellContext(geometry=CellGeometry(x, y, width, 1), value=value)
 
 
-debit_category_policy = (
-    Policy
-    .for_model(DebitCategory)
-    .only("category")
-    .build()
-    .unwrap()
-)
-
-capabilities = ModelSpreadsheetCapabilities(
-    serde_policy=debit_category_policy,
-    model_cls=DebitCategory,
-    list_use_case=list_debit_categories,
-    add_use_case=add_debit_category,
-)
-
-controller = SpreadsheetController(capabilities)
-
 
 class DemoApp(App):
     def compose(self) -> ComposeResult:
+        serde_policy = (
+            SerdePolicy
+            .for_model(DebitCategory)
+            .only("category")
+            .build()
+        )
+        edit_policy =  (
+            EditPolicyBuilder
+            .for_model(DebitCategory)
+            .serde_policy(serde_policy.unwrap()) # todo avoid unwrap
+            .visible(["category"])
+            .build()
+        )
+        add_use_case = (
+            RowAdderBuilder()
+            .for_fn(add_debit_category)
+            .bind("category", "name")
+            .build()
+        )
+        table_controller = (
+            TableControllerBuilder
+            .for_model(DebitCategory)
+            .serde(serde_policy)
+            .edit_policy(edit_policy)
+            .lister(list_debit_categories)
+            .adder(add_use_case)
+            .build()
+        )
+
         yield Header()
-        yield TableEditor(controller)
+        yield TableEditor(table_controller.unwrap())
         yield Footer()
 
 
