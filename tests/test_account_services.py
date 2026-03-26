@@ -1,5 +1,6 @@
 from sqlalchemy.orm import Session
 from kohle.infrastructure.uow import UnitOfWork
+from kohle.domain.models import Account
 from kohle.services.account_services import (
     add_account_service,
     get_account_by_name_service,
@@ -15,7 +16,10 @@ def test_add_account_success(session: Session) -> None:
     uow = UnitOfWork(session)
     result = add_account_service(uow, "Alice", "DE123")
     assert result.is_ok
-    assert isinstance(result.unwrap(), int)
+    unwrapped_res = result.unwrap()
+    assert isinstance(unwrapped_res, Account)
+    assert unwrapped_res.name == "Alice"
+    assert unwrapped_res.iban == "DE123"
 
 
 def test_add_account_duplicate_name(session: Session) -> None:

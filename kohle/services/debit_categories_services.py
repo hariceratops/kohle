@@ -7,14 +7,14 @@ from kohle.infrastructure.uow import UnitOfWork
 from kohle.infrastructure.infra_errors import check_if_unique_constraint_failed
 
 
-def add_debit_category_service(uow: UnitOfWork[DebitCategory], name: str) -> Result[int, CategoryError]:
+def add_debit_category_service(uow: UnitOfWork[DebitCategory], name: str) -> Result[DebitCategory, CategoryError]:
     def op(session: Session) -> DebitCategory:
         category = DebitCategory(category=name)
         session.add(category)
         return category
 
     return (
-        uow.run(op).map(lambda category: category.id)
+        uow.run(op).map(lambda category: category)
         .map_err(lambda err: (
             DuplicateCategory(name)
             if check_if_unique_constraint_failed(err, "debit_categories.category")

@@ -153,7 +153,7 @@ def test_query_transaction_by_period_success(session: Session):
     assert result.is_ok
     data = result.unwrap()
     assert len(data) == 3
-    assert [t["description"] for t in data] == ["A", "B", "C"]
+    assert [t.description for t in data] == ["A", "B", "C"]
 
 
 def test_query_transaction_by_period_account_not_found(session: Session):

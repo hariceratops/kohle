@@ -1,5 +1,6 @@
 from sqlalchemy.orm import Session
 from kohle.infrastructure.uow import UnitOfWork
+from kohle.domain.models import DebitCategory
 from kohle.use_cases.debit_categories import (
     add_debit_category,
     list_debit_categories,
@@ -14,7 +15,9 @@ def test_add_debit_category_success(session: Session) -> None:
     uow = UnitOfWork(session)
     result = add_debit_category(uow, "Groceries")
     assert result.is_ok
-    assert isinstance(result.unwrap(), int)
+    unwrapped_res = result.unwrap()
+    assert isinstance(result.unwrap(), DebitCategory)
+    assert unwrapped_res.category == "Groceries"
 
 
 def test_add_debit_category_empty_name(session: Session) -> None:
@@ -40,6 +43,6 @@ def test_list_debit_categories(session: Session) -> None:
     assert result.is_ok
     rows = result.unwrap()
     assert rows == [
-        {"id": 1, "category": "Food"},
-        {"id": 2, "category": "Transport"},
+        DebitCategory(id=1, category="Food"),
+        DebitCategory(id=2, category="Transport")
     ]

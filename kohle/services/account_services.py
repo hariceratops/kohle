@@ -7,7 +7,7 @@ from kohle.infrastructure.infra_errors import check_if_unique_constraint_failed
 from kohle.core.result import Result
 
 
-def add_account_service(uow: UnitOfWork[Account], name: str, iban: str) -> Result[int, AccountError]:
+def add_account_service(uow: UnitOfWork[Account], name: str, iban: str) -> Result[Account, AccountError]:
     def op(session: Session) -> Account:
         account = Account(name=name, iban=iban)
         session.add(account)
@@ -15,7 +15,7 @@ def add_account_service(uow: UnitOfWork[Account], name: str, iban: str) -> Resul
 
     return (
         uow.run(op)
-        .map(lambda v: v.id)
+        .map(lambda v: v)
         .map_err(lambda err: (
             DuplicateAccountName(name) if check_if_unique_constraint_failed(err, "accounts.name")
             else DuplicateIBAN(iban) if check_if_unique_constraint_failed(err, "accounts.iban")

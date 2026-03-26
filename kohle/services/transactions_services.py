@@ -39,12 +39,12 @@ def existing_transactions_service(uow: UnitOfWork[Set[str]], hashes: Iterable[st
     )
 
 
-def query_transactions_by_period_service(uow: UnitOfWork[List[dict]],
+def query_transactions_by_period_service(uow: UnitOfWork[List[Transaction]],
                                        account_id: int, 
                                        start_date,
                                        end_date) \
-                -> Result[List[dict], TransactionError]:
-    def op(session: Session) -> List[dict]:
+                -> Result[List[Transaction], TransactionError]:
+    def op(session: Session) -> List[Transaction]:
         transactions = (
             session.query(Transaction)
             .filter(Transaction.date.between(start_date, end_date))
@@ -52,15 +52,17 @@ def query_transactions_by_period_service(uow: UnitOfWork[List[dict]],
             .order_by(Transaction.date.asc())
             .all()
         )
-        return [{
-            "id": t.id,
-            "date": t.date,
-            "description": t.description,
-            "amount": t.amount,
-        } for t in transactions]
+        return transactions
+        # return [{
+        #     "id": t.id,
+        #     "date": t.date,
+        #     "description": t.description,
+        #     "amount": t.amount,
+        # } for t in transactions]
 
     return (
         uow.run(op)
+        .map(lambda v: v)
         .map_err(lambda err: TransactionError(str(err)))
     )
 

@@ -96,7 +96,7 @@ def test_query_transactions_by_period_returns_results(session: Session):
     assert result.is_ok
     data = result.unwrap()
     assert len(data) == 3
-    assert [t["description"] for t in data] == ["A", "B", "C"]
+    assert [t.description for t in data] == ["A", "B", "C"]
 
 
 def test_query_transactions_excludes_outside_range(session: Session):
@@ -118,7 +118,7 @@ def test_query_transactions_excludes_outside_range(session: Session):
     assert result.is_ok
     data = result.unwrap()
     assert len(data) == 1
-    assert data[0]["description"] == "Inside"
+    assert data[0].description == "Inside"
 
 
 def test_query_transactions_sorted_by_date(session: Session):
@@ -140,7 +140,7 @@ def test_query_transactions_sorted_by_date(session: Session):
 
     assert result.is_ok
     data = result.unwrap()
-    assert [t["description"] for t in data] == ["A", "B", "C"]
+    assert [t.description for t in data] == ["A", "B", "C"]
 
 
 def test_query_transactions_empty_result(session: Session):
