@@ -1,6 +1,9 @@
-from sqlalchemy import Column, Integer, String, UniqueConstraint, ForeignKey, Date, Numeric
+from datetime import datetime
+from typing import Dict, Type, TypeVar, Callable
+from sqlalchemy import Column, Integer, String, UniqueConstraint, ForeignKey, Date, Numeric, DateTime
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from kohle.db.connection import base
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from kohle.infrastructure.model_serde import SerdePolicy
 
 
 class DebitCategory(base):
@@ -12,8 +15,12 @@ class DebitCategory(base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     category = Column(String, nullable=False, unique=True)
 
+    def __eq__(self, other) -> bool:
+        return self.id == other.id and self.category == other.category
+
     def __repr__(self) -> str:
         return f"<DebitCategory(id={self.id}, category='{self.category}')>"
+
 
 class Account(base):
     __tablename__ = "accounts"
@@ -29,6 +36,14 @@ class Account(base):
         UniqueConstraint("iban", name="uq_account_iban"),
     )
 
+    def __eq__(self, other) -> bool:
+        return self.id == other.id and \
+               self.name == other.name and \
+               self.iban == other.iban
+
+    def __repr__(self) -> str:
+        return f"<Account(id={self.id}, name={self.name}, iban={self.iban})>"
+
 
 class Transaction(base):
     __tablename__ = "transactions"
@@ -43,3 +58,12 @@ class Transaction(base):
     amount = Column(Numeric(12, 2), nullable=False)
 
     account = relationship("Account")
+
+    def __eq__(self, other) -> bool:
+        return self.id == other.id and \
+               self.account_id == other.account_id and \
+               self.description == other.description and \
+               self.date == other.date and \
+               self.amount == other.amount and \
+               self.hash == other.hash
+
