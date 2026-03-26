@@ -248,7 +248,7 @@ class DemoApp(App):
             .build()
         )
         add_use_case = (
-            RowAdderBuilder()
+            RowAdderBuilder
             .for_fn(add_debit_category)
             .bind("category", "name")
             .build()

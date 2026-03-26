@@ -1,9 +1,9 @@
 import inspect
-from typing import Generic, Callable, TypeVar, Any
+from typing import Generic, Callable, TypeVar, Any, List
 from kohle.core.result import Result
 from kohle.core.option import Option
 from kohle.infrastructure.uow import UnitOfWork
-from kohle.app.tui.widgets.table_editor.table_editor_errors import TableEditorBuildError
+from kohle.app.tui.widgets.table_editor.table_editor_build_errors import TableEditorBuildError
 
 
 T = TypeVar("T")
@@ -26,12 +26,15 @@ class ColumnEditorBuilder:
         self.row_id: Option[str] = Option()
         self.source: Option[str] = Option()
         self.dest: Option[str] = Option()
-
-    def for_fn(self, fn: Callable[..., Result[Any, E]]) -> "ColumnEditorBuilder":
-        self.fn = Option.some(fn)
+        self.fn_args: List[str] = []
+    
+    @classmethod
+    def for_fn(cls, fn: Callable[..., Result[Any, E]]) -> "ColumnEditorBuilder":
+        instance = cls()
+        instance.fn = Option.some(fn)
         sig = inspect.signature(fn)
-        self.fn_args = [p for p in sig.parameters.keys() if p != "uow"]
-        return self
+        instance.fn_args = [p for p in sig.parameters.keys() if p != "uow"]
+        return instance
     
     def key(self, row_key) -> "ColumnEditorBuilder":
         if self.row_id.is_some:

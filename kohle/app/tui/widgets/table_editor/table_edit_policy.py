@@ -3,7 +3,7 @@ from typing import TypeVar, Type, List, Generic
 from kohle.core.result import Result
 from kohle.core.option import Option
 from kohle.infrastructure.model_serde import SerdePolicy, flattened_columns
-from kohle.app.tui.widgets.table_editor.table_editor_errors import (
+from kohle.app.tui.widgets.table_editor.table_editor_build_errors import (
     TableEditorBuildError,
     UnknownColumnsRequested,
     NoEditableColumns,

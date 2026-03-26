@@ -5,7 +5,7 @@ from kohle.core.result import Result
 from kohle.core.option import Option
 from kohle.infrastructure.model_serde import Record
 from kohle.infrastructure.uow import UnitOfWork
-from kohle.app.tui.widgets.table_editor.table_editor_errors import TableEditorBuildError, NotAllArgsBound
+from kohle.app.tui.widgets.table_editor.table_editor_build_errors import TableEditorBuildError, NotAllArgsBound
 
 
 T = TypeVar("T")
@@ -44,16 +44,14 @@ class RowAdderBuilder:
         self.fn: Option[Callable] = Option()
         self.fn_args: List[str] = []
         self.bindings: List[AddArgumentBinding] = []
-
-    def for_fn(self, fn: Callable[..., Result[Any, E]]) -> "RowAdderBuilder":
-        if self.fn.is_some:
-            # todo error
-            pass
-
-        self.fn = Option.some(fn)
+    
+    @classmethod
+    def for_fn(cls, fn: Callable[..., Result[Any, E]]) -> "RowAdderBuilder":
+        instance = cls()
+        instance.fn = Option.some(fn)
         sig = inspect.signature(fn)
-        self.fn_args = [p for p in sig.parameters.keys() if p != "uow"]
-        return self
+        instance.fn_args = [p for p in sig.parameters.keys() if p != "uow"]
+        return instance
 
     def bind(self, source: str, dest: str) -> "RowAdderBuilder":
         self.bindings.append(AddArgumentBinding(source, dest))

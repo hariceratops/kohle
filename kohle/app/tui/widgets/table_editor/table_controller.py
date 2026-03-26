@@ -14,7 +14,7 @@ from kohle.db.connection import session_local
 from kohle.app.tui.widgets.table_editor.table_edit_policy import EditPolicy
 from kohle.app.tui.widgets.table_editor.row_adder import RowAdder
 from kohle.app.tui.widgets.table_editor.column_editor import ColumnEditor
-from kohle.app.tui.widgets.table_editor.table_editor_errors import TableEditorBuildError
+from kohle.app.tui.widgets.table_editor.table_editor_build_errors import TableEditorBuildError
 
 from textual.logging import TextualHandler
 import logging
