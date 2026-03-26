@@ -7,6 +7,11 @@ class UniqueViolation(InfrastructureError):
         self.constraint = constraint
 
 
+# todo better error contents
+class SerializationFailed(InfrastructureError):
+    pass
+
+
 def check_if_unique_constraint_failed(err: InfrastructureError, column_name: str) -> bool:
     return \
         isinstance(err, UniqueViolation) and err.constraint == \
