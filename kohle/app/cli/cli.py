@@ -20,7 +20,7 @@ def add_category_cmd(name: str):
     with UnitOfWork(session_local()) as uow:
         res = add_debit_category(uow, name)
         if res.is_ok:
-            click.echo(f"Added category {name} with id {res.unwrap()}")
+            click.echo(f"Added category {name} with id {res.unwrap().id}")
         else:
             click.echo(f"Failed: {res.unwrap_err()}")
 
@@ -42,7 +42,7 @@ def add_account_cmd(name: str, iban: str):
     with UnitOfWork(session_local()) as uow:
         res = add_account(uow, name, iban)
         if res.is_ok:
-            click.echo(f"Added account {name}, {iban} with id {res.unwrap()}")
+            click.echo(f"Added account {name}, {iban} with id {res.unwrap().id}")
         else:
             click.echo(f"Failed: {res.unwrap_err()}")
 
@@ -53,7 +53,7 @@ def list_accounts_cmd():
         res = list_accounts(uow)
         if res.is_ok:
             for c in res.unwrap():
-                click.echo(f"{c['id']}: name={c['name']}, iban={c['iban']}")
+                click.echo(f"{c.id}: name={c.name}, iban={c.iban}")
         else:
             click.echo(f"Failed: {res.unwrap_err()}")
 

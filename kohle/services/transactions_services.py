@@ -53,12 +53,6 @@ def query_transactions_by_period_service(uow: UnitOfWork[List[Transaction]],
             .all()
         )
         return transactions
-        # return [{
-        #     "id": t.id,
-        #     "date": t.date,
-        #     "description": t.description,
-        #     "amount": t.amount,
-        # } for t in transactions]
 
     return (
         uow.run(op)
