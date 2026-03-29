@@ -174,6 +174,8 @@ class TableEditor(Container):
         result = self.controller.request_edit(row_key, column_key, value)
         if result.is_ok:
             self.table.update_cell(row_key, column_key, value)
+        else:
+            result.unwrap()
         self.editor.hide()
 
     def _reset_temp_record(self) -> None:
@@ -197,6 +199,8 @@ class TableEditor(Container):
                 self.table.add_row(*self._temp_record.fields.values(), key=result.unwrap())
                 self.table.move_cursor(row=self.table.row_count - 1, column=0)
                 self._reset_temp_record()
+            else:
+                result.unwrap()
             self.editor.hide()
         else:
             self._move_next_column()

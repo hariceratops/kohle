@@ -52,7 +52,6 @@ class TableController[T, E]:
     def request_add(self, record: Record) -> Result[str, E]:
         with UnitOfWork(session_local()) as uow:
             res = self.add_use_case.invoke(uow, record)
-            logging.info(res)
             if res.is_err:
                 return Result.err(res.unwrap_err())
             # todo constraint kohle base to have an integer id of name id
