@@ -442,99 +442,99 @@ class PlainDeserializer:
         return target_type(value)
 
 
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
-from sqlalchemy import ForeignKey, Integer, String
-
-class Base(DeclarativeBase):
-    pass
-
-
-class Company(Base):
-    __tablename__ = "companies"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    name: Mapped[str] = mapped_column(String)
-
-    user: Mapped[Optional["User"]] = relationship(
-        back_populates="company",
-        uselist=False
-    )
-
-    def __str__(self) -> str:
-        return f"{self.id} {self.name}"
-
-
-class User(Base):
-    __tablename__ = "users"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    name: Mapped[str] = mapped_column(String)
-    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"))
-
-    company: Mapped[Optional[Company]] = relationship(
-        back_populates="user",
-        uselist=False
-    )
-    profile: Mapped[Optional["Profile"]] = relationship(
-        back_populates="user",
-        uselist=False
-    )
-
-    def __str__(self) -> str:
-        return f"{self.id} {self.name} {self.company}"
-
-
-class Profile(Base):
-    __tablename__ = "profiles"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    bio: Mapped[str] = mapped_column(String)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
-
-    user: Mapped[User] = relationship(
-        back_populates="profile",
-        uselist=False
-    )
-
-
-company = Company(id=1, name="Acme")
-user = User(id=10, name="Alice", company=company)
-profile = Profile(id=100, bio="Engineer", user=user)
-company.user = user
-user.profile = profile
-# this is not intuitive
-user_policy = SerdePolicy(
-    PassOnly({"name", "company"}),
-    {
-        "company": SerdePolicy(PassOnly({"name"}), {}),
-        "profile": SerdePolicy(Drop(), {})
-    }
-)
-res = SerdePolicy.create(User, user_policy.root_policy, user_policy.root_foreign_policy)
-
-for p in res.unwrap():
-    print(p)
-p = res.unwrap()
-
-structured = Serializer.serialize(user, p)
-flattened = RecordFlattener.flatten(structured) if structured else None
-reconstructed_f = FlattenedDeserializer.deserialize(User, flattened, p) if flattened else None
-reconstructed = PlainDeserializer.deserialize(User, flattened, p) if flattened else None
-flat_columns = flattened_columns(User, p)
-print(f"Structured: {structured}")
-print(f"Flattened: {flattened}")
-print(f"Reconstructed: {reconstructed}")
-print(f"Reconstructed_f: {reconstructed_f}")
-print(f"Flat columns: {flat_columns}")
-user_policy = (
-    SerdePolicy
-    .for_model(User)
-    .only("name", "company")
-    .relation("company", SerdePolicy(PassOnly({"name"}), {}))
-    .build()
-    .unwrap()
-)
-
-flat_columns = flattened_columns(User, user_policy)
-print(f"With builder, flattened_columns: {flat_columns}")
+# from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+# from sqlalchemy import ForeignKey, Integer, String
 #
+# class Base(DeclarativeBase):
+#     pass
+#
+#
+# class Company(Base):
+#     __tablename__ = "companies"
+#
+#     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+#     name: Mapped[str] = mapped_column(String)
+#
+#     user: Mapped[Optional["User"]] = relationship(
+#         back_populates="company",
+#         uselist=False
+#     )
+#
+#     def __str__(self) -> str:
+#         return f"{self.id} {self.name}"
+#
+#
+# class User(Base):
+#     __tablename__ = "users"
+#
+#     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+#     name: Mapped[str] = mapped_column(String)
+#     company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"))
+#
+#     company: Mapped[Optional[Company]] = relationship(
+#         back_populates="user",
+#         uselist=False
+#     )
+#     profile: Mapped[Optional["Profile"]] = relationship(
+#         back_populates="user",
+#         uselist=False
+#     )
+#
+#     def __str__(self) -> str:
+#         return f"{self.id} {self.name} {self.company}"
+#
+#
+# class Profile(Base):
+#     __tablename__ = "profiles"
+#
+#     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+#     bio: Mapped[str] = mapped_column(String)
+#     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+#
+#     user: Mapped[User] = relationship(
+#         back_populates="profile",
+#         uselist=False
+#     )
+#
+#
+# company = Company(id=1, name="Acme")
+# user = User(id=10, name="Alice", company=company)
+# profile = Profile(id=100, bio="Engineer", user=user)
+# company.user = user
+# user.profile = profile
+# # this is not intuitive
+# user_policy = SerdePolicy(
+#     PassOnly({"name", "company"}),
+#     {
+#         "company": SerdePolicy(PassOnly({"name"}), {}),
+#         "profile": SerdePolicy(Drop(), {})
+#     }
+# )
+# res = SerdePolicy.create(User, user_policy.root_policy, user_policy.root_foreign_policy)
+#
+# for p in res.unwrap():
+#     print(p)
+# p = res.unwrap()
+#
+# structured = Serializer.serialize(user, p)
+# flattened = RecordFlattener.flatten(structured) if structured else None
+# reconstructed_f = FlattenedDeserializer.deserialize(User, flattened, p) if flattened else None
+# reconstructed = PlainDeserializer.deserialize(User, flattened, p) if flattened else None
+# flat_columns = flattened_columns(User, p)
+# print(f"Structured: {structured}")
+# print(f"Flattened: {flattened}")
+# print(f"Reconstructed: {reconstructed}")
+# print(f"Reconstructed_f: {reconstructed_f}")
+# print(f"Flat columns: {flat_columns}")
+# user_policy = (
+#     SerdePolicy
+#     .for_model(User)
+#     .only("name", "company")
+#     .relation("company", SerdePolicy(PassOnly({"name"}), {}))
+#     .build()
+#     .unwrap()
+# )
+#
+# flat_columns = flattened_columns(User, user_policy)
+# print(f"With builder, flattened_columns: {flat_columns}")
+# #

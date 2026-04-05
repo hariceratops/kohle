@@ -1,12 +1,45 @@
 from datetime import datetime
-from typing import Dict, Type, TypeVar, Callable
 from sqlalchemy import Column, Integer, String, UniqueConstraint, ForeignKey, Date, Numeric, DateTime
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from kohle.db.connection import base
-from kohle.infrastructure.model_serde import SerdePolicy
+from kohle.infrastructure.model_serde import SerdePolicy, PassAll, PassId
 
 
-class DebitCategory(base):
+class RegisteredBase(DeclarativeBase):
+    __abstract__ = True
+
+    @classmethod
+    def __get_policy__(cls) -> SerdePolicy:
+        mapper = cls.__mapper__
+        relations = {r.key: SerdePolicy(PassId(), {}) for r in mapper.relationships}
+        return SerdePolicy(PassAll(), relations)
+
+
+class Archivable:
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class OperationGroup(base):
+    __tablename__ = "operation_groups"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class Operation(base):
+    __tablename__ = "operations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    group_id: Mapped[int] = mapped_column(Integer, ForeignKey("operation_groups.id"), nullable=False)
+    entity_type: Mapped[str] = mapped_column(String, nullable=False)
+    entity_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    action: Mapped[str] = mapped_column(String, nullable=False)
+    field: Mapped[str | None] = mapped_column(String, nullable=True)
+    state: Mapped[str | None] = mapped_column(String, nullable=True)
+
+
+class DebitCategory(base, Archivable):
     __tablename__ = "debit_categories"
     __table_args__ = (
         UniqueConstraint("category", name="uq_debit_category_category"),
@@ -22,7 +55,7 @@ class DebitCategory(base):
         return f"<DebitCategory(id={self.id}, category='{self.category}')>"
 
 
-class Account(base):
+class Account(base, Archivable):
     __tablename__ = "accounts"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -45,7 +78,7 @@ class Account(base):
         return f"<Account(id={self.id}, name={self.name}, iban={self.iban})>"
 
 
-class Transaction(base):
+class Transaction(base, Archivable):
     __tablename__ = "transactions"
     __table_args__ = (
         UniqueConstraint("hash", name="uq_transaction_hash"),

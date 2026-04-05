@@ -1,7 +1,7 @@
 from sqlalchemy import insert
 from datetime import date
 from sqlalchemy.orm import Session
-from kohle.infrastructure.uow import UnitOfWork
+from kohle.infrastructure.transaction_context import DbTransactionContext
 from kohle.services.transactions_services import (
     bulk_insert_transactions_service,
     existing_transactions_service,
@@ -33,61 +33,59 @@ def _create_transaction(session: Session, account_id: int, tx_date: date, descri
 
 
 def test_bulk_insert_transactions_success(session: Session) -> None:
-    uow = UnitOfWork(session)
+    ctx = DbTransactionContext(session)
     rows = [
         { "account_id": 1, "hash": "hash1", "description": "A", "date": date(2024, 1, 1), "amount": 10.0 },
         { "account_id": 1, "hash": "hash2", "description": "B", "date": date(2024, 1, 2), "amount": 20.0 }
     ]
-    result = bulk_insert_transactions_service(uow, rows)
+    result = bulk_insert_transactions_service(ctx, rows)
     assert result.is_ok
     assert result.unwrap() == 2
 
 
 def test_bulk_insert_transactions_duplicate(session: Session) -> None:
-    uow = UnitOfWork(session)
+    ctx = DbTransactionContext(session)
     rows = [
         { "account_id": 1, "hash": "dup_hash", "description": "A", "date": date(2024, 1, 1), "amount": 10.0 },
         { "account_id": 1, "hash": "dup_hash", "description": "A", "date": date(2024, 1, 1), "amount": 10.0 }
     ]
 
-    bulk_insert_transactions_service(uow, rows)
-    result = bulk_insert_transactions_service(uow, rows)
+    bulk_insert_transactions_service(ctx, rows)
+    result = bulk_insert_transactions_service(ctx, rows)
     assert result.is_err
     assert isinstance(result.unwrap_err(), DuplicationTransactionError)
 
 
 def test_existing_transactions_service(session: Session) -> None:
-    uow = UnitOfWork(session)
+    ctx = DbTransactionContext(session)
     rows = [
         { "account_id": 1, "hash": "hash1", "description": "A", "date": date(2024, 1, 1), "amount": 10.0 },
         { "account_id": 1, "hash": "hash2", "description": "B", "date": date(2024, 1, 2), "amount": 20.0 }
     ]
     session.execute(insert(Transaction), rows)
     session.commit()
-    result = existing_transactions_service(uow, ["hash1", "hash3"])
+    result = existing_transactions_service(ctx, ["hash1", "hash3"])
     assert result.is_ok
     assert result.unwrap() == {"hash1"}
 
 
 def test_existing_transactions_empty(session: Session) -> None:
-    uow = UnitOfWork(session)
-    result = existing_transactions_service(uow, ["nonexistent"])
+    ctx = DbTransactionContext(session)
+    result = existing_transactions_service(ctx, ["nonexistent"])
     assert result.is_ok
     assert result.unwrap() == set()
 
 
 def test_query_transactions_by_period_returns_results(session: Session):
-    uow = UnitOfWork(session)
     account = _create_account(session)
-
     _create_transaction(session, account.id, date(2024, 1, 1), "A", 10.0)
     _create_transaction(session, account.id, date(2024, 1, 2), "B", 20.0)
     _create_transaction(session, account.id, date(2024, 1, 3), "C", 30.0)
-
     session.commit()
 
+    ctx = DbTransactionContext(session)
     result = query_transactions_by_period_service(
-        uow,
+        ctx,
         account.id,
         date(2024, 1, 1),
         date(2024, 1, 3),
@@ -100,16 +98,14 @@ def test_query_transactions_by_period_returns_results(session: Session):
 
 
 def test_query_transactions_excludes_outside_range(session: Session):
-    uow = UnitOfWork(session)
     account = _create_account(session)
-
     _create_transaction(session, account.id, date(2024, 1, 5), "Inside", 10.0)
     _create_transaction(session, account.id, date(2024, 2, 1), "Outside", 20.0)
-
     session.commit()
 
+    ctx = DbTransactionContext(session)
     result = query_transactions_by_period_service(
-        uow,
+        ctx,
         account.id,
         date(2024, 1, 1),
         date(2024, 1, 31),
@@ -122,17 +118,15 @@ def test_query_transactions_excludes_outside_range(session: Session):
 
 
 def test_query_transactions_sorted_by_date(session: Session):
-    uow = UnitOfWork(session)
     account = _create_account(session)
-
     _create_transaction(session, account.id, date(2024, 1, 3), "C", 10.0)
     _create_transaction(session, account.id, date(2024, 1, 1), "A", 20.0)
     _create_transaction(session, account.id, date(2024, 1, 2), "B", 30.0)
-
     session.commit()
 
+    ctx = DbTransactionContext(session)
     result = query_transactions_by_period_service(
-        uow,
+        ctx,
         account.id,
         date(2024, 1, 1),
         date(2024, 1, 31),
@@ -144,12 +138,12 @@ def test_query_transactions_sorted_by_date(session: Session):
 
 
 def test_query_transactions_empty_result(session: Session):
-    uow = UnitOfWork(session)
     account = _create_account(session)
     session.commit()
 
+    ctx = DbTransactionContext(session)
     result = query_transactions_by_period_service(
-        uow,
+        ctx,
         account.id,
         date(2024, 1, 1),
         date(2024, 1, 31),

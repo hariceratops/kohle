@@ -6,7 +6,7 @@ DATABASE_URL = "sqlite:///kohle.db"
 
 
 engine = create_engine(DATABASE_URL, future=True)
-session_local = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+session_local = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
 base = declarative_base()
 
 @event.listens_for(engine, "connect")

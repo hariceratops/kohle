@@ -1,8 +1,7 @@
 import pandas as pd
 from datetime import date
 from sqlalchemy.orm import Session
-from kohle.infrastructure.uow import UnitOfWork
-from kohle.use_cases.transactions import import_transaction_statement, query_transaction_by_period
+from kohle.use_cases.transactions import ImportTransactionStatement, QueryTransactionByPeriod
 from kohle.domain.domain_errors import (
     AccountNotFoundError,
     DataframeValidationError,
@@ -14,8 +13,6 @@ from kohle.domain.models import Account, Transaction
 
 
 def test_import_missing_column(session: Session) -> None:
-    uow = UnitOfWork(session)
-
     account = Account(name="Alice", iban="DE123")
     session.add(account)
     session.commit()
@@ -23,15 +20,14 @@ def test_import_missing_column(session: Session) -> None:
     df = pd.DataFrame([
         { "date": pd.Timestamp(2024, 1, 1), "description": "A", "iban": "DE123" }
     ])  # amount column missing
-
-    result = import_transaction_statement(uow, "Alice", df)
+    
+    import_transaction_statement = ImportTransactionStatement(session)
+    result = import_transaction_statement.execute("Alice", df)
     assert result.is_err
     assert isinstance(result.unwrap_err(), DataframeValidationError)
 
 
 def test_import_type_mismatch(session: Session) -> None:
-    uow = UnitOfWork(session)
-
     account = Account(name="Alice", iban="DE123")
     session.add(account)
     session.commit()
@@ -44,13 +40,13 @@ def test_import_type_mismatch(session: Session) -> None:
             "iban": "DE123"
         }
     ])
-    result = import_transaction_statement(uow, "Alice", df)
+    import_transaction_statement = ImportTransactionStatement(session)
+    result = import_transaction_statement.execute("Alice", df)
     assert result.is_err
     assert isinstance(result.unwrap_err(), DataframeValidationError)
 
 
 def test_import_success_new_transactions(session: Session) -> None:
-    uow = UnitOfWork(session)
     account = Account(name="Alice", iban="DE123")
     session.add(account)
     session.flush()
@@ -59,23 +55,23 @@ def test_import_success_new_transactions(session: Session) -> None:
         { "date": pd.Timestamp(2024, 1, 1), "amount": 10.0, "description": "A", "iban": "DE123" },
         { "date": pd.Timestamp(2024, 1, 2), "amount": 20.0, "description": "B", "iban": "DE123" },
     ])
-    result = import_transaction_statement(uow, "Alice", df)
+    import_transaction_statement = ImportTransactionStatement(session)
+    result = import_transaction_statement.execute("Alice", df)
     assert result.is_ok
     assert result.unwrap() == 2
 
 
 def test_import_account_not_found(session: Session) -> None:
-    uow = UnitOfWork(session)
     df = pd.DataFrame([
         { "date": pd.Timestamp(2024, 1, 1), "amount": 10.0, "description": "A", "iban": "DE123" }
     ])
-    result = import_transaction_statement(uow, "Missing", df)
+    import_transaction_statement = ImportTransactionStatement(session)
+    result = import_transaction_statement.execute("Missing", df)
     assert result.is_err
     assert isinstance(result.unwrap_err(), AccountNotFoundError)
 
 
 def test_import_no_new_transactions(session: Session) -> None:
-    uow = UnitOfWork(session)
     account = Account(name="Alice", iban="DE123")
     session.add(account)
     session.commit()
@@ -84,17 +80,16 @@ def test_import_no_new_transactions(session: Session) -> None:
         { "date": pd.Timestamp(2024, 1, 1), "amount": 10.0, "description": "A", "iban": "DE123" }
     ])
 
-    result1 = import_transaction_statement(uow, "Alice", df)
+    import_transaction_statement = ImportTransactionStatement(session)
+    result1 = import_transaction_statement.execute("Alice", df)
     assert result1.is_ok
     assert result1.unwrap() == 1
-    result2 = import_transaction_statement(uow, "Alice", df)
+    result2 = import_transaction_statement.execute("Alice", df)
     assert result2.is_ok
     assert result2.unwrap() == 0
 
 
 def test_import_bulk_insert_overlapping(session: Session) -> None:
-    uow = UnitOfWork(session)
-
     account = Account(name="Alice", iban="DE123")
     session.add(account)
     session.commit()
@@ -102,12 +97,13 @@ def test_import_bulk_insert_overlapping(session: Session) -> None:
     df = pd.DataFrame([
         { "date": pd.Timestamp(2024, 1, 1), "amount": 10.0, "description": "A", "iban": "DE123" }
     ])
-    result = import_transaction_statement(uow, "Alice", df)
+    import_transaction_statement = ImportTransactionStatement(session)
+    result = import_transaction_statement.execute("Alice", df)
     df = pd.DataFrame([
         { "date": pd.Timestamp(2024, 1, 1), "amount": 10.0, "description": "A", "iban": "DE123" },
         { "date": pd.Timestamp(2024, 1, 1), "amount": 20.0, "description": "B", "iban": "DE123" }
     ])
-    result_overlapping = import_transaction_statement(uow, "Alice", df)
+    result_overlapping = import_transaction_statement.execute("Alice", df)
 
     assert result.is_ok
     assert result.unwrap() == 1
@@ -134,17 +130,14 @@ def _create_transaction(session: Session, account_id: int, tx_date: date, descri
 
 
 def test_query_transaction_by_period_success(session: Session):
-    uow = UnitOfWork(session)
     account = _create_account(session)
-
     _create_transaction(session, account.id, date(2024, 1, 1), "A", 10.0)
     _create_transaction(session, account.id, date(2024, 1, 2), "B", 20.0)
     _create_transaction(session, account.id, date(2024, 1, 3), "C", 30.0)
-
     session.commit()
 
-    result = query_transaction_by_period(
-        uow,
+    query_transaction_by_period = QueryTransactionByPeriod(session)
+    result = query_transaction_by_period.execute(
         "Alice",
         "2024-01-01",
         "2024-01-04",
@@ -153,14 +146,12 @@ def test_query_transaction_by_period_success(session: Session):
     assert result.is_ok
     data = result.unwrap()
     assert len(data) == 3
-    assert [t.description for t in data] == ["A", "B", "C"]
+    assert [t["description"] for t in data] == ["A", "B", "C"]
 
 
 def test_query_transaction_by_period_account_not_found(session: Session):
-    uow = UnitOfWork(session)
-
-    result = query_transaction_by_period(
-        uow,
+    query_transaction_by_period = QueryTransactionByPeriod(session)
+    result = query_transaction_by_period.execute(
         "Missing",
         "2024-01-01",
         "2024-01-04",
@@ -171,12 +162,11 @@ def test_query_transaction_by_period_account_not_found(session: Session):
 
 
 def test_query_transaction_by_period_invalid_start_date(session: Session):
-    uow = UnitOfWork(session)
     _ = _create_account(session)
     session.commit()
 
-    result = query_transaction_by_period(
-        uow,
+    query_transaction_by_period = QueryTransactionByPeriod(session)
+    result = query_transaction_by_period.execute(
         "Alice",
         "invalid",
         "2024-01-04",
@@ -187,12 +177,11 @@ def test_query_transaction_by_period_invalid_start_date(session: Session):
 
 
 def test_query_transaction_by_period_invalid_end_date(session: Session):
-    uow = UnitOfWork(session)
     _ = _create_account(session)
     session.commit()
 
-    result = query_transaction_by_period(
-        uow,
+    query_transaction_by_period = QueryTransactionByPeriod(session)
+    result = query_transaction_by_period.execute(
         "Alice",
         "2024-01-01",
         "invalid",
@@ -203,12 +192,11 @@ def test_query_transaction_by_period_invalid_end_date(session: Session):
 
 
 def test_query_transaction_by_period_end_before_start(session: Session):
-    uow = UnitOfWork(session)
     _ = _create_account(session)
     session.commit()
 
-    result = query_transaction_by_period(
-        uow,
+    query_transaction_by_period = QueryTransactionByPeriod(session)
+    result = query_transaction_by_period.execute(
         "Alice",
         "2024-01-05",
         "2024-01-01",
