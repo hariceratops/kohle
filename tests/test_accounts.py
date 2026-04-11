@@ -1,6 +1,7 @@
 from sqlalchemy.orm import Session
-from kohle.domain.models import Account
+from kohle.domain.models import Account, Operation
 from kohle.use_cases.accounts import AddAccount
+from kohle.use_cases.operations import ListOperations
 from kohle.domain.domain_errors import (
     EmptyAccountName,
     EmptyIBAN,
@@ -17,6 +18,13 @@ def test_add_account_success(session: Session) -> None:
     assert isinstance(unwrapped_res, Account)
     assert unwrapped_res.name == "Alice"
     assert unwrapped_res.iban == "DE123"
+    operation_tracking_res = ListOperations(session).execute()
+    assert operation_tracking_res.is_ok
+    operation_tracking = operation_tracking_res.unwrap()
+    assert isinstance(operation_tracking, list)
+    assert len(operation_tracking) == 1
+    assert isinstance(operation_tracking[0], Operation)
+    assert operation_tracking == [Operation(group_id=1, entity_type="accounts", entity_id=1, action="create")]
 
 
 def test_add_account_empty_name(session: Session) -> None:

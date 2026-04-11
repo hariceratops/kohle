@@ -38,6 +38,14 @@ class Operation(base):
     field: Mapped[str | None] = mapped_column(String, nullable=True)
     state: Mapped[str | None] = mapped_column(String, nullable=True)
 
+    def __eq__(self, other) -> bool:
+        return self.group_id == other.group_id and \
+               self.entity_type == other.entity_type and \
+               self.entity_id == other.entity_id and \
+               self.action == other.action and \
+               self.field == other.field and \
+               self.state == other.state
+
 
 class DebitCategory(base, Archivable):
     __tablename__ = "debit_categories"
