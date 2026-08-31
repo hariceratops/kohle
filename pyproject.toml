@@ -62,3 +62,7 @@ kohle-deutsche-bank = "kohle.app.plugins.kohle_deutsche_bank_importer:DeustcheBa
 where = ["."]
 exclude = ["tests*","archive*"]
 
+[tool.ruff.lint.per-file-ignores]
+# assert is how pytest expresses assertions
+"tests/**" = ["S101"]
+
