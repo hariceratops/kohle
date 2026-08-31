@@ -1,26 +1,36 @@
-from typing import List
 from sqlalchemy.orm import Session
-from kohle.domain.models import Account
-from kohle.infrastructure.crud import crud_create, crud_retrieve
-from kohle.infrastructure.uow import DbTransactionContext
-from kohle.domain.domain_errors import AccountError, DuplicateAccountName, DuplicateIBAN, AccountNotFoundError
-from kohle.infrastructure.infra_errors import check_if_unique_constraint_failed
+
 from kohle.core.result import Result
+from kohle.domain.domain_errors import (
+    AccountError,
+    AccountNotFoundError,
+    DuplicateAccountName,
+    DuplicateIBAN,
+)
+from kohle.domain.models import Account, AccountType
+from kohle.infrastructure.crud import crud_create, crud_retrieve
+from kohle.infrastructure.infra_errors import check_if_unique_constraint_failed
+from kohle.infrastructure.transaction_context import DbTransactionContext
 
 
 @crud_create
-def add_account_service(ctx: DbTransactionContext, name: str, iban: str) -> Result[Account, AccountError]:
+def add_account_service(
+    ctx: DbTransactionContext,
+    name: str,
+    account_type: AccountType,
+    iban: str | None = None,
+    parent_id: int | None = None,
+) -> Result[Account, AccountError]:
     def op(session: Session) -> Account:
-        account = Account(name=name, iban=iban)
+        account = Account(name=name, type=account_type, iban=iban, parent_id=parent_id)
         session.add(account)
         return account
 
     return (
         ctx.run(op)
-        .map(lambda v: v)
         .map_err(lambda err: (
             DuplicateAccountName(name) if check_if_unique_constraint_failed(err, "accounts.name")
-            else DuplicateIBAN(iban) if check_if_unique_constraint_failed(err, "accounts.iban")
+            else DuplicateIBAN(iban) if iban and check_if_unique_constraint_failed(err, "accounts.iban")
             else AccountError(str(err))
         ))
     )
@@ -28,8 +38,9 @@ def add_account_service(ctx: DbTransactionContext, name: str, iban: str) -> Resu
 
 @crud_retrieve
 def get_account_by_name_service(ctx: DbTransactionContext, name: str) -> Result[Account, AccountError]:
-    def op(session: Session) -> Account:
-        return (session.query(Account).filter(Account.name == name).one_or_none())
+    def op(session: Session) -> Account | None:
+        return session.query(Account).filter(Account.name == name).one_or_none()
+
     return (
         ctx.run(op)
         .map_err(lambda err: AccountError(str(err)))
@@ -42,11 +53,40 @@ def get_account_by_name_service(ctx: DbTransactionContext, name: str) -> Result[
 
 
 @crud_retrieve
-def list_accounts_service(ctx: DbTransactionContext) -> Result[List[Account], AccountError]:
-    def op(session: Session) -> List[Account]:
-        return session.query(Account).order_by(Account.name).all()
+def get_account_by_iban_service(ctx: DbTransactionContext, iban: str) -> Result[Account, AccountError]:
+    def op(session: Session) -> Account | None:
+        return session.query(Account).filter(Account.iban == iban).one_or_none()
+
     return (
         ctx.run(op)
         .map_err(lambda err: AccountError(str(err)))
+        .and_then(lambda account:
+            Result.ok(account)
+            if account is not None
+            else Result.err(AccountNotFoundError(iban))
+        )
     )
- 
+
+
+@crud_retrieve
+def list_accounts_service(ctx: DbTransactionContext) -> Result[list[Account], AccountError]:
+    def op(session: Session) -> list[Account]:
+        return session.query(Account).order_by(Account.name).all()
+
+    return ctx.run(op).map_err(lambda err: AccountError(str(err)))
+
+
+@crud_retrieve
+def list_child_accounts_service(ctx: DbTransactionContext, parent_id: int) -> Result[list[Account], AccountError]:
+    def op(session: Session) -> list[Account]:
+        return session.query(Account).filter(Account.parent_id == parent_id).order_by(Account.name).all()
+
+    return ctx.run(op).map_err(lambda err: AccountError(str(err)))
+
+
+@crud_retrieve
+def account_has_children_service(ctx: DbTransactionContext, account_id: int) -> Result[bool, AccountError]:
+    def op(session: Session) -> bool:
+        return session.query(Account.id).filter(Account.parent_id == account_id).first() is not None
+
+    return ctx.run(op).map_err(lambda err: AccountError(str(err)))

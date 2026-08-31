@@ -1,11 +1,14 @@
 import sys
+
 import click
 from tabulate import tabulate
+
 from kohle.db.connection import session_local
+from kohle.domain.models import AccountType, UnitKind
 from kohle.plugin.plugin_manager import load_plugins
-from kohle.use_cases.debit_categories import AddDebitCategory, ListCategories
-from kohle.use_cases.accounts import ListAccount, AddAccount
-from kohle.use_cases.transactions import ImportTransactionStatement, QueryTransactionByPeriod
+from kohle.use_cases.accounts import AddAccount, ListAccount, ListChildAccounts
+from kohle.use_cases.journal import ImportStatement, QueryJournalByPeriod
+from kohle.use_cases.units import AddUnit, ListUnits
 
 
 @click.group()
@@ -15,33 +18,14 @@ def cli():
 
 @cli.command()
 @click.argument("name")
-def add_category_cmd(name: str):
-    add_debit_category = AddDebitCategory(session_local())
-    res = add_debit_category.execute(name)
-    if res.is_ok:
-        click.echo(f"Added category {name} with id {res.unwrap().id}")
-    else:
-        click.echo(f"Failed: {res.unwrap_err()}")
-
-
-@cli.command()
-def list_categories_cmd():
-    list_debit_categories = ListCategories(session_local())
-    res = list_debit_categories.execute()
-    if res.is_ok:
-        click.echo(tabulate(res.unwrap()))
-    else:
-        click.echo(f"Failed: {res.unwrap_err()}")
-
-
-@cli.command()
-@click.argument("name")
-@click.argument("iban")
-def add_account_cmd(name: str, iban: str):
+@click.option("--type", "account_type", type=click.Choice([t.name for t in AccountType]), default="expense")
+@click.option("--iban", default=None)
+@click.option("--parent", default=None, help="Name of the parent account, for virtual sub-accounts")
+def add_account_cmd(name: str, account_type: str, iban: str | None, parent: str | None):
     add_account = AddAccount(session_local())
-    res = add_account.execute(name, iban)
+    res = add_account.execute(name, AccountType[account_type], iban, parent)
     if res.is_ok:
-        click.echo(f"Added account {name}, {iban} with id {res.unwrap().id}")
+        click.echo(f"Added account {name} ({account_type}) with id {res.unwrap().id}")
     else:
         click.echo(f"Failed: {res.unwrap_err()}")
 
@@ -51,8 +35,45 @@ def list_accounts_cmd():
     list_accounts = ListAccount(session_local())
     res = list_accounts.execute()
     if res.is_ok:
-        for c in res.unwrap():
-            click.echo(f"{c.id}: name={c.name}, iban={c.iban}")
+        for a in res.unwrap():
+            parent = f", parent={a.parent_id}" if a.parent_id else ""
+            click.echo(f"{a.id}: name={a.name}, type={a.type.name}, iban={a.iban or '-'}{parent}")
+    else:
+        click.echo(f"Failed: {res.unwrap_err()}")
+
+
+@cli.command()
+@click.argument("parent_name")
+def list_child_accounts_cmd(parent_name: str):
+    list_children = ListChildAccounts(session_local())
+    res = list_children.execute(parent_name)
+    if res.is_ok:
+        for a in res.unwrap():
+            click.echo(f"{a.id}: name={a.name}, type={a.type.name}")
+    else:
+        click.echo(f"Failed: {res.unwrap_err()}")
+
+
+@cli.command()
+@click.argument("identifier")
+@click.argument("name")
+@click.option("--kind", type=click.Choice([k.name for k in UnitKind]), default="security")
+def add_unit_cmd(identifier: str, name: str, kind: str):
+    add_unit = AddUnit(session_local())
+    res = add_unit.execute(identifier, name, UnitKind[kind])
+    if res.is_ok:
+        click.echo(f"Added unit {identifier} ({kind}) with id {res.unwrap().id}")
+    else:
+        click.echo(f"Failed: {res.unwrap_err()}")
+
+
+@cli.command()
+def list_units_cmd():
+    list_units = ListUnits(session_local())
+    res = list_units.execute()
+    if res.is_ok:
+        for u in res.unwrap():
+            click.echo(f"{u.id}: {u.identifier} ({u.kind.name}) {u.name}")
     else:
         click.echo(f"Failed: {res.unwrap_err()}")
 
@@ -64,7 +85,7 @@ def list_importer_plugins():
     if not plugins:
         click.echo("No plugins found")
         return
-    for name, _ in plugins.items():
+    for name in plugins:
         click.echo(name)
 
 
@@ -75,7 +96,8 @@ def list_importer_plugins():
 def import_statement(plugin_name: str, account_name: str, csv_file):
     plugins = load_plugins()
     if plugin_name not in plugins:
-        click.echo(f"Plugin not found")
+        click.echo("Plugin not found")
+        sys.exit(1)
 
     plugin = plugins[plugin_name]
     statement_res = plugin.import_statement(csv_file)
@@ -84,10 +106,10 @@ def import_statement(plugin_name: str, account_name: str, csv_file):
         sys.exit(1)
 
     df = statement_res.unwrap()
-    import_transaction_statement = ImportTransactionStatement(session_local())
-    res = import_transaction_statement.execute(account_name, df)
+    import_use_case = ImportStatement(session_local())
+    res = import_use_case.execute(account_name, df)
     if res.is_ok:
-        click.echo(f"Import succeded, {res.unwrap()} transactions imported")
+        click.echo(f"Import succeded, {res.unwrap()} entries imported")
     else:
         click.echo(f"Import failed, reason = {res.unwrap_err()}")
 
@@ -96,15 +118,25 @@ def import_statement(plugin_name: str, account_name: str, csv_file):
 @click.argument('account_name')
 @click.argument("start")
 @click.argument("end")
-def transactions_in_period(account_name, start, end):
-    query_transactions_by_period = QueryTransactionByPeriod(session_local())
-    res = query_transactions_by_period.execute(account_name, start, end)
+def entries_in_period(account_name, start, end):
+    query = QueryJournalByPeriod(session_local())
+    res = query.execute(account_name, start, end)
     if res.is_ok:
-        click.echo(tabulate(res.unwrap(), floatfmt=".2f"))
+        rows = [
+            {
+                "date": line.entry.entry_date,
+                "description": line.entry.description,
+                "side": "dr" if line.is_debit else "cr",
+                "quantity": line.quantity,
+                "unit": line.unit.identifier,
+                "value": line.value,
+            }
+            for line in res.unwrap()
+        ]
+        click.echo(tabulate(rows, headers="keys", floatfmt=".2f"))
     else:
         click.echo(f"Querying for the period failed {res.unwrap_err()}")
 
 
 if __name__ == "__main__":
     cli()
-
