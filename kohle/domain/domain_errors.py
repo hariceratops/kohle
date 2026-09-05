@@ -155,3 +155,5 @@ ImportStatementError = \
         JournalError | \
         UnitError | \
         DataframeValidationError
+
+RecordEntryError = AccountError | UnitError | JournalError

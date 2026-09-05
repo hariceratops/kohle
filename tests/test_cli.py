@@ -49,9 +49,39 @@ def test_default_obj_falls_back_to_session_local(monkeypatch: pytest.MonkeyPatch
     assert sentinel_factory.called
 
 
+def test_record_posts_an_entry_and_reports_success(session_factory: sessionmaker) -> None:
+    runner = CliRunner()
+    runner.invoke(cli, ["add-account", "Checking", "--type", "asset"], obj=session_factory)
+    runner.invoke(cli, ["add-account", "Unallocated", "--type", "asset"], obj=session_factory)
+
+    result = runner.invoke(
+        cli,
+        ["record", "2026-03-01", "Withdraw cash", "200", "--from", "Checking", "--to", "Unallocated"],
+        obj=session_factory,
+    )
+
+    assert result.exit_code == 0
+    assert "200" in result.output
+    assert "EUR" in result.output
+    assert "credited Checking" in result.output
+    assert "debited Unallocated" in result.output
+
+
+def test_record_unknown_account_prints_readable_message(session_factory: sessionmaker) -> None:
+    runner = CliRunner()
+    runner.invoke(cli, ["add-account", "Checking", "--type", "asset"], obj=session_factory)
+
+    result = runner.invoke(
+        cli,
+        ["record", "2026-03-01", "Withdraw cash", "200", "--from", "Checking", "--to", "Nope"],
+        obj=session_factory,
+    )
+
+    assert result.exception is None
+    assert "Failed: Account Nope not found" in result.output
+
+
 def test_placeholder(session_factory: sessionmaker) -> None:
-    # TODO: record posts an entry and reports success
-    # TODO: an unknown account prints a readable message, not a traceback
     # TODO: a non-zero exit code accompanies a failed command
     # TODO: record-split with a malformed --line names the offending value
     # TODO: balance renders one row per unit through tabulate

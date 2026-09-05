@@ -1,4 +1,5 @@
 import sys
+from decimal import Decimal, InvalidOperation
 
 import click
 from tabulate import tabulate
@@ -7,8 +8,26 @@ from kohle.db.connection import session_local
 from kohle.domain.models import AccountType, UnitKind
 from kohle.plugin.plugin_manager import load_plugins
 from kohle.use_cases.accounts import AddAccount, ListAccount, ListChildAccounts
-from kohle.use_cases.journal import ImportStatement, QueryJournalByPeriod
+from kohle.use_cases.journal import (
+    BASE_CURRENCY,
+    ImportStatement,
+    QueryJournalByPeriod,
+    RecordSimpleEntry,
+)
 from kohle.use_cases.units import AddUnit, ListUnits
+
+
+class DecimalParamType(click.ParamType):
+    name = "decimal"
+
+    def convert(self, value, param, ctx):
+        try:
+            return Decimal(value)
+        except InvalidOperation:
+            self.fail(f"{value!r} is not a valid decimal", param, ctx)
+
+
+DECIMAL = DecimalParamType()
 
 
 @click.group()
@@ -119,6 +138,22 @@ def import_statement(make_session, plugin_name: str, account_name: str, csv_file
         click.echo(f"Import succeded, {res.unwrap()} entries imported")
     else:
         click.echo(f"Import failed, reason = {res.unwrap_err()}")
+
+
+@cli.command()
+@click.argument("entry_date", type=click.DateTime(formats=["%Y-%m-%d"]))
+@click.argument("description")
+@click.argument("quantity", type=DECIMAL)
+@click.option("--from", "from_account", required=True, help="Account to credit")
+@click.option("--to", "to_account", required=True, help="Account to debit")
+@click.pass_obj
+def record_cmd(make_session, entry_date, description: str, quantity: Decimal, from_account: str, to_account: str):
+    record = RecordSimpleEntry(make_session())
+    res = record.execute(entry_date.date(), description, quantity, from_account, to_account)
+    if res.is_ok:
+        click.echo(f"Recorded {quantity} {BASE_CURRENCY}: credited {from_account}, debited {to_account}")
+    else:
+        click.echo(f"Failed: {res.unwrap_err()}")
 
 
 @cli.command()

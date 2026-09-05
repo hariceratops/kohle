@@ -2,6 +2,7 @@ import hashlib
 from collections.abc import Iterable
 from datetime import date
 from decimal import Decimal
+from uuid import uuid4
 
 import pandas as pd
 from pandas.api.types import (
@@ -24,6 +25,7 @@ from kohle.domain.domain_errors import (
     JournalError,
     PostingToNonLeafAccount,
     QueryJournalByPeriodError,
+    RecordEntryError,
     UnbalancedEntry,
 )
 from kohle.domain.models import AccountType, JournalEntry, JournalLine, UnitKind
@@ -108,6 +110,19 @@ def validate_lines(
     return None
 
 
+def post_entry(
+    ctx: DbTransactionContext,
+    entry_date: date,
+    reference: str,
+    description: str,
+    lines: list[LineSpec],
+) -> Result[JournalEntry, JournalError]:
+    invalid = validate_lines(ctx, lines)
+    if invalid:
+        return Result.err(invalid)
+    return add_journal_entry_service(ctx, entry_date, reference, description, lines)
+
+
 class RecordJournalEntry(UnitOfWork[JournalEntry, JournalError]):
     def execute(
         self,
@@ -117,11 +132,51 @@ class RecordJournalEntry(UnitOfWork[JournalEntry, JournalError]):
         lines: Iterable[LineSpec],
     ) -> Result[JournalEntry, JournalError]:
         def use_case(ctx: DbTransactionContext) -> Result[JournalEntry, JournalError]:
-            line_list = list(lines)
-            invalid = validate_lines(ctx, line_list)
-            if invalid:
-                return Result.err(invalid)
-            return add_journal_entry_service(ctx, entry_date, reference, description, line_list)
+            return post_entry(ctx, entry_date, reference, description, list(lines))
+
+        return self._run(use_case)
+
+
+class RecordSimpleEntry(UnitOfWork[JournalEntry, RecordEntryError]):
+    """The `record` CLI command's use case: a two-line, base-currency entry.
+
+    A sibling of RecordJournalEntry, not a wrapper around it — UnitOfWork
+    closes its session per run, so calling one use case from another would
+    split the name lookups and the posting into two transactions.
+    """
+
+    def execute(
+        self,
+        entry_date: date,
+        description: str,
+        quantity: Decimal,
+        from_account: str,
+        to_account: str,
+    ) -> Result[JournalEntry, RecordEntryError]:
+        def use_case(ctx: DbTransactionContext) -> Result[JournalEntry, RecordEntryError]:
+            from_res = get_account_by_name_service(ctx, from_account)
+            if from_res.is_err:
+                return Result.err(from_res.unwrap_err())
+            to_res = get_account_by_name_service(ctx, to_account)
+            if to_res.is_err:
+                return Result.err(to_res.unwrap_err())
+
+            unit_res = get_or_create_unit(ctx, BASE_CURRENCY, "Euro", UnitKind.currency)
+            if unit_res.is_err:
+                return Result.err(unit_res.unwrap_err())
+
+            from_id = from_res.unwrap().id
+            to_id = to_res.unwrap().id
+            unit_id = unit_res.unwrap().id
+
+            lines = [
+                LineSpec(to_id, unit_id, quantity, Decimal(1), is_debit=True),
+                LineSpec(from_id, unit_id, quantity, Decimal(1), is_debit=False),
+            ]
+            entry_res = post_entry(ctx, entry_date, uuid4().hex, description, lines)
+            if entry_res.is_err:
+                return Result.err(entry_res.unwrap_err())
+            return Result.ok(entry_res.unwrap())
 
         return self._run(use_case)
 
