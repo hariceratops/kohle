@@ -1,5 +1,6 @@
 import hashlib
 from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from uuid import uuid4
@@ -15,6 +16,7 @@ from pandas.api.types import (
 
 from kohle.core.result import Result
 from kohle.domain.domain_errors import (
+    BalanceError,
     DataframeColumnTypeMismatch,
     DataframeMissingColumn,
     DataframeValidationError,
@@ -38,6 +40,7 @@ from kohle.services.account_services import (
 )
 from kohle.services.journal_services import (
     LineSpec,
+    account_lines_service,
     add_journal_entry_service,
     existing_references_service,
     query_lines_by_period_service,
@@ -299,5 +302,35 @@ class QueryJournalByPeriod(UnitOfWork[list[JournalLine], QueryJournalByPeriodErr
                 return Result.err(EndDatePrecedesStartDateError(start_date_str, end_date_str))
 
             return query_lines_by_period_service(ctx, account_res.unwrap().id, start_date, end_date)
+
+        return self._run(use_case)
+
+
+@dataclass(frozen=True, slots=True)
+class UnitBalance:
+    unit_identifier: str
+    quantity: Decimal
+
+
+def _aggregate_by_unit(lines: Iterable[JournalLine]) -> list[UnitBalance]:
+    quantities: dict[str, Decimal] = {}
+    for line in lines:
+        signed = line.quantity if line.is_debit else -line.quantity
+        quantities[line.unit.identifier] = quantities.get(line.unit.identifier, Decimal(0)) + signed
+    return [UnitBalance(identifier, quantity) for identifier, quantity in quantities.items()]
+
+
+class QueryAccountBalance(UnitOfWork[list[UnitBalance], BalanceError]):
+    def execute(self, account_name: str) -> Result[list[UnitBalance], BalanceError]:
+        def use_case(ctx: DbTransactionContext) -> Result[list[UnitBalance], BalanceError]:
+            account_res = get_account_by_name_service(ctx, account_name)
+            if account_res.is_err:
+                return Result.err(account_res.unwrap_err())
+
+            lines_res = account_lines_service(ctx, [account_res.unwrap().id])
+            if lines_res.is_err:
+                return Result.err(lines_res.unwrap_err())
+
+            return Result.ok(_aggregate_by_unit(lines_res.unwrap()))
 
         return self._run(use_case)

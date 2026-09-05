@@ -11,6 +11,7 @@ from kohle.use_cases.accounts import AddAccount, ListAccount, ListChildAccounts
 from kohle.use_cases.journal import (
     BASE_CURRENCY,
     ImportStatement,
+    QueryAccountBalance,
     QueryJournalByPeriod,
     RecordSimpleEntry,
 )
@@ -179,6 +180,25 @@ def entries_in_period(make_session, account_name, start, end):
         click.echo(tabulate(rows, headers="keys", floatfmt=".2f"))
     else:
         click.echo(f"Querying for the period failed {res.unwrap_err()}")
+
+
+@cli.command()
+@click.argument("account_name")
+@click.pass_obj
+def balance_cmd(make_session, account_name: str):
+    query = QueryAccountBalance(make_session())
+    res = query.execute(account_name)
+    if res.is_ok:
+        balances = res.unwrap()
+        if not balances:
+            click.echo("No holdings")
+            return
+        rows = [{"unit": b.unit_identifier, "quantity": b.quantity} for b in balances]
+        if len(balances) == 1 and balances[0].unit_identifier == BASE_CURRENCY:
+            rows.append({"unit": "Total (base currency)", "quantity": balances[0].quantity})
+        click.echo(tabulate(rows, headers="keys", floatfmt=".2f"))
+    else:
+        click.echo(f"Failed: {res.unwrap_err()}")
 
 
 if __name__ == "__main__":

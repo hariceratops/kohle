@@ -157,3 +157,5 @@ ImportStatementError = \
         DataframeValidationError
 
 RecordEntryError = AccountError | UnitError | JournalError
+
+BalanceError = AccountError | JournalError

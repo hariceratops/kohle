@@ -95,7 +95,9 @@ def query_lines_by_period_service(
 
 
 @crud_retrieve
-def account_lines_service(ctx: DbTransactionContext, account_id: int) -> Result[list[JournalLine], JournalError]:
+def account_lines_service(
+    ctx: DbTransactionContext, account_ids: Iterable[int]
+) -> Result[list[JournalLine], JournalError]:
     def op(session: Session) -> list[JournalLine]:
         return (
             session.query(JournalLine)
@@ -103,7 +105,7 @@ def account_lines_service(ctx: DbTransactionContext, account_id: int) -> Result[
             # so anything the caller reads has to be loaded up front.
             .options(joinedload(JournalLine.entry), joinedload(JournalLine.unit))
             .join(JournalEntry, JournalLine.entry_id == JournalEntry.id)
-            .filter(JournalLine.account_id == account_id)
+            .filter(JournalLine.account_id.in_(list(account_ids)))
             .order_by(JournalEntry.entry_date.asc(), JournalLine.id.asc())
             .all()
         )

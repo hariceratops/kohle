@@ -7,6 +7,8 @@ cannot: that a domain error reaches the user as a message rather than a
 traceback, and that output renders the way the acceptance criteria describe.
 """
 
+from datetime import date
+from decimal import Decimal
 from unittest.mock import Mock
 
 import pytest
@@ -14,7 +16,11 @@ from click.testing import CliRunner
 from sqlalchemy.orm import sessionmaker
 
 from kohle.app.cli.cli import cli
-from kohle.domain.models import Account
+from kohle.domain.models import Account, AccountType, UnitKind
+from kohle.services.journal_services import LineSpec
+from kohle.use_cases.accounts import AddAccount
+from kohle.use_cases.journal import RecordJournalEntry
+from kohle.use_cases.units import AddUnit
 
 
 def test_injected_factory_is_used_and_real_db_is_untouched(
@@ -81,10 +87,88 @@ def test_record_unknown_account_prints_readable_message(session_factory: session
     assert "Failed: Account Nope not found" in result.output
 
 
+def test_balance_renders_one_row_per_unit(session_factory: sessionmaker) -> None:
+    runner = CliRunner()
+    runner.invoke(cli, ["add-account", "Checking", "--type", "asset"], obj=session_factory)
+    runner.invoke(cli, ["add-account", "Groceries", "--type", "expense"], obj=session_factory)
+    runner.invoke(
+        cli,
+        ["record", "2026-03-01", "Aldi", "80", "--from", "Checking", "--to", "Groceries"],
+        obj=session_factory,
+    )
+
+    result = runner.invoke(cli, ["balance", "Groceries"], obj=session_factory)
+
+    assert result.exit_code == 0
+    assert "EUR" in result.output
+    assert "80" in result.output
+
+
+def test_balance_shows_total_row_for_single_base_currency_unit(session_factory: sessionmaker) -> None:
+    runner = CliRunner()
+    runner.invoke(cli, ["add-account", "Checking", "--type", "asset"], obj=session_factory)
+    runner.invoke(cli, ["add-account", "Groceries", "--type", "expense"], obj=session_factory)
+    runner.invoke(
+        cli,
+        ["record", "2026-03-01", "Aldi", "80", "--from", "Checking", "--to", "Groceries"],
+        obj=session_factory,
+    )
+
+    result = runner.invoke(cli, ["balance", "Groceries"], obj=session_factory)
+
+    assert result.exit_code == 0
+    assert "Total (base currency)" in result.output
+
+
+def test_balance_omits_total_row_for_multiple_units(session_factory: sessionmaker) -> None:
+    # An account holding two units must not print a total row: the check
+    # only applies when there's exactly one unit and it is the base
+    # currency. A simplification to "any base-currency row present" would
+    # regress this case silently.
+    session = session_factory()
+    try:
+        broker = AddAccount(session).execute("Broker", AccountType.asset).unwrap()
+        checking = AddAccount(session).execute("Checking", AccountType.asset).unwrap()
+        eur = AddUnit(session).execute("EUR", "Euro", UnitKind.currency).unwrap()
+        share = AddUnit(session).execute("IE00B4L5Y983", "Core MSCI World", UnitKind.security).unwrap()
+        RecordJournalEntry(session).execute(
+            date(2026, 3, 6), "buy-1", "Buy ETF",
+            [
+                LineSpec(broker.id, share.id, Decimal(10), Decimal(100), is_debit=True),
+                LineSpec(checking.id, eur.id, Decimal(1000), Decimal(1), is_debit=False),
+            ],
+        )
+        RecordJournalEntry(session).execute(
+            date(2026, 3, 7), "dep-1", "Deposit EUR",
+            [
+                LineSpec(broker.id, eur.id, Decimal(50), Decimal(1), is_debit=True),
+                LineSpec(checking.id, eur.id, Decimal(50), Decimal(1), is_debit=False),
+            ],
+        )
+    finally:
+        session.close()
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["balance", "Broker"], obj=session_factory)
+
+    assert result.exit_code == 0
+    assert "IE00B4L5Y983" in result.output
+    assert "Total" not in result.output
+
+
+def test_balance_empty_account_prints_no_holdings(session_factory: sessionmaker) -> None:
+    runner = CliRunner()
+    runner.invoke(cli, ["add-account", "Groceries", "--type", "expense"], obj=session_factory)
+
+    result = runner.invoke(cli, ["balance", "Groceries"], obj=session_factory)
+
+    assert result.exit_code == 0
+    assert "No holdings" in result.output
+
+
 def test_placeholder(session_factory: sessionmaker) -> None:
     # TODO: a non-zero exit code accompanies a failed command
     # TODO: record-split with a malformed --line names the offending value
-    # TODO: balance renders one row per unit through tabulate
     # TODO: list-accounts renders nesting with |- connectors, since tabulate
     #       strips leading whitespace (issue 007)
     # TODO: the operations command lists the audit trail (issue 008)
