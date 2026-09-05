@@ -12,8 +12,9 @@ from kohle.use_cases.units import AddUnit, ListUnits
 
 
 @click.group()
-def cli():
-    pass
+@click.pass_context
+def cli(ctx):
+    ctx.obj = ctx.obj or session_local
 
 
 @cli.command()
@@ -21,8 +22,9 @@ def cli():
 @click.option("--type", "account_type", type=click.Choice([t.name for t in AccountType]), default="expense")
 @click.option("--iban", default=None)
 @click.option("--parent", default=None, help="Name of the parent account, for virtual sub-accounts")
-def add_account_cmd(name: str, account_type: str, iban: str | None, parent: str | None):
-    add_account = AddAccount(session_local())
+@click.pass_obj
+def add_account_cmd(make_session, name: str, account_type: str, iban: str | None, parent: str | None):
+    add_account = AddAccount(make_session())
     res = add_account.execute(name, AccountType[account_type], iban, parent)
     if res.is_ok:
         click.echo(f"Added account {name} ({account_type}) with id {res.unwrap().id}")
@@ -31,8 +33,9 @@ def add_account_cmd(name: str, account_type: str, iban: str | None, parent: str 
 
 
 @cli.command()
-def list_accounts_cmd():
-    list_accounts = ListAccount(session_local())
+@click.pass_obj
+def list_accounts_cmd(make_session):
+    list_accounts = ListAccount(make_session())
     res = list_accounts.execute()
     if res.is_ok:
         for a in res.unwrap():
@@ -44,8 +47,9 @@ def list_accounts_cmd():
 
 @cli.command()
 @click.argument("parent_name")
-def list_child_accounts_cmd(parent_name: str):
-    list_children = ListChildAccounts(session_local())
+@click.pass_obj
+def list_child_accounts_cmd(make_session, parent_name: str):
+    list_children = ListChildAccounts(make_session())
     res = list_children.execute(parent_name)
     if res.is_ok:
         for a in res.unwrap():
@@ -58,8 +62,9 @@ def list_child_accounts_cmd(parent_name: str):
 @click.argument("identifier")
 @click.argument("name")
 @click.option("--kind", type=click.Choice([k.name for k in UnitKind]), default="security")
-def add_unit_cmd(identifier: str, name: str, kind: str):
-    add_unit = AddUnit(session_local())
+@click.pass_obj
+def add_unit_cmd(make_session, identifier: str, name: str, kind: str):
+    add_unit = AddUnit(make_session())
     res = add_unit.execute(identifier, name, UnitKind[kind])
     if res.is_ok:
         click.echo(f"Added unit {identifier} ({kind}) with id {res.unwrap().id}")
@@ -68,8 +73,9 @@ def add_unit_cmd(identifier: str, name: str, kind: str):
 
 
 @cli.command()
-def list_units_cmd():
-    list_units = ListUnits(session_local())
+@click.pass_obj
+def list_units_cmd(make_session):
+    list_units = ListUnits(make_session())
     res = list_units.execute()
     if res.is_ok:
         for u in res.unwrap():
@@ -93,7 +99,8 @@ def list_importer_plugins():
 @click.argument("plugin_name", required=True)
 @click.argument('account_name')
 @click.argument('csv_file', type=click.Path(exists=True))
-def import_statement(plugin_name: str, account_name: str, csv_file):
+@click.pass_obj
+def import_statement(make_session, plugin_name: str, account_name: str, csv_file):
     plugins = load_plugins()
     if plugin_name not in plugins:
         click.echo("Plugin not found")
@@ -106,7 +113,7 @@ def import_statement(plugin_name: str, account_name: str, csv_file):
         sys.exit(1)
 
     df = statement_res.unwrap()
-    import_use_case = ImportStatement(session_local())
+    import_use_case = ImportStatement(make_session())
     res = import_use_case.execute(account_name, df)
     if res.is_ok:
         click.echo(f"Import succeded, {res.unwrap()} entries imported")
@@ -118,8 +125,9 @@ def import_statement(plugin_name: str, account_name: str, csv_file):
 @click.argument('account_name')
 @click.argument("start")
 @click.argument("end")
-def entries_in_period(account_name, start, end):
-    query = QueryJournalByPeriod(session_local())
+@click.pass_obj
+def entries_in_period(make_session, account_name, start, end):
+    query = QueryJournalByPeriod(make_session())
     res = query.execute(account_name, start, end)
     if res.is_ok:
         rows = [

@@ -1,23 +1,55 @@
 """Layer 4 — CLI tests through Click's CliRunner.
 
-BLOCKED until issue 009 lands. Every command currently constructs
-`session_local()` inline, which is bound to the real kohle.db, so invoking one
-from a test would write to the user's actual ledger. Once the session factory
-comes from Click's context object, these run against the `session_factory`
-fixture in conftest — which already exists and is used by nothing.
-
-This layer covers what the layers below cannot: that a domain error reaches
-the user as a message rather than a traceback, and that output renders the
-way the acceptance criteria describe.
+Issue 009 wires the session factory onto Click's context object, so a
+`CliRunner` invocation can be pointed at the `session_factory` fixture
+instead of the real `kohle.db`. This layer covers what the layers below
+cannot: that a domain error reaches the user as a message rather than a
+traceback, and that output renders the way the acceptance criteria describe.
 """
 
+from unittest.mock import Mock
+
+import pytest
+from click.testing import CliRunner
 from sqlalchemy.orm import sessionmaker
+
+from kohle.app.cli.cli import cli
+from kohle.domain.models import Account
+
+
+def test_injected_factory_is_used_and_real_db_is_untouched(
+    session_factory: sessionmaker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def forbidden_session_local():
+        raise AssertionError("session_local must not be called when a factory is injected via obj")
+
+    monkeypatch.setattr("kohle.app.cli.cli.session_local", forbidden_session_local)
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["add-account", "Alice", "--type", "asset"], obj=session_factory)
+
+    assert result.exit_code == 0
+    assert "Added account Alice" in result.output
+
+    session = session_factory()
+    try:
+        accounts = session.query(Account).all()
+        assert [a.name for a in accounts] == ["Alice"]
+    finally:
+        session.close()
+
+
+def test_default_obj_falls_back_to_session_local(monkeypatch: pytest.MonkeyPatch) -> None:
+    sentinel_factory = Mock(side_effect=lambda: Mock())
+    monkeypatch.setattr("kohle.app.cli.cli.session_local", sentinel_factory)
+
+    runner = CliRunner()
+    runner.invoke(cli, ["list-accounts"])
+
+    assert sentinel_factory.called
 
 
 def test_placeholder(session_factory: sessionmaker) -> None:
-    # TODO: the fixture-injected factory is used, and the real kohle.db is
-    #       untouched by a test run — assert this first, it is the whole
-    #       reason this layer can exist
     # TODO: record posts an entry and reports success
     # TODO: an unknown account prints a readable message, not a traceback
     # TODO: a non-zero exit code accompanies a failed command
