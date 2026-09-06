@@ -409,9 +409,120 @@ def test_record_split_non_numeric_price_names_the_offending_value(session_factor
     assert "'free'" in result.output
 
 
+def test_list_accounts_renders_nesting_with_connectors_not_spaces(session_factory: sessionmaker) -> None:
+    runner = CliRunner()
+    runner.invoke(cli, ["add-account", "Cash", "--type", "asset"], obj=session_factory)
+    runner.invoke(
+        cli, ["add-account", "Groceries", "--type", "expense", "--parent", "Cash"], obj=session_factory
+    )
+    runner.invoke(cli, ["add-account", "Checking", "--type", "asset"], obj=session_factory)
+
+    result = runner.invoke(cli, ["list-accounts"], obj=session_factory)
+
+    assert result.exit_code == 0
+    lines = result.output.splitlines()
+    groceries_line = next(line for line in lines if "Groceries" in line)
+    assert groceries_line.startswith("|- ")
+    assert not groceries_line.startswith(" ")
+
+
+def test_list_accounts_distinguishes_parent_from_leaf(session_factory: sessionmaker) -> None:
+    runner = CliRunner()
+    runner.invoke(cli, ["add-account", "Cash", "--type", "asset"], obj=session_factory)
+    runner.invoke(
+        cli, ["add-account", "Groceries", "--type", "expense", "--parent", "Cash"], obj=session_factory
+    )
+
+    result = runner.invoke(cli, ["list-accounts"], obj=session_factory)
+
+    lines = result.output.splitlines()
+    cash_line = next(line for line in lines if line.startswith("Cash"))
+    groceries_line = next(line for line in lines if "Groceries" in line)
+    assert cash_line.startswith("Cash/")
+    assert not groceries_line.strip().endswith("/")
+
+
+def test_list_accounts_puts_parentless_accounts_at_top_level(session_factory: sessionmaker) -> None:
+    runner = CliRunner()
+    runner.invoke(cli, ["add-account", "Cash", "--type", "asset"], obj=session_factory)
+    runner.invoke(cli, ["add-account", "Checking", "--type", "asset"], obj=session_factory)
+
+    result = runner.invoke(cli, ["list-accounts"], obj=session_factory)
+
+    lines = result.output.splitlines()
+    assert any(line.startswith("Checking") for line in lines)
+    assert any(line.startswith("Cash") for line in lines)
+
+
+def test_list_accounts_renders_three_level_nesting(session_factory: sessionmaker) -> None:
+    runner = CliRunner()
+    runner.invoke(cli, ["add-account", "Cash", "--type", "asset"], obj=session_factory)
+    runner.invoke(
+        cli, ["add-account", "Envelopes", "--type", "asset", "--parent", "Cash"], obj=session_factory
+    )
+    runner.invoke(
+        cli, ["add-account", "Groceries", "--type", "expense", "--parent", "Envelopes"], obj=session_factory
+    )
+
+    result = runner.invoke(cli, ["list-accounts"], obj=session_factory)
+
+    lines = result.output.splitlines()
+    envelopes_line = next(line for line in lines if "Envelopes" in line)
+    groceries_line = next(line for line in lines if "Groceries" in line)
+    assert envelopes_line.startswith("|- ")
+    assert groceries_line.startswith("|  |- ")
+
+
+def test_list_accounts_keeps_type_and_iban_columns_visible(session_factory: sessionmaker) -> None:
+    runner = CliRunner()
+    runner.invoke(
+        cli, ["add-account", "Checking", "--type", "asset", "--iban", "DE123"], obj=session_factory
+    )
+
+    result = runner.invoke(cli, ["list-accounts"], obj=session_factory)
+
+    assert "asset" in result.output
+    assert "DE123" in result.output
+
+
+def test_list_accounts_with_account_argument_roots_the_tree_at_a_subtree(
+    session_factory: sessionmaker,
+) -> None:
+    runner = CliRunner()
+    runner.invoke(cli, ["add-account", "Cash", "--type", "asset"], obj=session_factory)
+    runner.invoke(
+        cli, ["add-account", "Groceries", "--type", "expense", "--parent", "Cash"], obj=session_factory
+    )
+    runner.invoke(cli, ["add-account", "Checking", "--type", "asset"], obj=session_factory)
+
+    result = runner.invoke(cli, ["list-accounts", "Cash"], obj=session_factory)
+
+    assert "Checking" not in result.output
+    assert "Cash" in result.output
+    assert "Groceries" in result.output
+
+
+def test_list_accounts_unknown_name_reports_the_miss(session_factory: sessionmaker) -> None:
+    runner = CliRunner()
+    runner.invoke(cli, ["add-account", "Checking", "--type", "asset"], obj=session_factory)
+
+    result = runner.invoke(cli, ["list-accounts", "Nope"], obj=session_factory)
+
+    assert result.output.strip() == "Failed: Account 'Nope' not found"
+
+
+def test_list_accounts_empty_ledger_says_so_instead_of_printing_a_blank_line(
+    session_factory: sessionmaker,
+) -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(cli, ["list-accounts"], obj=session_factory)
+
+    assert result.output.strip() != ""
+    assert result.output.strip() == "No accounts"
+
+
 def test_placeholder(session_factory: sessionmaker) -> None:
     # TODO: a non-zero exit code accompanies a failed command
-    # TODO: list-accounts renders nesting with |- connectors, since tabulate
-    #       strips leading whitespace (issue 007)
     # TODO: the operations command lists the audit trail (issue 008)
     assert True

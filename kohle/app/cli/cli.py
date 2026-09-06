@@ -5,6 +5,7 @@ import click
 from tabulate import tabulate
 
 from kohle.db.connection import session_local
+from kohle.domain.domain_errors import AccountNotFoundError
 from kohle.domain.models import AccountType, UnitKind
 from kohle.plugin.plugin_manager import load_plugins
 from kohle.use_cases.accounts import AddAccount, ListAccount, ListChildAccounts
@@ -60,6 +61,40 @@ def _parse_lines(ctx, param, values: tuple[str, ...]) -> list[LineInput]:
     return [_parse_line(value) for value in values]
 
 
+def _account_tree_rows(accounts: list, root_name: str | None = None) -> list[dict]:
+    """Flatten accounts into tabulate rows shaped like a tree.
+
+    Built from `parent_id`, never from `Account.children`: `children` is a
+    lazy relationship and the session is closed by the time the CLI holds
+    these objects, so touching it raises `DetachedInstanceError`.
+    """
+    children_by_parent: dict[int | None, list] = {}
+    for account in accounts:
+        children_by_parent.setdefault(account.parent_id, []).append(account)
+    for children in children_by_parent.values():
+        children.sort(key=lambda a: a.name)
+
+    if root_name is None:
+        roots = children_by_parent.get(None, [])
+    else:
+        roots = [a for a in accounts if a.name == root_name]
+
+    rows: list[dict] = []
+
+    def walk(account, depth: int) -> None:
+        children = children_by_parent.get(account.id, [])
+        label = f"{account.name}/" if children else account.name
+        connector = "|  " * (depth - 1) + "|- " if depth else ""
+        rows.append({"account": f"{connector}{label}", "type": account.type.name, "iban": account.iban or "-"})
+        for child in children:
+            walk(child, depth + 1)
+
+    for root in roots:
+        walk(root, 0)
+
+    return rows
+
+
 @click.group()
 @click.pass_context
 def cli(ctx):
@@ -82,16 +117,25 @@ def add_account_cmd(make_session, name: str, account_type: str, iban: str | None
 
 
 @cli.command()
+@click.argument("account", required=False)
 @click.pass_obj
-def list_accounts_cmd(make_session):
+def list_accounts_cmd(make_session, account: str | None):
     list_accounts = ListAccount(make_session())
     res = list_accounts.execute()
-    if res.is_ok:
-        for a in res.unwrap():
-            parent = f", parent={a.parent_id}" if a.parent_id else ""
-            click.echo(f"{a.id}: name={a.name}, type={a.type.name}, iban={a.iban or '-'}{parent}")
-    else:
+    if res.is_err:
         click.echo(f"Failed: {res.unwrap_err()}")
+        return
+
+    accounts = res.unwrap()
+    if account is not None and not any(a.name == account for a in accounts):
+        click.echo(f"Failed: {AccountNotFoundError(account)}")
+        return
+
+    rows = _account_tree_rows(accounts, account)
+    if not rows:
+        click.echo("No accounts")
+        return
+    click.echo(tabulate(rows, headers="keys"))
 
 
 @cli.command()
