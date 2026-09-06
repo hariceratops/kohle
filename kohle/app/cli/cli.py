@@ -1,4 +1,3 @@
-import sys
 from decimal import Decimal, InvalidOperation
 
 import click
@@ -111,10 +110,9 @@ def cli(ctx):
 def add_account_cmd(make_session, name: str, account_type: str, iban: str | None, parent: str | None):
     add_account = AddAccount(make_session())
     res = add_account.execute(name, AccountType[account_type], iban, parent)
-    if res.is_ok:
-        click.echo(f"Added account {name} ({account_type}) with id {res.unwrap().id}")
-    else:
-        click.echo(f"Failed: {res.unwrap_err()}")
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    click.echo(f"Added account {name} ({account_type}) with id {res.unwrap().id}")
 
 
 @cli.command()
@@ -124,13 +122,11 @@ def list_accounts_cmd(make_session, account: str | None):
     list_accounts = ListAccount(make_session())
     res = list_accounts.execute()
     if res.is_err:
-        click.echo(f"Failed: {res.unwrap_err()}")
-        return
+        raise click.ClickException(str(res.unwrap_err()))
 
     accounts = res.unwrap()
     if account is not None and not any(a.name == account for a in accounts):
-        click.echo(f"Failed: {AccountNotFoundError(account)}")
-        return
+        raise click.ClickException(str(AccountNotFoundError(account)))
 
     rows = _account_tree_rows(accounts, account)
     if not rows:
@@ -145,11 +141,10 @@ def list_accounts_cmd(make_session, account: str | None):
 def list_child_accounts_cmd(make_session, parent_name: str):
     list_children = ListChildAccounts(make_session())
     res = list_children.execute(parent_name)
-    if res.is_ok:
-        for a in res.unwrap():
-            click.echo(f"{a.id}: name={a.name}, type={a.type.name}")
-    else:
-        click.echo(f"Failed: {res.unwrap_err()}")
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    for a in res.unwrap():
+        click.echo(f"{a.id}: name={a.name}, type={a.type.name}")
 
 
 @cli.command()
@@ -160,10 +155,9 @@ def list_child_accounts_cmd(make_session, parent_name: str):
 def add_unit_cmd(make_session, identifier: str, name: str, kind: str):
     add_unit = AddUnit(make_session())
     res = add_unit.execute(identifier, name, UnitKind[kind])
-    if res.is_ok:
-        click.echo(f"Added unit {identifier} ({kind}) with id {res.unwrap().id}")
-    else:
-        click.echo(f"Failed: {res.unwrap_err()}")
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    click.echo(f"Added unit {identifier} ({kind}) with id {res.unwrap().id}")
 
 
 @cli.command()
@@ -171,11 +165,10 @@ def add_unit_cmd(make_session, identifier: str, name: str, kind: str):
 def list_units_cmd(make_session):
     list_units = ListUnits(make_session())
     res = list_units.execute()
-    if res.is_ok:
-        for u in res.unwrap():
-            click.echo(f"{u.id}: {u.identifier} ({u.kind.name}) {u.name}")
-    else:
-        click.echo(f"Failed: {res.unwrap_err()}")
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    for u in res.unwrap():
+        click.echo(f"{u.id}: {u.identifier} ({u.kind.name}) {u.name}")
 
 
 @cli.command()
@@ -197,22 +190,19 @@ def list_importer_plugins():
 def import_statement(make_session, plugin_name: str, account_name: str, csv_file):
     plugins = load_plugins()
     if plugin_name not in plugins:
-        click.echo("Plugin not found")
-        sys.exit(1)
+        raise click.ClickException("Plugin not found")
 
     plugin = plugins[plugin_name]
     statement_res = plugin.import_statement(csv_file)
     if statement_res.is_err:
-        click.echo(f"Statement processing failed, reason = {statement_res.unwrap_err()}")
-        sys.exit(1)
+        raise click.ClickException(str(statement_res.unwrap_err()))
 
     df = statement_res.unwrap()
     import_use_case = ImportStatement(make_session())
     res = import_use_case.execute(account_name, df)
-    if res.is_ok:
-        click.echo(f"Import succeded, {res.unwrap()} entries imported")
-    else:
-        click.echo(f"Import failed, reason = {res.unwrap_err()}")
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    click.echo(f"Import succeded, {res.unwrap()} entries imported")
 
 
 @cli.command()
@@ -253,16 +243,15 @@ def record_cmd(
 
     record = RecordSimpleEntry(make_session())
     res = record.execute(entry_date.date(), description, quantity, from_account, to_account, cross)
-    if res.is_ok:
-        if cross is None:
-            click.echo(f"Recorded {quantity} {BASE_CURRENCY}: credited {from_account}, debited {to_account}")
-        else:
-            click.echo(
-                f"Recorded {quantity} {cross.identifier} @ {cross.price}: "
-                f"credited {from_account}, debited {to_account}"
-            )
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    if cross is None:
+        click.echo(f"Recorded {quantity} {BASE_CURRENCY}: credited {from_account}, debited {to_account}")
     else:
-        click.echo(f"Failed: {res.unwrap_err()}")
+        click.echo(
+            f"Recorded {quantity} {cross.identifier} @ {cross.price}: "
+            f"credited {from_account}, debited {to_account}"
+        )
 
 
 @cli.command()
@@ -279,11 +268,10 @@ def record_cmd(
 def record_split_cmd(make_session, entry_date, description: str, lines: list[LineInput]):
     record = RecordSplitEntry(make_session())
     res = record.execute(entry_date.date(), description, lines)
-    if res.is_ok:
-        entry = res.unwrap()
-        click.echo(f"Recorded entry with {len(entry.lines)} lines")
-    else:
-        click.echo(f"Failed: {res.unwrap_err()}")
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    entry = res.unwrap()
+    click.echo(f"Recorded entry with {len(entry.lines)} lines")
 
 
 @cli.command()
@@ -294,21 +282,20 @@ def record_split_cmd(make_session, entry_date, description: str, lines: list[Lin
 def entries_in_period(make_session, account_name, start, end):
     query = QueryJournalByPeriod(make_session())
     res = query.execute(account_name, start, end)
-    if res.is_ok:
-        rows = [
-            {
-                "date": line.entry.entry_date,
-                "description": line.entry.description,
-                "side": "dr" if line.is_debit else "cr",
-                "quantity": line.quantity,
-                "unit": line.unit.identifier,
-                "value": line.value,
-            }
-            for line in res.unwrap()
-        ]
-        click.echo(tabulate(rows, headers="keys", floatfmt=".2f"))
-    else:
-        click.echo(f"Querying for the period failed {res.unwrap_err()}")
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    rows = [
+        {
+            "date": line.entry.entry_date,
+            "description": line.entry.description,
+            "side": "dr" if line.is_debit else "cr",
+            "quantity": line.quantity,
+            "unit": line.unit.identifier,
+            "value": line.value,
+        }
+        for line in res.unwrap()
+    ]
+    click.echo(tabulate(rows, headers="keys", floatfmt=".2f"))
 
 
 @cli.command()
@@ -317,32 +304,31 @@ def entries_in_period(make_session, account_name, start, end):
 def balance_cmd(make_session, account_name: str):
     query = QueryAccountBalance(make_session())
     res = query.execute(account_name)
-    if res.is_ok:
-        balances = res.unwrap()
-        if not balances:
-            click.echo("No holdings")
-            return
-        rows = [
-            {
-                "unit": b.unit_identifier,
-                "quantity": b.quantity,
-                "average cost": b.average_cost,
-            }
-            for b in balances
-        ]
-        if len(balances) == 1 and balances[0].unit_identifier == BASE_CURRENCY:
-            rows.append({
-                "unit": "Total (base currency)",
-                "quantity": balances[0].quantity,
-                "average cost": None,
-            })
-        # missingval renders None as "-" without putting a str into the
-        # column: a str in an otherwise-Decimal column makes tabulate treat
-        # the whole column as non-numeric, silently disabling floatfmt for
-        # every other row in it (not just the one with the missing value).
-        click.echo(tabulate(rows, headers="keys", floatfmt=".2f", missingval="-"))
-    else:
-        click.echo(f"Failed: {res.unwrap_err()}")
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    balances = res.unwrap()
+    if not balances:
+        click.echo("No holdings")
+        return
+    rows = [
+        {
+            "unit": b.unit_identifier,
+            "quantity": b.quantity,
+            "average cost": b.average_cost,
+        }
+        for b in balances
+    ]
+    if len(balances) == 1 and balances[0].unit_identifier == BASE_CURRENCY:
+        rows.append({
+            "unit": "Total (base currency)",
+            "quantity": balances[0].quantity,
+            "average cost": None,
+        })
+    # missingval renders None as "-" without putting a str into the
+    # column: a str in an otherwise-Decimal column makes tabulate treat
+    # the whole column as non-numeric, silently disabling floatfmt for
+    # every other row in it (not just the one with the missing value).
+    click.echo(tabulate(rows, headers="keys", floatfmt=".2f", missingval="-"))
 
 
 @cli.command()
@@ -353,22 +339,21 @@ def list_operations_cmd(make_session):
     # gaps in the `group` column are expected until issue 011 lands.
     list_operations = ListOperations(make_session())
     res = list_operations.execute()
-    if res.is_ok:
-        rows = [
-            {
-                "group": op.group_id,
-                "entity_type": op.entity_type,
-                "entity_id": op.entity_id,
-                "action": op.action,
-            }
-            for op in res.unwrap()
-        ]
-        if not rows:
-            click.echo("No operations")
-            return
-        click.echo(tabulate(rows, headers="keys"))
-    else:
-        click.echo(f"Failed: {res.unwrap_err()}")
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    rows = [
+        {
+            "group": op.group_id,
+            "entity_type": op.entity_type,
+            "entity_id": op.entity_id,
+            "action": op.action,
+        }
+        for op in res.unwrap()
+    ]
+    if not rows:
+        click.echo("No operations")
+        return
+    click.echo(tabulate(rows, headers="keys"))
 
 
 if __name__ == "__main__":

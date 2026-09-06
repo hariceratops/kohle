@@ -83,8 +83,8 @@ def test_record_unknown_account_prints_readable_message(session_factory: session
         obj=session_factory,
     )
 
-    assert result.exception is None
-    assert "Failed: Account 'Nope' not found" in result.output
+    assert result.exit_code == 1
+    assert "Error: Account 'Nope' not found" in result.output
 
 
 def test_balance_renders_one_row_per_unit(session_factory: sessionmaker) -> None:
@@ -333,8 +333,8 @@ def test_record_split_fewer_than_two_lines_surfaces_empty_entry_readably(
         obj=session_factory,
     )
 
-    assert result.exception is None
-    assert "Failed: Journal entry must have at least two lines" in result.output
+    assert result.exit_code == 1
+    assert "Error: Journal entry must have at least two lines" in result.output
 
 
 def test_record_split_duplicate_line_surfaces_actionable_message_not_raw_sql(
@@ -356,8 +356,8 @@ def test_record_split_duplicate_line_surfaces_actionable_message_not_raw_sql(
         obj=session_factory,
     )
 
-    assert result.exception is None
-    assert "Failed: Two lines on the same account, unit and side; combine them" in result.output
+    assert result.exit_code == 1
+    assert "Error: Two lines on the same account, unit and side; combine them" in result.output
     assert "UNIQUE constraint" not in result.output
 
 
@@ -508,7 +508,8 @@ def test_list_accounts_unknown_name_reports_the_miss(session_factory: sessionmak
 
     result = runner.invoke(cli, ["list-accounts", "Nope"], obj=session_factory)
 
-    assert result.output.strip() == "Failed: Account 'Nope' not found"
+    assert result.exit_code == 1
+    assert result.output.strip() == "Error: Account 'Nope' not found"
 
 
 def test_list_accounts_empty_ledger_says_so_instead_of_printing_a_blank_line(
@@ -522,9 +523,15 @@ def test_list_accounts_empty_ledger_says_so_instead_of_printing_a_blank_line(
     assert result.output.strip() == "No accounts"
 
 
-def test_placeholder(session_factory: sessionmaker) -> None:
-    # TODO: a non-zero exit code accompanies a failed command
-    assert True
+def test_failing_command_exits_non_zero_and_writes_to_stderr(session_factory: sessionmaker) -> None:
+    runner = CliRunner()
+    runner.invoke(cli, ["add-account", "Checking", "--type", "asset"], obj=session_factory)
+
+    result = runner.invoke(cli, ["add-account", "Checking", "--type", "asset"], obj=session_factory)
+
+    assert result.exit_code != 0
+    assert "Error: Account Checking already exists" in result.stderr
+    assert "Error: Account Checking already exists" not in result.stdout
 
 
 def _data_rows(output: str) -> list[str]:
