@@ -16,7 +16,7 @@ from click.testing import CliRunner
 from sqlalchemy.orm import sessionmaker
 
 from kohle.app.cli.cli import cli
-from kohle.domain.models import Account, AccountType, UnitKind
+from kohle.domain.models import Account, AccountType, Operation, UnitKind
 from kohle.services.journal_services import LineSpec
 from kohle.use_cases.accounts import AddAccount
 from kohle.use_cases.journal import RecordJournalEntry
@@ -524,5 +524,80 @@ def test_list_accounts_empty_ledger_says_so_instead_of_printing_a_blank_line(
 
 def test_placeholder(session_factory: sessionmaker) -> None:
     # TODO: a non-zero exit code accompanies a failed command
-    # TODO: the operations command lists the audit trail (issue 008)
     assert True
+
+
+def _data_rows(output: str) -> list[str]:
+    lines = output.splitlines()
+    return [
+        line
+        for line in lines
+        if line.strip() and not set(line.strip()) <= {"-", " "} and not line.strip().startswith("group")
+    ]
+
+
+def test_list_operations_shows_group_entity_type_entity_id_and_action(
+    session_factory: sessionmaker,
+) -> None:
+    runner = CliRunner()
+    runner.invoke(cli, ["add-account", "Checking", "--type", "asset"], obj=session_factory)
+
+    result = runner.invoke(cli, ["list-operations"], obj=session_factory)
+
+    assert result.exit_code == 0
+    header = result.output.splitlines()[0]
+    assert header.split() == ["group", "entity_type", "entity_id", "action"]
+    row = _data_rows(result.output)[0]
+    assert row.split() == ["1", "accounts", "1", "create"]
+
+
+def test_list_operations_orders_most_recent_transaction_first_steps_in_order(
+    session_factory: sessionmaker,
+) -> None:
+    runner = CliRunner()
+    runner.invoke(cli, ["add-account", "Checking", "--type", "asset"], obj=session_factory)
+    runner.invoke(cli, ["add-account", "Groceries", "--type", "expense"], obj=session_factory)
+    # First record auto-creates the base-currency unit inside the same
+    # transaction as the entry, so its group has two steps in the order
+    # they happened: the unit, then the entry that uses it.
+    runner.invoke(
+        cli,
+        ["record", "2026-03-01", "Aldi", "80", "--from", "Checking", "--to", "Groceries"],
+        obj=session_factory,
+    )
+    runner.invoke(
+        cli,
+        ["record", "2026-03-02", "Aldi again", "40", "--from", "Checking", "--to", "Groceries"],
+        obj=session_factory,
+    )
+
+    result = runner.invoke(cli, ["list-operations"], obj=session_factory)
+
+    assert result.exit_code == 0
+    entity_types = [row.split()[1] for row in _data_rows(result.output)]
+
+    assert entity_types[0] == "journal_entries"  # second, most recent record
+    assert entity_types[1] == "units"  # first record's group: unit created first
+    assert entity_types[2] == "journal_entries"  # ... then the entry
+
+
+def test_list_operations_is_read_only(session_factory: sessionmaker) -> None:
+    runner = CliRunner()
+    runner.invoke(cli, ["add-account", "Checking", "--type", "asset"], obj=session_factory)
+
+    session = session_factory()
+    try:
+        before = session.query(Operation).count()
+    finally:
+        session.close()
+
+    result = runner.invoke(cli, ["list-operations"], obj=session_factory)
+    assert result.exit_code == 0
+
+    session = session_factory()
+    try:
+        after = session.query(Operation).count()
+    finally:
+        session.close()
+
+    assert after == before

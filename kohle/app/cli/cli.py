@@ -19,6 +19,7 @@ from kohle.use_cases.journal import (
     RecordSimpleEntry,
     RecordSplitEntry,
 )
+from kohle.use_cases.operations import ListOperations
 from kohle.use_cases.units import AddUnit, ListUnits
 
 
@@ -340,6 +341,32 @@ def balance_cmd(make_session, account_name: str):
         # the whole column as non-numeric, silently disabling floatfmt for
         # every other row in it (not just the one with the missing value).
         click.echo(tabulate(rows, headers="keys", floatfmt=".2f", missingval="-"))
+    else:
+        click.echo(f"Failed: {res.unwrap_err()}")
+
+
+@cli.command()
+@click.pass_obj
+def list_operations_cmd(make_session):
+    # Every read-only command leaves an empty OperationGroup behind
+    # (DbTransactionContext creates and flushes one unconditionally), so
+    # gaps in the `group` column are expected until issue 011 lands.
+    list_operations = ListOperations(make_session())
+    res = list_operations.execute()
+    if res.is_ok:
+        rows = [
+            {
+                "group": op.group_id,
+                "entity_type": op.entity_type,
+                "entity_id": op.entity_id,
+                "action": op.action,
+            }
+            for op in res.unwrap()
+        ]
+        if not rows:
+            click.echo("No operations")
+            return
+        click.echo(tabulate(rows, headers="keys"))
     else:
         click.echo(f"Failed: {res.unwrap_err()}")
 
