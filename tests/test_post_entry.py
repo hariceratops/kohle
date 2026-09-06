@@ -13,11 +13,16 @@ from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
-from kohle.domain.domain_errors import AccountNotFoundError, PostingToNonLeafAccount
-from kohle.domain.models import AccountType
+from kohle.domain.domain_errors import (
+    AccountNotFoundError,
+    BaseCurrencyAsCrossUnit,
+    PostingToNonLeafAccount,
+    UnitNotFoundError,
+)
+from kohle.domain.models import AccountType, UnitKind
 from kohle.use_cases.accounts import AddAccount
-from kohle.use_cases.journal import BASE_CURRENCY, RecordSimpleEntry
-from kohle.use_cases.units import ListUnits
+from kohle.use_cases.journal import BASE_CURRENCY, CrossUnitLine, RecordSimpleEntry
+from kohle.use_cases.units import AddUnit, ListUnits
 
 
 def test_base_currency_entry_posts_and_balances(session: Session) -> None:
@@ -106,14 +111,144 @@ def test_base_currency_is_created_on_first_use(session: Session) -> None:
     assert all(line.unit_id == eur_id for line in result.unwrap().lines)
 
 
-def test_cross_unit_placeholder(session: Session) -> None:
-    # Cross-unit, issue 004 — the direction is the whole point
-    # TODO: a purchase (units arrive via the debit side) posts correctly
-    # TODO: a sale (units leave via the credit side) posts correctly and is
-    #       reachable without record-split
-    # TODO: both balance by value: the base-currency side is quantity x price
-    # TODO: naming a base-currency unit on either side is a domain error,
-    #       with or without a price
-    # TODO: a sale of a unit never bought is posted, not rejected — the
-    #       ledger records what happened
-    assert True
+def test_cross_unit_purchase_posts_units_on_debit_side(session: Session) -> None:
+    checking = AddAccount(session).execute("Checking", AccountType.asset, "DE1").unwrap()
+    broker = AddAccount(session).execute("Broker", AccountType.asset).unwrap()
+    AddUnit(session).execute("IE00B4L5Y983", "Core MSCI World", UnitKind.security)
+
+    result = RecordSimpleEntry(session).execute(
+        date(2026, 3, 6),
+        "Buy ETF",
+        Decimal(10),
+        "Checking",
+        "Broker",
+        CrossUnitLine("IE00B4L5Y983", Decimal(100), is_debit=True),
+    )
+
+    assert result.is_ok
+    entry = result.unwrap()
+    debit_line = next(line for line in entry.lines if line.is_debit)
+    credit_line = next(line for line in entry.lines if not line.is_debit)
+    assert debit_line.account_id == broker.id
+    assert debit_line.quantity == Decimal(10)
+    assert debit_line.unit_price == Decimal(100)
+    assert credit_line.account_id == checking.id
+    assert credit_line.quantity == Decimal(1000)
+    assert credit_line.unit_price == Decimal(1)
+
+
+def test_cross_unit_sale_posts_units_leaving_on_credit_side(session: Session) -> None:
+    broker = AddAccount(session).execute("Broker", AccountType.asset).unwrap()
+    checking = AddAccount(session).execute("Checking", AccountType.asset, "DE1").unwrap()
+    AddUnit(session).execute("IE00B4L5Y983", "Core MSCI World", UnitKind.security)
+
+    result = RecordSimpleEntry(session).execute(
+        date(2026, 4, 20),
+        "Sell ETF",
+        Decimal(10),
+        "Broker",
+        "Checking",
+        CrossUnitLine("IE00B4L5Y983", Decimal(110), is_debit=False),
+    )
+
+    assert result.is_ok
+    entry = result.unwrap()
+    credit_line = next(line for line in entry.lines if not line.is_debit)
+    debit_line = next(line for line in entry.lines if line.is_debit)
+    assert credit_line.account_id == broker.id
+    assert credit_line.quantity == Decimal(10)
+    assert credit_line.unit_price == Decimal(110)
+    assert debit_line.account_id == checking.id
+    assert debit_line.quantity == Decimal(1100)
+    assert debit_line.unit_price == Decimal(1)
+
+
+def test_sale_of_a_unit_never_bought_is_posted_not_rejected(session: Session) -> None:
+    # The ledger records what happened; it does not track prior holdings, so
+    # a sale with no matching purchase is not special-cased or rejected.
+    AddAccount(session).execute("Broker", AccountType.asset)
+    AddAccount(session).execute("Checking", AccountType.asset, "DE1")
+    AddUnit(session).execute("IE00B4L5Y983", "Core MSCI World", UnitKind.security)
+
+    result = RecordSimpleEntry(session).execute(
+        date(2026, 4, 20),
+        "Sell ETF",
+        Decimal(10),
+        "Broker",
+        "Checking",
+        CrossUnitLine("IE00B4L5Y983", Decimal(110), is_debit=False),
+    )
+
+    assert result.is_ok
+
+
+def test_cross_unit_entry_balances_by_value_at_quantity_times_price(session: Session) -> None:
+    AddAccount(session).execute("Checking", AccountType.asset, "DE1")
+    AddAccount(session).execute("Broker", AccountType.asset)
+    AddUnit(session).execute("IE00B4L5Y983", "Core MSCI World", UnitKind.security)
+
+    entry = RecordSimpleEntry(session).execute(
+        date(2026, 3, 6),
+        "Buy ETF",
+        Decimal(10),
+        "Checking",
+        "Broker",
+        CrossUnitLine("IE00B4L5Y983", Decimal(100), is_debit=True),
+    ).unwrap()
+
+    debits = sum((line.value for line in entry.lines if line.is_debit), Decimal(0))
+    credits = sum((line.value for line in entry.lines if not line.is_debit), Decimal(0))
+    assert debits == credits == Decimal(1000)
+
+
+def test_base_currency_named_as_cross_unit_on_debit_side_is_rejected(session: Session) -> None:
+    AddAccount(session).execute("Checking", AccountType.asset, "DE1")
+    AddAccount(session).execute("Broker", AccountType.asset)
+
+    result = RecordSimpleEntry(session).execute(
+        date(2026, 3, 6),
+        "Buy ETF",
+        Decimal(10),
+        "Checking",
+        "Broker",
+        CrossUnitLine(BASE_CURRENCY, Decimal("1.1"), is_debit=True),
+    )
+
+    assert result.is_err
+    assert isinstance(result.unwrap_err(), BaseCurrencyAsCrossUnit)
+
+
+def test_base_currency_named_as_cross_unit_on_credit_side_is_rejected(session: Session) -> None:
+    AddAccount(session).execute("Broker", AccountType.asset)
+    AddAccount(session).execute("Checking", AccountType.asset, "DE1")
+
+    result = RecordSimpleEntry(session).execute(
+        date(2026, 4, 20),
+        "Sell ETF",
+        Decimal(10),
+        "Broker",
+        "Checking",
+        CrossUnitLine(BASE_CURRENCY, Decimal(1), is_debit=False),
+    )
+
+    assert result.is_err
+    assert isinstance(result.unwrap_err(), BaseCurrencyAsCrossUnit)
+
+
+def test_unknown_cross_unit_is_an_error_and_not_auto_created(session: Session) -> None:
+    AddAccount(session).execute("Checking", AccountType.asset, "DE1")
+    AddAccount(session).execute("Broker", AccountType.asset)
+
+    result = RecordSimpleEntry(session).execute(
+        date(2026, 3, 6),
+        "Buy ETF",
+        Decimal(10),
+        "Checking",
+        "Broker",
+        CrossUnitLine("IE00B4L5Y983", Decimal(100), is_debit=True),
+    )
+
+    assert result.is_err
+    assert isinstance(result.unwrap_err(), UnitNotFoundError)
+    units = ListUnits(session).execute().unwrap()
+    assert "IE00B4L5Y983" not in [u.identifier for u in units]

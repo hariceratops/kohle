@@ -113,6 +113,14 @@ class EmptyEntry(JournalError):
         return "Journal entry must have at least two lines"
 
 
+class BaseCurrencyAsCrossUnit(JournalError):
+    """--from-unit/--to-unit name a non-base unit only; the base currency is
+    the default and needs no unit flag at all."""
+
+    def __str__(self) -> str:
+        return "The base currency is the default; omit the unit flags"
+
+
 class InvalidDateError(Exception):
     def __init__(self, date_str: str) -> None:
         super().__init__()
@@ -156,6 +164,6 @@ ImportStatementError = \
         UnitError | \
         DataframeValidationError
 
-RecordEntryError = AccountError | UnitError | JournalError
+RecordEntryError = AccountError | UnitError | JournalError | BaseCurrencyAsCrossUnit
 
 BalanceError = AccountError | JournalError

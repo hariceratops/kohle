@@ -10,6 +10,7 @@ from kohle.plugin.plugin_manager import load_plugins
 from kohle.use_cases.accounts import AddAccount, ListAccount, ListChildAccounts
 from kohle.use_cases.journal import (
     BASE_CURRENCY,
+    CrossUnitLine,
     ImportStatement,
     QueryAccountBalance,
     QueryJournalByPeriod,
@@ -147,12 +148,46 @@ def import_statement(make_session, plugin_name: str, account_name: str, csv_file
 @click.argument("quantity", type=DECIMAL)
 @click.option("--from", "from_account", required=True, help="Account to credit")
 @click.option("--to", "to_account", required=True, help="Account to debit")
+@click.option("--from-unit", default=None, help="Non-base unit carried by the credit side")
+@click.option("--from-price", type=DECIMAL, default=None, help="Price of --from-unit")
+@click.option("--to-unit", default=None, help="Non-base unit carried by the debit side")
+@click.option("--to-price", type=DECIMAL, default=None, help="Price of --to-unit")
 @click.pass_obj
-def record_cmd(make_session, entry_date, description: str, quantity: Decimal, from_account: str, to_account: str):
+def record_cmd(
+    make_session,
+    entry_date,
+    description: str,
+    quantity: Decimal,
+    from_account: str,
+    to_account: str,
+    from_unit: str | None,
+    from_price: Decimal | None,
+    to_unit: str | None,
+    to_price: Decimal | None,
+):
+    if from_unit and to_unit:
+        raise click.BadParameter("only one of --from-unit / --to-unit may be given")
+    if from_price is not None and from_unit is None:
+        raise click.BadParameter("--from-price requires --from-unit")
+    if to_price is not None and to_unit is None:
+        raise click.BadParameter("--to-price requires --to-unit")
+
+    cross = None
+    if from_unit is not None:
+        cross = CrossUnitLine(from_unit, from_price if from_price is not None else Decimal(1), is_debit=False)
+    elif to_unit is not None:
+        cross = CrossUnitLine(to_unit, to_price if to_price is not None else Decimal(1), is_debit=True)
+
     record = RecordSimpleEntry(make_session())
-    res = record.execute(entry_date.date(), description, quantity, from_account, to_account)
+    res = record.execute(entry_date.date(), description, quantity, from_account, to_account, cross)
     if res.is_ok:
-        click.echo(f"Recorded {quantity} {BASE_CURRENCY}: credited {from_account}, debited {to_account}")
+        if cross is None:
+            click.echo(f"Recorded {quantity} {BASE_CURRENCY}: credited {from_account}, debited {to_account}")
+        else:
+            click.echo(
+                f"Recorded {quantity} {cross.identifier} @ {cross.price}: "
+                f"credited {from_account}, debited {to_account}"
+            )
     else:
         click.echo(f"Failed: {res.unwrap_err()}")
 

@@ -17,6 +17,7 @@ from pandas.api.types import (
 from kohle.core.result import Result
 from kohle.domain.domain_errors import (
     BalanceError,
+    BaseCurrencyAsCrossUnit,
     DataframeColumnTypeMismatch,
     DataframeMissingColumn,
     DataframeValidationError,
@@ -46,6 +47,7 @@ from kohle.services.journal_services import (
     existing_references_service,
     query_lines_by_period_service,
 )
+from kohle.services.unit_services import get_unit_by_identifier_service
 from kohle.use_cases.units import get_or_create_unit
 
 BASE_CURRENCY = "EUR"
@@ -141,8 +143,25 @@ class RecordJournalEntry(UnitOfWork[JournalEntry, JournalError]):
         return self._run(use_case)
 
 
+@dataclass(frozen=True, slots=True)
+class CrossUnitLine:
+    """Which side of `record` carries a non-base unit, at what price.
+
+    One value rather than three independent parameters: identifier, price
+    and side are mutually dependent — a price without a unit is meaningless,
+    a side without a unit is meaningless — and separate `| None` parameters
+    would make those invalid combinations representable at the use-case
+    boundary, forcing a re-rejection of what the CLI already rejected.
+    """
+
+    identifier: str
+    price: Decimal
+    is_debit: bool
+
+
 class RecordSimpleEntry(UnitOfWork[JournalEntry, RecordEntryError]):
-    """The `record` CLI command's use case: a two-line, base-currency entry.
+    """The `record` CLI command's use case: a two-line entry, base-currency
+    or cross-unit.
 
     A sibling of RecordJournalEntry, not a wrapper around it — UnitOfWork
     closes its session per run, so calling one use case from another would
@@ -156,6 +175,7 @@ class RecordSimpleEntry(UnitOfWork[JournalEntry, RecordEntryError]):
         quantity: Decimal,
         from_account: str,
         to_account: str,
+        cross: CrossUnitLine | None = None,
     ) -> Result[JournalEntry, RecordEntryError]:
         def use_case(ctx: DbTransactionContext) -> Result[JournalEntry, RecordEntryError]:
             from_res = get_account_by_name_service(ctx, from_account)
@@ -165,18 +185,38 @@ class RecordSimpleEntry(UnitOfWork[JournalEntry, RecordEntryError]):
             if to_res.is_err:
                 return Result.err(to_res.unwrap_err())
 
-            unit_res = get_or_create_unit(ctx, BASE_CURRENCY, "Euro", UnitKind.currency)
-            if unit_res.is_err:
-                return Result.err(unit_res.unwrap_err())
+            base_unit_res = get_or_create_unit(ctx, BASE_CURRENCY, "Euro", UnitKind.currency)
+            if base_unit_res.is_err:
+                return Result.err(base_unit_res.unwrap_err())
 
-            from_id = from_res.unwrap().id
-            to_id = to_res.unwrap().id
-            unit_id = unit_res.unwrap().id
+            from_account_obj = from_res.unwrap()
+            to_account_obj = to_res.unwrap()
+            base_unit_id = base_unit_res.unwrap().id
 
-            lines = [
-                LineSpec(to_id, unit_id, quantity, Decimal(1), is_debit=True),
-                LineSpec(from_id, unit_id, quantity, Decimal(1), is_debit=False),
-            ]
+            if cross is None:
+                lines = [
+                    LineSpec(to_account_obj.id, base_unit_id, quantity, Decimal(1), is_debit=True),
+                    LineSpec(from_account_obj.id, base_unit_id, quantity, Decimal(1), is_debit=False),
+                ]
+            else:
+                if cross.identifier == BASE_CURRENCY:
+                    return Result.err(BaseCurrencyAsCrossUnit())
+
+                cross_unit_res = get_unit_by_identifier_service(ctx, cross.identifier)
+                if cross_unit_res.is_err:
+                    return Result.err(cross_unit_res.unwrap_err())
+                cross_unit_id = cross_unit_res.unwrap().id
+
+                cross_account = to_account_obj if cross.is_debit else from_account_obj
+                base_account = from_account_obj if cross.is_debit else to_account_obj
+
+                lines = [
+                    LineSpec(cross_account.id, cross_unit_id, quantity, cross.price, is_debit=cross.is_debit),
+                    LineSpec(
+                        base_account.id, base_unit_id, quantity * cross.price, Decimal(1), is_debit=not cross.is_debit
+                    ),
+                ]
+
             entry_res = post_entry(ctx, entry_date, uuid4().hex, description, lines)
             if entry_res.is_err:
                 return Result.err(entry_res.unwrap_err())

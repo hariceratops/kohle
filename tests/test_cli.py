@@ -166,6 +166,107 @@ def test_balance_empty_account_prints_no_holdings(session_factory: sessionmaker)
     assert "No holdings" in result.output
 
 
+def test_record_cross_unit_purchase_posts_the_etf_example(session_factory: sessionmaker) -> None:
+    runner = CliRunner()
+    runner.invoke(cli, ["add-account", "Checking", "--type", "asset"], obj=session_factory)
+    runner.invoke(cli, ["add-account", "Broker", "--type", "asset"], obj=session_factory)
+    runner.invoke(cli, ["add-unit", "IE00B4L5Y983", "Core MSCI World"], obj=session_factory)
+
+    result = runner.invoke(
+        cli,
+        [
+            "record", "2026-03-06", "Buy ETF", "10",
+            "--from", "Checking", "--to", "Broker",
+            "--to-unit", "IE00B4L5Y983", "--to-price", "100",
+        ],
+        obj=session_factory,
+    )
+
+    assert result.exit_code == 0
+    assert result.exception is None
+
+    balance_result = runner.invoke(cli, ["balance", "Broker"], obj=session_factory)
+    assert "IE00B4L5Y983" in balance_result.output
+    assert "10" in balance_result.output
+
+
+def test_record_cross_unit_sale_is_expressible(session_factory: sessionmaker) -> None:
+    runner = CliRunner()
+    runner.invoke(cli, ["add-account", "Broker", "--type", "asset"], obj=session_factory)
+    runner.invoke(cli, ["add-account", "Checking", "--type", "asset"], obj=session_factory)
+    runner.invoke(cli, ["add-unit", "IE00B4L5Y983", "Core MSCI World"], obj=session_factory)
+
+    result = runner.invoke(
+        cli,
+        [
+            "record", "2026-04-20", "Sell ETF", "10",
+            "--from", "Broker", "--to", "Checking",
+            "--from-unit", "IE00B4L5Y983", "--from-price", "110",
+        ],
+        obj=session_factory,
+    )
+
+    assert result.exit_code == 0
+    assert result.exception is None
+
+
+def test_record_rejects_both_from_unit_and_to_unit(session_factory: sessionmaker) -> None:
+    runner = CliRunner()
+    runner.invoke(cli, ["add-account", "Checking", "--type", "asset"], obj=session_factory)
+    runner.invoke(cli, ["add-account", "Broker", "--type", "asset"], obj=session_factory)
+
+    result = runner.invoke(
+        cli,
+        [
+            "record", "2026-03-06", "Buy ETF", "10",
+            "--from", "Checking", "--to", "Broker",
+            "--from-unit", "USD", "--to-unit", "IE00B4L5Y983",
+        ],
+        obj=session_factory,
+    )
+
+    assert result.exit_code == 2
+    assert "only one of --from-unit / --to-unit" in result.output
+
+
+def test_record_rejects_to_price_without_to_unit(session_factory: sessionmaker) -> None:
+    runner = CliRunner()
+    runner.invoke(cli, ["add-account", "Checking", "--type", "asset"], obj=session_factory)
+    runner.invoke(cli, ["add-account", "Broker", "--type", "asset"], obj=session_factory)
+
+    result = runner.invoke(
+        cli,
+        [
+            "record", "2026-03-06", "Buy ETF", "10",
+            "--from", "Checking", "--to", "Broker",
+            "--to-price", "100",
+        ],
+        obj=session_factory,
+    )
+
+    assert result.exit_code == 2
+    assert "--to-price requires --to-unit" in result.output
+
+
+def test_record_rejects_from_price_without_from_unit(session_factory: sessionmaker) -> None:
+    runner = CliRunner()
+    runner.invoke(cli, ["add-account", "Checking", "--type", "asset"], obj=session_factory)
+    runner.invoke(cli, ["add-account", "Broker", "--type", "asset"], obj=session_factory)
+
+    result = runner.invoke(
+        cli,
+        [
+            "record", "2026-04-20", "Sell ETF", "10",
+            "--from", "Broker", "--to", "Checking",
+            "--from-price", "110",
+        ],
+        obj=session_factory,
+    )
+
+    assert result.exit_code == 2
+    assert "--from-price requires --from-unit" in result.output
+
+
 def test_placeholder(session_factory: sessionmaker) -> None:
     # TODO: a non-zero exit code accompanies a failed command
     # TODO: record-split with a malformed --line names the offending value
