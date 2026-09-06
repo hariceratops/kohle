@@ -16,12 +16,20 @@ from sqlalchemy.orm import Session
 from kohle.domain.domain_errors import (
     AccountNotFoundError,
     BaseCurrencyAsCrossUnit,
+    DuplicateLineInEntry,
+    EmptyEntry,
     PostingToNonLeafAccount,
     UnitNotFoundError,
 )
 from kohle.domain.models import AccountType, UnitKind
 from kohle.use_cases.accounts import AddAccount
-from kohle.use_cases.journal import BASE_CURRENCY, CrossUnitLine, RecordSimpleEntry
+from kohle.use_cases.journal import (
+    BASE_CURRENCY,
+    CrossUnitLine,
+    LineInput,
+    RecordSimpleEntry,
+    RecordSplitEntry,
+)
 from kohle.use_cases.units import AddUnit, ListUnits
 
 
@@ -252,3 +260,161 @@ def test_unknown_cross_unit_is_an_error_and_not_auto_created(session: Session) -
     assert isinstance(result.unwrap_err(), UnitNotFoundError)
     units = ListUnits(session).execute().unwrap()
     assert "IE00B4L5Y983" not in [u.identifier for u in units]
+
+
+def test_three_way_shared_expense_posts_successfully(session: Session) -> None:
+    checking = AddAccount(session).execute("Checking", AccountType.asset, "DE1").unwrap()
+    alice = AddAccount(session).execute("Alice", AccountType.expense).unwrap()
+    bob = AddAccount(session).execute("Bob", AccountType.expense).unwrap()
+    AddUnit(session).execute("EUR", "Euro", UnitKind.currency)
+
+    result = RecordSplitEntry(session).execute(
+        date(2026, 3, 1),
+        "Dinner split three ways",
+        [
+            LineInput(checking.name, Decimal(90), "EUR", Decimal(1), is_debit=False),
+            LineInput(alice.name, Decimal(45), "EUR", Decimal(1), is_debit=True),
+            LineInput(bob.name, Decimal(45), "EUR", Decimal(1), is_debit=True),
+        ],
+    )
+
+    assert result.is_ok
+    entry = result.unwrap()
+    assert len(entry.lines) == 3
+    debits = sum((line.value for line in entry.lines if line.is_debit), Decimal(0))
+    credits = sum((line.value for line in entry.lines if not line.is_debit), Decimal(0))
+    assert debits == credits == Decimal(90)
+
+
+def test_split_entry_unknown_account_returns_account_not_found(session: Session) -> None:
+    AddAccount(session).execute("Checking", AccountType.asset, "DE1")
+    AddUnit(session).execute("EUR", "Euro", UnitKind.currency)
+
+    result = RecordSplitEntry(session).execute(
+        date(2026, 3, 1),
+        "Dinner",
+        [
+            LineInput("Checking", Decimal(90), "EUR", Decimal(1), is_debit=False),
+            LineInput("Nope", Decimal(90), "EUR", Decimal(1), is_debit=True),
+        ],
+    )
+
+    assert result.is_err
+    assert isinstance(result.unwrap_err(), AccountNotFoundError)
+
+
+def test_split_entry_empty_account_name_renders_as_quoted_empty_string(session: Session) -> None:
+    AddAccount(session).execute("Checking", AccountType.asset, "DE1")
+    AddUnit(session).execute("EUR", "Euro", UnitKind.currency)
+
+    result = RecordSplitEntry(session).execute(
+        date(2026, 3, 1),
+        "Dinner",
+        [
+            LineInput("", Decimal(90), "EUR", Decimal(1), is_debit=True),
+            LineInput("Checking", Decimal(90), "EUR", Decimal(1), is_debit=False),
+        ],
+    )
+
+    assert result.is_err
+    assert str(result.unwrap_err()) == "Account '' not found"
+
+
+def test_split_entry_on_a_fresh_ledger_with_no_units_created_yet(session: Session) -> None:
+    # RecordSimpleEntry and ImportStatement auto-create the base currency on
+    # first use; RecordSplitEntry must do the same or a fresh install's first
+    # record-split fails with "Unit EUR not found" for a unit the user never
+    # named. Deliberately does not call AddUnit at all — that is the bug this
+    # guards against, and a fixture that seeds EUR first would mask it.
+    checking = AddAccount(session).execute("Checking", AccountType.asset, "DE1").unwrap()
+    alice = AddAccount(session).execute("Alice", AccountType.expense).unwrap()
+    bob = AddAccount(session).execute("Bob", AccountType.expense).unwrap()
+
+    result = RecordSplitEntry(session).execute(
+        date(2026, 3, 5),
+        "Shared dinner",
+        [
+            LineInput(checking.name, Decimal(120), "EUR", Decimal(1), is_debit=False),
+            LineInput(alice.name, Decimal(60), "EUR", Decimal(1), is_debit=True),
+            LineInput(bob.name, Decimal(60), "EUR", Decimal(1), is_debit=True),
+        ],
+    )
+
+    assert result.is_ok
+    entry = result.unwrap()
+    assert len(entry.lines) == 3
+    units = ListUnits(session).execute().unwrap()
+    assert any(u.identifier == BASE_CURRENCY for u in units)
+
+
+def test_split_entry_unknown_unit_returns_unit_not_found_and_is_not_auto_created(session: Session) -> None:
+    AddAccount(session).execute("Checking", AccountType.asset, "DE1")
+    AddAccount(session).execute("Broker", AccountType.asset)
+
+    result = RecordSplitEntry(session).execute(
+        date(2026, 3, 1),
+        "Buy shares",
+        [
+            LineInput("Broker", Decimal(10), "IE00B4L5Y983", Decimal(100), is_debit=True),
+            LineInput("Checking", Decimal(1000), "EUR", Decimal(1), is_debit=False),
+        ],
+    )
+
+    assert result.is_err
+    assert isinstance(result.unwrap_err(), UnitNotFoundError)
+
+
+def test_split_entry_mixed_unit_lines_balance_by_value(session: Session) -> None:
+    checking = AddAccount(session).execute("Checking", AccountType.asset, "DE1").unwrap()
+    broker = AddAccount(session).execute("Broker", AccountType.asset).unwrap()
+    AddUnit(session).execute("EUR", "Euro", UnitKind.currency)
+    AddUnit(session).execute("IE00B4L5Y983", "Core MSCI World", UnitKind.security)
+
+    result = RecordSplitEntry(session).execute(
+        date(2026, 3, 6),
+        "Buy ETF",
+        [
+            LineInput(broker.name, Decimal(10), "IE00B4L5Y983", Decimal(100), is_debit=True),
+            LineInput(checking.name, Decimal(1000), "EUR", Decimal(1), is_debit=False),
+        ],
+    )
+
+    assert result.is_ok
+    entry = result.unwrap()
+    debit_line = next(line for line in entry.lines if line.is_debit)
+    credit_line = next(line for line in entry.lines if not line.is_debit)
+    assert debit_line.value == credit_line.value == Decimal(1000)
+
+
+def test_split_entry_fewer_than_two_lines_rejected_as_empty_entry(session: Session) -> None:
+    AddAccount(session).execute("Checking", AccountType.asset, "DE1")
+    AddUnit(session).execute("EUR", "Euro", UnitKind.currency)
+
+    result = RecordSplitEntry(session).execute(
+        date(2026, 3, 1),
+        "Dinner",
+        [LineInput("Checking", Decimal(90), "EUR", Decimal(1), is_debit=False)],
+    )
+
+    assert result.is_err
+    assert isinstance(result.unwrap_err(), EmptyEntry)
+
+
+def test_split_entry_duplicate_line_maps_to_duplicate_line_in_entry(session: Session) -> None:
+    checking = AddAccount(session).execute("Checking", AccountType.asset, "DE1").unwrap()
+    groceries = AddAccount(session).execute("Groceries", AccountType.expense).unwrap()
+    AddUnit(session).execute("EUR", "Euro", UnitKind.currency)
+
+    result = RecordSplitEntry(session).execute(
+        date(2026, 3, 1),
+        "Aldi, entered twice instead of combined",
+        [
+            LineInput(groceries.name, Decimal(10), "EUR", Decimal(1), is_debit=True),
+            LineInput(groceries.name, Decimal(20), "EUR", Decimal(1), is_debit=True),
+            LineInput(checking.name, Decimal(30), "EUR", Decimal(1), is_debit=False),
+        ],
+    )
+
+    assert result.is_err
+    assert isinstance(result.unwrap_err(), DuplicateLineInEntry)
+    assert "combine them" in str(result.unwrap_err())

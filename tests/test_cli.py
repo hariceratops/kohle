@@ -84,7 +84,7 @@ def test_record_unknown_account_prints_readable_message(session_factory: session
     )
 
     assert result.exception is None
-    assert "Failed: Account Nope not found" in result.output
+    assert "Failed: Account 'Nope' not found" in result.output
 
 
 def test_balance_renders_one_row_per_unit(session_factory: sessionmaker) -> None:
@@ -297,9 +297,120 @@ def test_record_rejects_from_price_without_from_unit(session_factory: sessionmak
     assert "--from-price requires --from-unit" in result.output
 
 
+def test_record_split_posts_a_three_way_shared_expense(session_factory: sessionmaker) -> None:
+    runner = CliRunner()
+    runner.invoke(cli, ["add-account", "Checking", "--type", "asset"], obj=session_factory)
+    runner.invoke(cli, ["add-account", "Alice", "--type", "expense"], obj=session_factory)
+    runner.invoke(cli, ["add-account", "Bob", "--type", "expense"], obj=session_factory)
+    runner.invoke(cli, ["add-unit", "EUR", "Euro"], obj=session_factory)
+
+    result = runner.invoke(
+        cli,
+        [
+            "record-split", "2026-03-01", "Dinner split three ways",
+            "--line", "Checking:90:EUR:1:credit",
+            "--line", "Alice:45:EUR:1:debit",
+            "--line", "Bob:45:EUR:1:debit",
+        ],
+        obj=session_factory,
+    )
+
+    assert result.exit_code == 0
+    assert result.exception is None
+    assert "3 lines" in result.output
+
+
+def test_record_split_fewer_than_two_lines_surfaces_empty_entry_readably(
+    session_factory: sessionmaker,
+) -> None:
+    runner = CliRunner()
+    runner.invoke(cli, ["add-account", "Checking", "--type", "asset"], obj=session_factory)
+    runner.invoke(cli, ["add-unit", "EUR", "Euro"], obj=session_factory)
+
+    result = runner.invoke(
+        cli,
+        ["record-split", "2026-03-01", "Dinner", "--line", "Checking:90:EUR:1:credit"],
+        obj=session_factory,
+    )
+
+    assert result.exception is None
+    assert "Failed: Journal entry must have at least two lines" in result.output
+
+
+def test_record_split_duplicate_line_surfaces_actionable_message_not_raw_sql(
+    session_factory: sessionmaker,
+) -> None:
+    runner = CliRunner()
+    runner.invoke(cli, ["add-account", "Checking", "--type", "asset"], obj=session_factory)
+    runner.invoke(cli, ["add-account", "Groceries", "--type", "expense"], obj=session_factory)
+    runner.invoke(cli, ["add-unit", "EUR", "Euro"], obj=session_factory)
+
+    result = runner.invoke(
+        cli,
+        [
+            "record-split", "2026-03-01", "Aldi, entered twice instead of combined",
+            "--line", "Groceries:10:EUR:1:debit",
+            "--line", "Groceries:20:EUR:1:debit",
+            "--line", "Checking:30:EUR:1:credit",
+        ],
+        obj=session_factory,
+    )
+
+    assert result.exception is None
+    assert "Failed: Two lines on the same account, unit and side; combine them" in result.output
+    assert "UNIQUE constraint" not in result.output
+
+
+def test_record_split_wrong_field_count_names_the_offending_value(session_factory: sessionmaker) -> None:
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        ["record-split", "2026-03-01", "Dinner", "--line", "Groceries:10:EUR:debit"],
+        obj=session_factory,
+    )
+
+    assert result.exit_code == 2
+    assert "Groceries:10:EUR:debit" in result.output
+
+
+def test_record_split_bad_side_names_the_offending_value(session_factory: sessionmaker) -> None:
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        ["record-split", "2026-03-01", "Dinner", "--line", "Groceries:10:EUR:1:dr"],
+        obj=session_factory,
+    )
+
+    assert result.exit_code == 2
+    assert "'dr'" in result.output
+
+
+def test_record_split_non_numeric_quantity_names_the_offending_value(session_factory: sessionmaker) -> None:
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        ["record-split", "2026-03-01", "Dinner", "--line", "Groceries:ten:EUR:1:debit"],
+        obj=session_factory,
+    )
+
+    assert result.exit_code == 2
+    assert "'ten'" in result.output
+
+
+def test_record_split_non_numeric_price_names_the_offending_value(session_factory: sessionmaker) -> None:
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        ["record-split", "2026-03-01", "Dinner", "--line", "Groceries:10:EUR:free:debit"],
+        obj=session_factory,
+    )
+
+    assert result.exit_code == 2
+    assert "'free'" in result.output
+
+
 def test_placeholder(session_factory: sessionmaker) -> None:
     # TODO: a non-zero exit code accompanies a failed command
-    # TODO: record-split with a malformed --line names the offending value
     # TODO: list-accounts renders nesting with |- connectors, since tabulate
     #       strips leading whitespace (issue 007)
     # TODO: the operations command lists the audit trail (issue 008)

@@ -6,7 +6,11 @@ from decimal import Decimal
 from sqlalchemy.orm import Session, joinedload
 
 from kohle.core.result import Result
-from kohle.domain.domain_errors import DuplicateJournalEntry, JournalError
+from kohle.domain.domain_errors import (
+    DuplicateJournalEntry,
+    DuplicateLineInEntry,
+    JournalError,
+)
 from kohle.domain.models import JournalEntry, JournalLine
 from kohle.infrastructure.crud import crud_create, crud_retrieve
 from kohle.infrastructure.infra_errors import check_if_unique_constraint_failed
@@ -54,6 +58,12 @@ def add_journal_entry_service(
         .map_err(lambda err: (
             DuplicateJournalEntry(reference)
             if check_if_unique_constraint_failed(err, "journal_entries.reference")
+            else DuplicateLineInEntry()
+            if check_if_unique_constraint_failed(
+                err,
+                "journal_lines.entry_id, journal_lines.account_id, "
+                "journal_lines.unit_id, journal_lines.is_debit",
+            )
             else JournalError(str(err))
         ))
     )

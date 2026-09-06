@@ -11,7 +11,7 @@ class AccountNotFoundError(AccountError):
         self.name = name
 
     def __str__(self) -> str:
-        return f"Account {self.name} not found"
+        return f"Account {self.name!r} not found"
 
 
 class EmptyAccountName(AccountError):
@@ -119,6 +119,15 @@ class BaseCurrencyAsCrossUnit(JournalError):
 
     def __str__(self) -> str:
         return "The base currency is the default; omit the unit flags"
+
+
+class DuplicateLineInEntry(JournalError):
+    """Maps `uq_journal_line_entry_account_unit_side`: two --line values on
+    the same account, unit and side should be combined into one line rather
+    than posted separately (design §5.3)."""
+
+    def __str__(self) -> str:
+        return "Two lines on the same account, unit and side; combine them"
 
 
 class InvalidDateError(Exception):

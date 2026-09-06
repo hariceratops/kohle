@@ -406,6 +406,20 @@ identifier strictly, builds `LineSpec`s, and calls `post_entry`. Fewer than
 two lines is caught by the existing `EmptyEntry` check inside `validate_lines`
 — not by the CLI.
 
+**Correction, found by running it.** "Strictly" as written above is wrong for
+one identifier. `BASE_CURRENCY` must go through `get_or_create_unit`, exactly
+as `RecordSimpleEntry` and `ImportStatement` already do; every other
+identifier stays strict. This paragraph originally said strictly for all of
+them, which left `record-split` unusable on a fresh ledger — every invocation
+failed with `Unit EUR not found`, for a unit the user names in the `--line`
+value but has no command to create beyond `add-unit EUR Euro --kind currency`.
+
+The reason it survived review is worth recording: every test seeded `EUR`
+through `AddUnit` before exercising a split, so the suite was green while the
+first-run path was broken. The regression guard is a test that never calls
+`AddUnit` at all. A typo such as `EURO` still fails strictly, which is the
+property the strict rule exists to protect.
+
 **One check that does not exist and is not being added to `validate_lines`.**
 `JournalLine` carries `UniqueConstraint(entry_id, account_id, unit_id,
 is_debit)`. A user writing `--line Groceries:10:EUR:1:debit --line

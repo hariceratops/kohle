@@ -225,6 +225,68 @@ class RecordSimpleEntry(UnitOfWork[JournalEntry, RecordEntryError]):
         return self._run(use_case)
 
 
+@dataclass(frozen=True, slots=True)
+class LineInput:
+    """The name-shaped twin of LineSpec: the CLI holds account and unit
+    *names* and cannot resolve them to ids without a Session, and LineSpec
+    needs ids, so this carries a line across that boundary (design §5.2)."""
+
+    account_name: str
+    quantity: Decimal
+    unit_identifier: str
+    unit_price: Decimal
+    is_debit: bool
+
+
+class RecordSplitEntry(UnitOfWork[JournalEntry, RecordEntryError]):
+    """The `record-split` CLI command's use case: an n-line entry, every
+    line given in full rather than derived.
+
+    A sibling of RecordSimpleEntry and RecordJournalEntry, not a wrapper —
+    see RecordSimpleEntry's docstring for why. Account and unit names are
+    resolved strictly, no auto-creation, so a typo is an error rather than a
+    silently created account or unit — except the base currency, which is
+    auto-created on first use exactly as it is for RecordSimpleEntry and
+    ImportStatement: BASE_CURRENCY is a module constant the user never types,
+    so auto-creating it cannot mask a typo, and without this a fresh
+    install's first `record-split` fails with "Unit EUR not found" for a
+    unit the user did not name.
+    """
+
+    def execute(
+        self, entry_date: date, description: str, lines: Iterable[LineInput]
+    ) -> Result[JournalEntry, RecordEntryError]:
+        def use_case(ctx: DbTransactionContext) -> Result[JournalEntry, RecordEntryError]:
+            specs: list[LineSpec] = []
+            for line in lines:
+                account_res = get_account_by_name_service(ctx, line.account_name)
+                if account_res.is_err:
+                    return Result.err(account_res.unwrap_err())
+                unit_res = (
+                    get_or_create_unit(ctx, BASE_CURRENCY, "Euro", UnitKind.currency)
+                    if line.unit_identifier == BASE_CURRENCY
+                    else get_unit_by_identifier_service(ctx, line.unit_identifier)
+                )
+                if unit_res.is_err:
+                    return Result.err(unit_res.unwrap_err())
+                specs.append(
+                    LineSpec(
+                        account_res.unwrap().id,
+                        unit_res.unwrap().id,
+                        line.quantity,
+                        line.unit_price,
+                        line.is_debit,
+                    )
+                )
+
+            entry_res = post_entry(ctx, entry_date, uuid4().hex, description, specs)
+            if entry_res.is_err:
+                return Result.err(entry_res.unwrap_err())
+            return Result.ok(entry_res.unwrap())
+
+        return self._run(use_case)
+
+
 class ImportStatement(UnitOfWork[int, ImportStatementError]):
     """Statement rows become balanced entries against an unclassified bucket.
     Choosing a better counterpart account is the classifier's job."""

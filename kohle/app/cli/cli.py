@@ -12,9 +12,11 @@ from kohle.use_cases.journal import (
     BASE_CURRENCY,
     CrossUnitLine,
     ImportStatement,
+    LineInput,
     QueryAccountBalance,
     QueryJournalByPeriod,
     RecordSimpleEntry,
+    RecordSplitEntry,
 )
 from kohle.use_cases.units import AddUnit, ListUnits
 
@@ -30,6 +32,32 @@ class DecimalParamType(click.ParamType):
 
 
 DECIMAL = DecimalParamType()
+
+
+def _parse_line(raw: str) -> LineInput:
+    fields = raw.split(":")
+    if len(fields) != 5:
+        raise click.BadParameter(f"{raw!r} does not split into ACCOUNT:QUANTITY:UNIT:PRICE:SIDE")
+    account_name, quantity_str, unit_identifier, price_str, side = fields
+
+    try:
+        quantity = Decimal(quantity_str)
+    except InvalidOperation:
+        raise click.BadParameter(f"{raw!r}: {quantity_str!r} is not a valid decimal quantity") from None
+
+    try:
+        unit_price = Decimal(price_str)
+    except InvalidOperation:
+        raise click.BadParameter(f"{raw!r}: {price_str!r} is not a valid decimal price") from None
+
+    if side not in ("debit", "credit"):
+        raise click.BadParameter(f"{raw!r}: {side!r} must be 'debit' or 'credit'")
+
+    return LineInput(account_name, quantity, unit_identifier, unit_price, is_debit=side == "debit")
+
+
+def _parse_lines(ctx, param, values: tuple[str, ...]) -> list[LineInput]:
+    return [_parse_line(value) for value in values]
 
 
 @click.group()
@@ -188,6 +216,27 @@ def record_cmd(
                 f"Recorded {quantity} {cross.identifier} @ {cross.price}: "
                 f"credited {from_account}, debited {to_account}"
             )
+    else:
+        click.echo(f"Failed: {res.unwrap_err()}")
+
+
+@cli.command()
+@click.argument("entry_date", type=click.DateTime(formats=["%Y-%m-%d"]))
+@click.argument("description")
+@click.option(
+    "--line",
+    "lines",
+    multiple=True,
+    callback=_parse_lines,
+    help="ACCOUNT:QUANTITY:UNIT:PRICE:SIDE, repeatable, one per journal line; SIDE is debit or credit",
+)
+@click.pass_obj
+def record_split_cmd(make_session, entry_date, description: str, lines: list[LineInput]):
+    record = RecordSplitEntry(make_session())
+    res = record.execute(entry_date.date(), description, lines)
+    if res.is_ok:
+        entry = res.unwrap()
+        click.echo(f"Recorded entry with {len(entry.lines)} lines")
     else:
         click.echo(f"Failed: {res.unwrap_err()}")
 
