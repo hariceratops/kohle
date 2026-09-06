@@ -16,7 +16,11 @@ from sqlalchemy.orm import Session
 from kohle.domain.models import AccountType, UnitKind
 from kohle.services.journal_services import LineSpec
 from kohle.use_cases.accounts import AddAccount
-from kohle.use_cases.journal import QueryAccountBalance, RecordJournalEntry
+from kohle.use_cases.journal import (
+    QueryAccountBalance,
+    RecordJournalEntry,
+    RecordSimpleEntry,
+)
 from kohle.use_cases.units import AddUnit
 
 
@@ -100,4 +104,33 @@ def test_unit_readable_after_session_closes(session: Session) -> None:
     # into UnitBalance before returning, not because an ORM object survived.
     assert result.unwrap()[0].unit_identifier == "EUR"
 
-# TODO: rollup aggregates every descendant, not only direct children (issue 003)
+def test_rollup_aggregates_every_descendant_not_only_direct_children(session: Session) -> None:
+    AddAccount(session).execute("Checking", AccountType.asset, "DE1").unwrap()
+    AddAccount(session).execute("Cash", AccountType.asset).unwrap()
+    AddAccount(session).execute("Unallocated", AccountType.asset, None, "Cash").unwrap()
+    AddAccount(session).execute("Envelopes", AccountType.asset, None, "Cash").unwrap()
+    AddAccount(session).execute("Groceries", AccountType.asset, None, "Envelopes").unwrap()
+    AddAccount(session).execute("Eating out", AccountType.asset, None, "Envelopes").unwrap()
+
+    # Withdraw into Unallocated, a direct child of Cash.
+    RecordSimpleEntry(session).execute(
+        date(2026, 3, 1), "Withdraw", Decimal(200), "Checking", "Unallocated"
+    ).unwrap()
+    # Allocate into Groceries, a grandchild of Cash via Envelopes.
+    RecordSimpleEntry(session).execute(
+        date(2026, 3, 2), "Allocate groceries", Decimal(80), "Unallocated", "Groceries"
+    ).unwrap()
+    # Allocate into Eating out, another grandchild.
+    RecordSimpleEntry(session).execute(
+        date(2026, 3, 3), "Allocate eating out", Decimal(40), "Unallocated", "Eating out"
+    ).unwrap()
+
+    result = QueryAccountBalance(session).execute("Cash")
+
+    assert result.is_ok
+    balances = result.unwrap()
+    assert len(balances) == 1
+    assert balances[0].unit_identifier == "EUR"
+    # The rollup nets to the lump sum: sibling-to-sibling transfers within
+    # the subtree cancel out, however deep the destination sits.
+    assert balances[0].quantity == Decimal(200)

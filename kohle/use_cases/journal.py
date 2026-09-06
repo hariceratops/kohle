@@ -36,6 +36,7 @@ from kohle.infrastructure.uow import UnitOfWork
 from kohle.services.account_services import (
     account_has_children_service,
     add_account_service,
+    descendant_account_ids_service,
     get_account_by_name_service,
 )
 from kohle.services.journal_services import (
@@ -327,7 +328,11 @@ class QueryAccountBalance(UnitOfWork[list[UnitBalance], BalanceError]):
             if account_res.is_err:
                 return Result.err(account_res.unwrap_err())
 
-            lines_res = account_lines_service(ctx, [account_res.unwrap().id])
+            descendants_res = descendant_account_ids_service(ctx, account_res.unwrap().id)
+            if descendants_res.is_err:
+                return Result.err(descendants_res.unwrap_err())
+
+            lines_res = account_lines_service(ctx, descendants_res.unwrap())
             if lines_res.is_err:
                 return Result.err(lines_res.unwrap_err())
 

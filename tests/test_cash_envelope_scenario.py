@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from kohle.domain.domain_errors import PostingToNonLeafAccount
 from kohle.domain.models import AccountType, JournalLine
 from kohle.use_cases.accounts import AddAccount
-from kohle.use_cases.journal import RecordSimpleEntry
+from kohle.use_cases.journal import QueryAccountBalance, RecordSimpleEntry
 
 
 def _net_position(session: Session, account_id: int) -> Decimal:
@@ -70,9 +70,38 @@ def test_cash_envelope_scenario(session: Session) -> None:
     # Cash itself has never been posted to.
     assert _net_position(session, cash.id) == Decimal(0)
 
-    # TODO (issue 002/003): balance Cash rolls up across all three children
-    #       and equals the lump sum minus what has left the tree.
-    # TODO (issue 002/003): balance Groceries reports that envelope alone.
-    # TODO (issue 002/003): overspending an envelope reports a negative
-    #       balance and is not an error — nothing blocks the spend that
-    #       causes it.
+    # balance Cash rolls up across all three children and equals the lump
+    # sum minus what has left the tree (the Aldi spend).
+    cash_balance = QueryAccountBalance(session).execute("Cash")
+    assert cash_balance.is_ok
+    cash_balances = cash_balance.unwrap()
+    assert len(cash_balances) == 1
+    assert cash_balances[0].unit_identifier == "EUR"
+    assert cash_balances[0].quantity == Decimal(200) - Decimal(30)
+
+    # balance Groceries reports that envelope alone.
+    groceries_balance = QueryAccountBalance(session).execute("Groceries")
+    assert groceries_balance.is_ok
+    groceries_balances = groceries_balance.unwrap()
+    assert len(groceries_balances) == 1
+    assert groceries_balances[0].unit_identifier == "EUR"
+    assert groceries_balances[0].quantity == Decimal(80) - Decimal(30)
+
+    # Overspending an envelope reports a negative balance and is not an
+    # error — nothing blocks the spend that causes it.
+    overspend = RecordSimpleEntry(session).execute(
+        date(2026, 3, 5), "Overspend Aldi", Decimal(60), "Groceries", "Aldi"
+    )
+    assert overspend.is_ok
+
+    overspent_balance = QueryAccountBalance(session).execute("Groceries")
+    assert overspent_balance.is_ok
+    overspent_balances = overspent_balance.unwrap()
+    assert len(overspent_balances) == 1
+    assert overspent_balances[0].quantity == Decimal(80) - Decimal(30) - Decimal(60)
+    assert overspent_balances[0].quantity < 0
+
+    # The rollup at Cash reflects the overspend too.
+    cash_after_overspend = QueryAccountBalance(session).execute("Cash")
+    assert cash_after_overspend.is_ok
+    assert cash_after_overspend.unwrap()[0].quantity == Decimal(200) - Decimal(30) - Decimal(60)
