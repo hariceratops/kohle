@@ -228,10 +228,25 @@ def balance_cmd(make_session, account_name: str):
         if not balances:
             click.echo("No holdings")
             return
-        rows = [{"unit": b.unit_identifier, "quantity": b.quantity} for b in balances]
+        rows = [
+            {
+                "unit": b.unit_identifier,
+                "quantity": b.quantity,
+                "average cost": b.average_cost,
+            }
+            for b in balances
+        ]
         if len(balances) == 1 and balances[0].unit_identifier == BASE_CURRENCY:
-            rows.append({"unit": "Total (base currency)", "quantity": balances[0].quantity})
-        click.echo(tabulate(rows, headers="keys", floatfmt=".2f"))
+            rows.append({
+                "unit": "Total (base currency)",
+                "quantity": balances[0].quantity,
+                "average cost": None,
+            })
+        # missingval renders None as "-" without putting a str into the
+        # column: a str in an otherwise-Decimal column makes tabulate treat
+        # the whole column as non-numeric, silently disabling floatfmt for
+        # every other row in it (not just the one with the missing value).
+        click.echo(tabulate(rows, headers="keys", floatfmt=".2f", missingval="-"))
     else:
         click.echo(f"Failed: {res.unwrap_err()}")
 

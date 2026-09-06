@@ -351,14 +351,59 @@ class QueryJournalByPeriod(UnitOfWork[list[JournalLine], QueryJournalByPeriodErr
 class UnitBalance:
     unit_identifier: str
     quantity: Decimal
+    average_cost: Decimal | None
+
+
+class _RunningCost:
+    """Per-unit accumulator for the moving-average cost fold (design §6.4)."""
+
+    __slots__ = ("basis", "quantity")
+
+    def __init__(self) -> None:
+        self.basis = Decimal(0)
+        self.quantity = Decimal(0)
+
+    def apply(self, line: JournalLine) -> None:
+        if line.is_debit:
+            self.basis += line.quantity * line.unit_price
+            self.quantity += line.quantity
+        else:
+            if self.quantity == 0:
+                # Net-short in a non-base unit: basis/quantity is undefined.
+                # Falling back to the line's own price only keeps the fold
+                # from dividing by zero — it is not a claim that this is
+                # meaningful accounting, and should not be "improved" into
+                # something that looks more principled than it is.
+                average = line.unit_price
+            else:
+                average = self.basis / self.quantity
+            self.basis -= line.quantity * average
+            self.quantity -= line.quantity
+
+    @property
+    def average_cost(self) -> Decimal | None:
+        if self.quantity == 0:
+            return None
+        return self.basis / self.quantity
 
 
 def _aggregate_by_unit(lines: Iterable[JournalLine]) -> list[UnitBalance]:
-    quantities: dict[str, Decimal] = {}
+    """Moving-average cost fold, one accumulator per unit.
+
+    Order-dependent: consumes the caller's ordering as-is and must not sort,
+    since `account_lines_service`'s `(entry_date, line id)` order is what
+    makes the running average correct (design §6.4).
+    """
+    running: dict[str, _RunningCost] = {}
     for line in lines:
-        signed = line.quantity if line.is_debit else -line.quantity
-        quantities[line.unit.identifier] = quantities.get(line.unit.identifier, Decimal(0)) + signed
-    return [UnitBalance(identifier, quantity) for identifier, quantity in quantities.items()]
+        identifier = line.unit.identifier
+        if identifier not in running:
+            running[identifier] = _RunningCost()
+        running[identifier].apply(line)
+    return [
+        UnitBalance(identifier, cost.quantity, cost.average_cost)
+        for identifier, cost in running.items()
+    ]
 
 
 class QueryAccountBalance(UnitOfWork[list[UnitBalance], BalanceError]):

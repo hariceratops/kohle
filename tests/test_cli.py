@@ -102,6 +102,8 @@ def test_balance_renders_one_row_per_unit(session_factory: sessionmaker) -> None
     assert result.exit_code == 0
     assert "EUR" in result.output
     assert "80" in result.output
+    assert "average cost" in result.output
+    assert "1.00" in result.output
 
 
 def test_balance_shows_total_row_for_single_base_currency_unit(session_factory: sessionmaker) -> None:
@@ -166,6 +168,33 @@ def test_balance_empty_account_prints_no_holdings(session_factory: sessionmaker)
     assert "No holdings" in result.output
 
 
+def test_balance_renders_none_average_cost_as_dash_without_breaking_other_rows(
+    session_factory: sessionmaker,
+) -> None:
+    # A base-currency account produces both a numeric average-cost row (the
+    # unit row, average 1) and a None one (the total row) in the same table.
+    # A mixed-type column would make tabulate drop floatfmt for the whole
+    # column (regression: EUR row would render "1.00000000" instead of
+    # "1.00") — passing None through with missingval avoids that.
+    runner = CliRunner()
+    runner.invoke(cli, ["add-account", "Checking", "--type", "asset"], obj=session_factory)
+    runner.invoke(cli, ["add-account", "Groceries", "--type", "expense"], obj=session_factory)
+    runner.invoke(
+        cli,
+        ["record", "2026-03-01", "Aldi", "80", "--from", "Checking", "--to", "Groceries"],
+        obj=session_factory,
+    )
+
+    result = runner.invoke(cli, ["balance", "Groceries"], obj=session_factory)
+
+    assert result.exit_code == 0
+    lines = result.output.splitlines()
+    unit_row = next(line for line in lines if line.startswith("EUR"))
+    total_row = next(line for line in lines if "Total" in line)
+    assert unit_row.split()[-1] == "1.00"
+    assert total_row.split()[-1] == "-"
+
+
 def test_record_cross_unit_purchase_posts_the_etf_example(session_factory: sessionmaker) -> None:
     runner = CliRunner()
     runner.invoke(cli, ["add-account", "Checking", "--type", "asset"], obj=session_factory)
@@ -188,6 +217,7 @@ def test_record_cross_unit_purchase_posts_the_etf_example(session_factory: sessi
     balance_result = runner.invoke(cli, ["balance", "Broker"], obj=session_factory)
     assert "IE00B4L5Y983" in balance_result.output
     assert "10" in balance_result.output
+    assert "100.00" in balance_result.output
 
 
 def test_record_cross_unit_sale_is_expressible(session_factory: sessionmaker) -> None:
