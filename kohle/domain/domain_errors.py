@@ -1,23 +1,4 @@
 from dataclasses import dataclass
-from typing import List, Dict, Union
-
-
-class CategoryError(Exception):
-    pass
-
-
-class EmptyCategoryName(CategoryError):
-    def __str__(self) -> str:
-        return "Category name cannot be empty"
-
-
-class DuplicateCategory(CategoryError):
-    def __init__(self, name: str) -> None:
-        super().__init__()
-        self.name = name
-
-    def __str__(self) -> str:
-        return "Category already exists"
 
 
 class AccountError(Exception):
@@ -30,17 +11,12 @@ class AccountNotFoundError(AccountError):
         self.name = name
 
     def __str__(self) -> str:
-        return f"Account name {self.name} cannot be empty"
+        return f"Account {self.name!r} not found"
 
 
 class EmptyAccountName(AccountError):
     def __str__(self) -> str:
         return "Account name cannot be empty"
-
-
-class EmptyIBAN(AccountError):
-    def __str__(self) -> str:
-        return "IBAN name cannot be empty"
 
 
 class DuplicateAccountName(AccountError):
@@ -61,14 +37,97 @@ class DuplicateIBAN(AccountError):
         return f"IBAN {self.iban} already exists"
 
 
-class TransactionError(Exception):
+class ParentAccountNotFound(AccountError):
+    def __init__(self, parent_name: str) -> None:
+        super().__init__()
+        self.parent_name = parent_name
+
     def __str__(self) -> str:
-        return ""
+        return f"Parent account {self.parent_name} not found"
 
 
-class DuplicationTransactionError(TransactionError):
+class UnitError(Exception):
+    pass
+
+
+class UnitNotFoundError(UnitError):
+    def __init__(self, identifier: str) -> None:
+        super().__init__()
+        self.identifier = identifier
+
     def __str__(self) -> str:
-        return "Duplicate transactions found"
+        return f"Unit {self.identifier} not found"
+
+
+class DuplicateUnit(UnitError):
+    def __init__(self, identifier: str) -> None:
+        super().__init__()
+        self.identifier = identifier
+
+    def __str__(self) -> str:
+        return f"Unit {self.identifier} already exists"
+
+
+class EmptyUnitIdentifier(UnitError):
+    def __str__(self) -> str:
+        return "Unit identifier cannot be empty"
+
+
+class JournalError(Exception):
+    pass
+
+
+class DuplicateJournalEntry(JournalError):
+    def __init__(self, reference: str) -> None:
+        super().__init__()
+        self.reference = reference
+
+    def __str__(self) -> str:
+        return f"Journal entry {self.reference} already exists"
+
+
+class UnbalancedEntry(JournalError):
+    def __init__(self, debit_total, credit_total) -> None:
+        super().__init__()
+        self.debit_total = debit_total
+        self.credit_total = credit_total
+
+    def __str__(self) -> str:
+        return f"Entry does not balance: debits {self.debit_total} against credits {self.credit_total}"
+
+
+class PostingToNonLeafAccount(JournalError):
+    """Parent balances are the sum of their children, so a posting that lands on
+    a parent silently breaks every rollup."""
+
+    def __init__(self, account_id: int) -> None:
+        super().__init__()
+        self.account_id = account_id
+
+    def __str__(self) -> str:
+        return f"Account id {self.account_id} has children and cannot be posted to directly"
+
+
+class EmptyEntry(JournalError):
+    def __str__(self) -> str:
+        return "Journal entry must have at least two lines"
+
+
+class BaseCurrencyAsCrossUnit(JournalError):
+    """--from-unit/--to-unit name a non-base unit only; the base currency is
+    the default and needs no unit flag at all."""
+
+    def __str__(self) -> str:
+        return "The base currency is the default; omit the unit flags"
+
+
+class DuplicateLineInEntry(JournalError):
+    """Maps `uq_journal_line_entry_account_unit_side`: two --line values on
+    the same account, unit and side should be combined into one line rather
+    than posted separately (design §5.3)."""
+
+    def __str__(self) -> str:
+        return "Two lines on the same account, unit and side; combine them"
 
 
 class InvalidDateError(Exception):
@@ -92,20 +151,28 @@ class EndDatePrecedesStartDateError(Exception):
 
 @dataclass
 class DataframeMissingColumn:
-    columns: List[str]
+    columns: list[str]
 
 
 @dataclass
 class DataframeColumnTypeMismatch:
-    mismatches: Dict[str, str]  # column -> actual dtype
+    mismatches: dict[str, str]  # column -> actual dtype
 
 
-DataframeValidationError = Union[DataframeMissingColumn, DataframeColumnTypeMismatch]
+DataframeValidationError = DataframeMissingColumn | DataframeColumnTypeMismatch
 
-QueryTransactionByPeriodError = \
+QueryJournalByPeriodError = \
         InvalidDateError | \
-        TransactionError | \
+        JournalError | \
         EndDatePrecedesStartDateError | \
         AccountNotFoundError
 
-ImportStatementError = AccountNotFoundError | TransactionError | DataframeValidationError
+ImportStatementError = \
+        AccountNotFoundError | \
+        JournalError | \
+        UnitError | \
+        DataframeValidationError
+
+RecordEntryError = AccountError | UnitError | JournalError | BaseCurrencyAsCrossUnit
+
+BalanceError = AccountError | JournalError

@@ -1,8 +1,26 @@
-from datetime import datetime
-from sqlalchemy import Column, Integer, String, UniqueConstraint, ForeignKey, Date, Numeric, DateTime
+from datetime import date, datetime
+from decimal import Decimal
+from enum import Enum
+
+from sqlalchemy import (
+    Boolean,
+    Date,
+    DateTime,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+    UniqueConstraint,
+)
+from sqlalchemy import Enum as SqlEnum
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
 from kohle.db.connection import base
-from kohle.infrastructure.model_serde import SerdePolicy, PassAll, PassId
+from kohle.infrastructure.model_serde import PassAll, PassId, SerdePolicy
+
+# Quantities span cash (2dp) and fractional units of securities and gold, so the
+# scale is set by the latter.
+QUANTITY = Numeric(20, 8)
 
 
 class RegisteredBase(DeclarativeBase):
@@ -11,7 +29,7 @@ class RegisteredBase(DeclarativeBase):
     @classmethod
     def __get_policy__(cls) -> SerdePolicy:
         mapper = cls.__mapper__
-        relations = {r.key: SerdePolicy(PassId(), {}) for r in mapper.relationships}
+        relations: dict[str, SerdePolicy] = {r.key: SerdePolicy(PassId(), {}) for r in mapper.relationships}
         return SerdePolicy(PassAll(), relations)
 
 
@@ -47,64 +65,157 @@ class Operation(base):
                self.state == other.state
 
 
-class DebitCategory(base, Archivable):
-    __tablename__ = "debit_categories"
+class AccountType(Enum):
+    asset = "asset"
+    liability = "liability"
+    income = "income"
+    expense = "expense"
+
+
+class UnitKind(Enum):
+    currency = "currency"
+    security = "security"
+    commodity = "commodity"
+
+
+class Unit(base, Archivable):
+    """What a quantity is denominated in: EUR, an ISIN, grams of gold."""
+
+    __tablename__ = "units"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kind: Mapped[UnitKind] = mapped_column(SqlEnum(UnitKind), nullable=False)
+    identifier: Mapped[str] = mapped_column(String, nullable=False)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+
     __table_args__ = (
-        UniqueConstraint("category", name="uq_debit_category_category"),
+        UniqueConstraint("identifier", name="uq_unit_identifier"),
     )
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    category = Column(String, nullable=False, unique=True)
-
     def __eq__(self, other) -> bool:
-        return self.id == other.id and self.category == other.category
+        return isinstance(other, Unit) and self.id == other.id and self.identifier == other.identifier
 
     def __repr__(self) -> str:
-        return f"<DebitCategory(id={self.id}, category='{self.category}')>"
+        return f"<Unit(id={self.id}, identifier={self.identifier}, kind={self.kind})>"
 
 
 class Account(base, Archivable):
     __tablename__ = "accounts"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    name = Column(String, nullable=False, unique=True)
-    iban = Column(String, nullable=False, unique=True)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    type: Mapped[AccountType] = mapped_column(SqlEnum(AccountType), nullable=False)
+    iban: Mapped[str | None] = mapped_column(String, nullable=True)
+    parent_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id"))
+    parent: Mapped["Account | None"] = relationship("Account", remote_side=[id], back_populates="children")
+    children: Mapped[list["Account"]] = relationship("Account", back_populates="parent")
 
-    transactions = relationship("Transaction", back_populates="account")
-
+    # Globally unique rather than unique-per-parent: lookup is by bare name, and
+    # a (name, parent_id) constraint would not constrain roots at all, since SQL
+    # treats NULL parents as distinct. Scoping names to their parent needs
+    # qualified paths (Assets:Checking:Holiday) to look up by.
     __table_args__ = (
         UniqueConstraint("name", name="uq_account_name"),
         UniqueConstraint("iban", name="uq_account_iban"),
     )
 
     def __eq__(self, other) -> bool:
-        return self.id == other.id and \
-               self.name == other.name and \
-               self.iban == other.iban
+        return isinstance(other, Account) and self.id == other.id and self.name == other.name and self.iban == other.iban
 
     def __repr__(self) -> str:
-        return f"<Account(id={self.id}, name={self.name}, iban={self.iban})>"
+        return f"<Account(id={self.id}, name={self.name}, type={self.type}, iban={self.iban})>"
 
 
-class Transaction(base, Archivable):
-    __tablename__ = "transactions"
-    __table_args__ = (
-        UniqueConstraint("hash", name="uq_transaction_hash"),
+class JournalEntry(base, Archivable):
+    __tablename__ = "journal_entries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    entry_date: Mapped[date] = mapped_column(Date, nullable=False)
+    reference: Mapped[str] = mapped_column(String, nullable=False)
+    description: Mapped[str] = mapped_column(String, nullable=False, default="")
+    lines: Mapped[list["JournalLine"]] = relationship(
+        "JournalLine", back_populates="entry", cascade="all, delete-orphan"
     )
-    id = Column(Integer, primary_key=True)
-    account_id = Column(Integer, ForeignKey("accounts.id"))
-    hash = Column(String(64), nullable=False, unique=True)
-    description = Column(String, nullable=False)
-    date = Column(Date, nullable=False)
-    amount = Column(Numeric(12, 2), nullable=False)
 
-    account = relationship("Account")
+    __table_args__ = (
+        UniqueConstraint("reference", name="uq_journal_entry_reference"),
+    )
 
     def __eq__(self, other) -> bool:
-        return self.id == other.id and \
-               self.account_id == other.account_id and \
-               self.description == other.description and \
-               self.date == other.date and \
-               self.amount == other.amount and \
-               self.hash == other.hash
+        return isinstance(other, JournalEntry) and self.id == other.id and self.reference == other.reference
 
+    def __repr__(self) -> str:
+        return f"<JournalEntry(id={self.id}, reference={self.reference}, date={self.entry_date})>"
+
+
+class JournalLine(base, Archivable):
+    __tablename__ = "journal_lines"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    entry_id: Mapped[int] = mapped_column(ForeignKey("journal_entries.id"), nullable=False)
+    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"), nullable=False)
+    unit_id: Mapped[int] = mapped_column(ForeignKey("units.id"), nullable=False)
+    quantity: Mapped[Decimal] = mapped_column(QUANTITY, nullable=False)
+    # What one unit cost in the base currency at the time of the transaction.
+    # Cash in the base currency is 1, which is what lets cash and asset lines
+    # share one shape.
+    unit_price: Mapped[Decimal] = mapped_column(QUANTITY, nullable=False)
+    is_debit: Mapped[bool] = mapped_column(Boolean, nullable=False)
+
+    entry: Mapped["JournalEntry"] = relationship("JournalEntry", back_populates="lines")
+    account: Mapped["Account"] = relationship("Account")
+    unit: Mapped["Unit"] = relationship("Unit")
+
+    __table_args__ = (
+        UniqueConstraint("entry_id", "account_id", "unit_id", "is_debit", name="uq_journal_line_entry_account_unit_side"),
+    )
+
+    @property
+    def value(self) -> Decimal:
+        return self.quantity * self.unit_price
+
+    def __eq__(self, other) -> bool:
+        return (
+            isinstance(other, JournalLine)
+            and self.id == other.id
+            and self.entry_id == other.entry_id
+            and self.account_id == other.account_id
+            and self.unit_id == other.unit_id
+            and self.quantity == other.quantity
+            and self.unit_price == other.unit_price
+            and self.is_debit == other.is_debit
+        )
+
+    def __repr__(self) -> str:
+        side = "dr" if self.is_debit else "cr"
+        return f"<JournalLine(id={self.id}, entry_id={self.entry_id}, account_id={self.account_id}, {side} {self.quantity}@{self.unit_price})>"
+
+
+class Price(base):
+    """Fetched valuation for a unit on a date. Written by price plugins, read
+    only by reporting — never by transaction recording."""
+
+    __tablename__ = "prices"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    unit_id: Mapped[int] = mapped_column(ForeignKey("units.id"), nullable=False)
+    price_date: Mapped[date] = mapped_column(Date, nullable=False)
+    price: Mapped[Decimal] = mapped_column(QUANTITY, nullable=False)
+    source: Mapped[str] = mapped_column(String, nullable=False)
+
+    unit: Mapped["Unit"] = relationship("Unit")
+
+    __table_args__ = (
+        UniqueConstraint("unit_id", "price_date", "source", name="uq_price_unit_date_source"),
+    )
+
+    def __eq__(self, other) -> bool:
+        return (
+            isinstance(other, Price)
+            and self.unit_id == other.unit_id
+            and self.price_date == other.price_date
+            and self.source == other.source
+        )
+
+    def __repr__(self) -> str:
+        return f"<Price(unit_id={self.unit_id}, date={self.price_date}, price={self.price})>"

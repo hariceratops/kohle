@@ -45,6 +45,9 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest==9.0.2",
+    # The account-cycle regression guards against a hang, so without a timeout
+    # a regression blocks an unattended run instead of failing it.
+    "pytest-timeout==2.4.0",
     "iniconfig==2.3.0",
     "pluggy==1.6.0"
 ]
@@ -61,4 +64,8 @@ kohle-deutsche-bank = "kohle.app.plugins.kohle_deutsche_bank_importer:DeustcheBa
 [tool.setuptools.packages.find]
 where = ["."]
 exclude = ["tests*","archive*"]
+
+[tool.ruff.lint.per-file-ignores]
+# assert is how pytest expresses assertions
+"tests/**" = ["S101"]
 
