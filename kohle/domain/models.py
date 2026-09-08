@@ -119,10 +119,6 @@ class Account(base, Archivable):
         UniqueConstraint("iban", name="uq_account_iban"),
     )
 
-    @property
-    def is_leaf(self) -> bool:
-        return not self.children
-
     def __eq__(self, other) -> bool:
         return isinstance(other, Account) and self.id == other.id and self.name == other.name and self.iban == other.iban
 

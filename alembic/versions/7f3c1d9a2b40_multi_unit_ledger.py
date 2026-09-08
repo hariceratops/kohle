@@ -114,8 +114,48 @@ def upgrade() -> None:
     )
 
 
+def _refuse_if_unrepresentable() -> None:
+    """The old schema cannot hold most of what the new one can. Rather than
+    drop that data quietly, refuse and say what would be lost.
+
+    Synthesising placeholder IBANs to satisfy the old NOT NULL constraint was
+    considered and rejected: it writes a value that is not the account's IBAN
+    into the column the importer matches statements on.
+    """
+    conn = op.get_bind()
+
+    def count(sql: str) -> int:
+        return conn.execute(sa.text(sql)).scalar() or 0
+
+    losses = []
+    without_iban = count("SELECT COUNT(*) FROM accounts WHERE iban IS NULL")
+    if without_iban:
+        losses.append(
+            f"{without_iban} account(s) have no IBAN, which the old schema "
+            "requires and requires to be unique"
+        )
+    children = count("SELECT COUNT(*) FROM accounts WHERE parent_id IS NOT NULL")
+    if children:
+        losses.append(f"{children} account(s) have a parent, which the old schema cannot express")
+    entries = count("SELECT COUNT(*) FROM journal_entries")
+    if entries:
+        losses.append(f"{entries} journal entrie(s) have no equivalent in the old transactions table")
+    units = count("SELECT COUNT(*) FROM units WHERE identifier <> 'EUR'")
+    if units:
+        losses.append(f"{units} non-EUR unit(s) have nowhere to go in a single-currency schema")
+
+    if losses:
+        raise RuntimeError(
+            "Refusing to downgrade: this would discard data the old schema cannot hold.\n  - "
+            + "\n  - ".join(losses)
+            + "\nBack up kohle.db and remove or export this data first if you really mean to."
+        )
+
+
 def downgrade() -> None:
     """Downgrade schema."""
+    _refuse_if_unrepresentable()
+
     op.drop_table('prices')
     op.drop_table('journal_lines')
     op.drop_table('journal_entries')
@@ -132,10 +172,12 @@ def downgrade() -> None:
         sa.UniqueConstraint('iban', name='uq_account_iban'),
         sa.UniqueConstraint('name', name='uq_account_name'),
     )
+    # No COALESCE and no parent filter: _refuse_if_unrepresentable has already
+    # established every account has an IBAN and no parent, so anything those
+    # would paper over is a bug rather than a case to handle.
     op.execute(
         "INSERT INTO accounts_old (id, name, iban, created_at, deleted_at) "
-        "SELECT id, name, COALESCE(iban, ''), created_at, deleted_at FROM accounts "
-        "WHERE parent_id IS NULL"
+        "SELECT id, name, iban, created_at, deleted_at FROM accounts"
     )
     op.drop_table('accounts')
     op.rename_table('accounts_old', 'accounts')
