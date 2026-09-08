@@ -297,6 +297,50 @@ def test_record_rejects_from_price_without_from_unit(session_factory: sessionmak
     assert "--from-price requires --from-unit" in result.output
 
 
+def test_record_rejects_to_unit_without_to_price(session_factory: sessionmaker) -> None:
+    # Regression guard: --to-unit alone must not silently default the price
+    # to 1 — that books a security at a nonsense price and still balances.
+    runner = CliRunner()
+    runner.invoke(cli, ["add-account", "Checking", "--type", "asset"], obj=session_factory)
+    runner.invoke(cli, ["add-account", "Broker", "--type", "asset"], obj=session_factory)
+    runner.invoke(cli, ["add-unit", "IE00B4L5Y983", "Core MSCI World"], obj=session_factory)
+
+    result = runner.invoke(
+        cli,
+        [
+            "record", "2026-03-06", "Buy ETF", "10",
+            "--from", "Checking", "--to", "Broker",
+            "--to-unit", "IE00B4L5Y983",
+        ],
+        obj=session_factory,
+    )
+
+    assert result.exit_code == 2
+    assert "--to-unit requires --to-price" in result.output
+
+
+def test_record_rejects_from_unit_without_from_price(session_factory: sessionmaker) -> None:
+    # Regression guard, sale direction: --from-unit alone must not silently
+    # default the price to 1 either.
+    runner = CliRunner()
+    runner.invoke(cli, ["add-account", "Broker", "--type", "asset"], obj=session_factory)
+    runner.invoke(cli, ["add-account", "Checking", "--type", "asset"], obj=session_factory)
+    runner.invoke(cli, ["add-unit", "IE00B4L5Y983", "Core MSCI World"], obj=session_factory)
+
+    result = runner.invoke(
+        cli,
+        [
+            "record", "2026-04-20", "Sell ETF", "10",
+            "--from", "Broker", "--to", "Checking",
+            "--from-unit", "IE00B4L5Y983",
+        ],
+        obj=session_factory,
+    )
+
+    assert result.exit_code == 2
+    assert "--from-unit requires --from-price" in result.output
+
+
 def test_record_split_posts_a_three_way_shared_expense(session_factory: sessionmaker) -> None:
     runner = CliRunner()
     runner.invoke(cli, ["add-account", "Checking", "--type", "asset"], obj=session_factory)

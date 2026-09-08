@@ -237,9 +237,13 @@ def record_cmd(
 
     cross = None
     if from_unit is not None:
-        cross = CrossUnitLine(from_unit, from_price if from_price is not None else Decimal(1), is_debit=False)
+        if from_price is None:
+            raise click.BadParameter("--from-unit requires --from-price")
+        cross = CrossUnitLine(from_unit, from_price, is_debit=False)
     elif to_unit is not None:
-        cross = CrossUnitLine(to_unit, to_price if to_price is not None else Decimal(1), is_debit=True)
+        if to_price is None:
+            raise click.BadParameter("--to-unit requires --to-price")
+        cross = CrossUnitLine(to_unit, to_price, is_debit=True)
 
     record = RecordSimpleEntry(make_session())
     res = record.execute(entry_date.date(), description, quantity, from_account, to_account, cross)
