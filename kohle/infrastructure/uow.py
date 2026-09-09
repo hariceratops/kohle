@@ -22,7 +22,6 @@ class DbTransaction(Generic[T, E]):
         try:
             result = use_case(self.ctx)
             if result.is_ok:
-                self.session.add(self.ctx.transaction_group)
                 for op in self.ctx.transaction_steps:
                     self.session.add(op)
                 self.session.commit()

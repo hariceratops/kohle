@@ -10,7 +10,6 @@ def crud_create(fn):
             entity = result.unwrap()
             ctx.record_transaction_step(
                 Operation(
-                    group_id = ctx.transaction_group.id,
                     entity_type = entity.__tablename__,
                     entity_id = entity.id,
                     action = "create",
