@@ -1,10 +1,12 @@
-from sqlalchemy.orm import Session
-from sqlalchemy.exc import IntegrityError
-from typing import Callable, List, TypeVar
-from kohle.core.result import Result
-from kohle.infrastructure.infra_errors import InfrastructureError, UniqueViolation
-from kohle.domain.models import Operation, OperationGroup
+from collections.abc import Callable
+from typing import TypeVar
 
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from kohle.core.result import Result
+from kohle.domain.models import Operation, OperationGroup
+from kohle.infrastructure.infra_errors import InfrastructureError, UniqueViolation
 
 T = TypeVar("T")
 
@@ -14,7 +16,7 @@ class DbTransactionContext:
         self.transaction_group = OperationGroup()
         self.session.add(self.transaction_group)
         self.session.flush()
-        self.transaction_steps: List[Operation] = []
+        self.transaction_steps: list[Operation] = []
 
     def record_transaction_step(self, op: Operation):
         self.transaction_steps.append(op)
