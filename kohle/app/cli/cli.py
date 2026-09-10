@@ -338,9 +338,6 @@ def balance_cmd(make_session, account_name: str):
 @cli.command()
 @click.pass_obj
 def list_operations_cmd(make_session):
-    # Every read-only command leaves an empty OperationGroup behind
-    # (DbTransactionContext creates and flushes one unconditionally), so
-    # gaps in the `group` column are expected until issue 011 lands.
     list_operations = ListOperations(make_session())
     res = list_operations.execute()
     if res.is_err:
