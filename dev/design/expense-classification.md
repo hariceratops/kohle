@@ -622,6 +622,13 @@ slice is rewriting the loop regardless, and `post_entry` is literally
 `validate_lines` then `add_journal_entry_service` in that order, so the
 substitution is exact.
 
+**Landed in 013, not 015** (recorded during implementation). 013 is what adds
+`post_entry`'s `counterparty` parameter, and the import loop is its only
+caller that passes one — leaving the substitution to 015 would have shipped a
+parameter with no call site for a slice. The substitution being exact is what
+makes moving it harmless. 015 therefore inherits a loop that already posts
+through `post_entry` and only adds the matcher and the classification insert.
+
 **A matched rule whose account has since gained a child fails the whole
 import**, with `PostingToNonLeafAccount` naming the account id. `AddRule`
 already refuses non-leaf targets (§4.2), so this requires an `add-account
@@ -1260,9 +1267,9 @@ is wanted, it is a small follow-up and this is the note saying so.
 
 | Issue | Lands |
 |---|---|
-| 013 counterparty on imported entries | `JournalEntry` columns + migration (§3.1, §8); `Counterparty` (§3.2); extended plugin contract and its dtype clause (§3.3); DB importer fix (§3.4); `entries-in-period` column (§3.5); `post_entry` gains the parameter |
+| 013 counterparty on imported entries | `JournalEntry` columns + migration (§3.1, §8); `Counterparty` (§3.2); extended plugin contract and its dtype clause (§3.3); DB importer fix (§3.4); `entries-in-period` column (§3.5); `post_entry` gains the parameter, and the import loop routes through it (§5.3); `_optional_str` |
 | 014 rules from the CLI | `Rule` + migration (§4.1, §8); `rule_services.py`; `AddRule`/`ListRules`/`RemoveRule` (§4.2); regex validation at creation (§2.1); ordering (§2.3); soft delete + `crud_delete` (§4.3, §7.2) |
-| 015 classify and record | `Classification` + migration (§2.2, §8); `classification_services.py`; the matcher (§5.4); the rewritten `ImportStatement` loop through `post_entry` (§5.3); the group seam (§5.1–5.2) |
+| 015 classify and record | `Classification` + migration (§2.2, §8); `classification_services.py`; the matcher (§5.4); the matching and classification insert in the `ImportStatement` loop (§5.3); the group seam (§5.1–5.2) |
 | 016 list unclassified | `unclassified_classifications_service`; `UnclassifiedLine` + `ListUnclassified` (§6.3); the `final_account_id` predicate (§6.1); strict bucket lookup (§6.2) |
 | 017 reclassify | `Reclassify` (§7.1); `set_classification_outcome_service` + `crud_update` (§7.2); `NoClassificationForEntry` |
 
