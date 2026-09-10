@@ -107,6 +107,9 @@ kohle-cli list-operations                             # the audit trail
 an account's whole subtree. There is no market valuation: without a price
 feed the only value information available is what was paid.
 
+`entries-in-period` shows the counterparty an imported line came from, or `-`
+for entries made by hand, which have none.
+
 A failing command exits non-zero and writes to stderr, so `kohle-cli ... ||
 handle-failure` works and a redirect captures results rather than errors.
 
@@ -138,7 +141,26 @@ class StatementImporterPlugin(ABC):
         pass
 ```
 
-The returned frame carries `description`, `amount`, `date` and `iban`, and
-describes cash movements only. Importing a broker statement needs unit and
-price on each row, which this contract cannot yet express — see
+The returned frame carries five columns and describes cash movements only:
+
+| column              | dtype    | meaning                                |
+|---------------------|----------|----------------------------------------|
+| `description`       | string   | free text from the statement           |
+| `amount`            | float    | signed; negative is money leaving      |
+| `date`              | datetime | booking or value date, plugin's choice |
+| `counterparty_name` | string   | who the other side was                 |
+| `counterparty_iban` | string   | the other side's IBAN                  |
+
+`counterparty_iban` is the *other* side's IBAN, not the imported account's.
+
+A format that carries no counterparty at all still declares the column, empty
+(`df.assign(counterparty_iban=pd.Series(pd.NA, index=df.index, dtype="string"))`).
+Missing it is a hard failure naming the column, because a counterparty that
+silently goes missing is what makes a classification rule stop matching with
+nothing saying why. Cast the text columns with `.astype("string")`: `read_csv`
+types a column that is empty on every row as `float64`, which the schema check
+rejects.
+
+Importing a broker statement needs unit and price on each row, which this
+contract cannot yet express — see
 `dev/inbox/importer-plugins-for-assets.md`.

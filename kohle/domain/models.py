@@ -133,6 +133,12 @@ class JournalEntry(base, Archivable):
     entry_date: Mapped[date] = mapped_column(Date, nullable=False)
     reference: Mapped[str] = mapped_column(String, nullable=False)
     description: Mapped[str] = mapped_column(String, nullable=False, default="")
+    # What the bank said about the other side of an imported movement. NULL for
+    # hand-entered rows, which have no counterparty concept — a placeholder like
+    # '' or 'unknown' would be a value a classification rule could match by
+    # accident, and NULL cannot be.
+    counterparty_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    counterparty_iban: Mapped[str | None] = mapped_column(String, nullable=True)
     lines: Mapped[list["JournalLine"]] = relationship(
         "JournalLine", back_populates="entry", cascade="all, delete-orphan"
     )

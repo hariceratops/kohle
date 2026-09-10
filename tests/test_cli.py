@@ -16,7 +16,14 @@ from click.testing import CliRunner
 from sqlalchemy.orm import sessionmaker
 
 from kohle.app.cli.cli import cli
-from kohle.domain.models import Account, AccountType, Operation, UnitKind
+from kohle.domain.models import (
+    Account,
+    AccountType,
+    JournalEntry,
+    JournalLine,
+    Operation,
+    UnitKind,
+)
 from kohle.services.journal_services import LineSpec
 from kohle.use_cases.accounts import AddAccount
 from kohle.use_cases.journal import RecordJournalEntry
@@ -652,3 +659,64 @@ def test_list_operations_is_read_only(session_factory: sessionmaker) -> None:
         session.close()
 
     assert after == before
+
+
+def test_entries_in_period_shows_the_counterparty(session_factory: sessionmaker) -> None:
+    # Issue 013 wants the counterparty confirmable without opening the
+    # database. Seeded through the ORM rather than a CLI command because only
+    # an import produces one, and that needs a plugin.
+    runner = CliRunner()
+    runner.invoke(cli, ["add-account", "Checking", "--type", "asset"], obj=session_factory)
+    runner.invoke(cli, ["add-account", "Groceries", "--type", "expense"], obj=session_factory)
+
+    session = session_factory()
+    try:
+        eur = AddUnit(session).execute("EUR", "Euro", UnitKind.currency).unwrap()
+        checking = session.query(Account).filter_by(name="Checking").one()
+        groceries = session.query(Account).filter_by(name="Groceries").one()
+        entry = JournalEntry(
+            entry_date=date(2026, 3, 5),
+            reference="ref-1",
+            description="Aldi",
+            counterparty_name="ALDI SUED",
+            counterparty_iban="DE89370400440532013000",
+        )
+        entry.lines = [
+            JournalLine(account_id=groceries.id, unit_id=eur.id, quantity=Decimal(80),
+                        unit_price=Decimal(1), is_debit=True),
+            JournalLine(account_id=checking.id, unit_id=eur.id, quantity=Decimal(80),
+                        unit_price=Decimal(1), is_debit=False),
+        ]
+        session.add(entry)
+        session.commit()
+    finally:
+        session.close()
+
+    result = runner.invoke(
+        cli, ["entries-in-period", "Checking", "2026-03-01", "2026-04-01"], obj=session_factory
+    )
+
+    assert result.exit_code == 0
+    assert "counterparty" in result.output.splitlines()[0]
+    assert "ALDI SUED" in result.output
+
+
+def test_entries_in_period_renders_a_missing_counterparty_as_dash(
+    session_factory: sessionmaker,
+) -> None:
+    runner = CliRunner()
+    runner.invoke(cli, ["add-account", "Checking", "--type", "asset"], obj=session_factory)
+    runner.invoke(cli, ["add-account", "Groceries", "--type", "expense"], obj=session_factory)
+    runner.invoke(
+        cli,
+        ["record", "2026-03-01", "Aldi", "80", "--from", "Checking", "--to", "Groceries"],
+        obj=session_factory,
+    )
+
+    result = runner.invoke(
+        cli, ["entries-in-period", "Checking", "2026-02-01", "2026-04-01"], obj=session_factory
+    )
+
+    assert result.exit_code == 0
+    entry_row = next(line for line in result.output.splitlines() if "Aldi" in line)
+    assert entry_row.split() == ["2026-03-01", "Aldi", "-", "cr", "80.00", "EUR", "80.00"]

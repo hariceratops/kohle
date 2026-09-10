@@ -30,6 +30,20 @@ class LineSpec:
         return self.quantity * self.unit_price
 
 
+@dataclass(frozen=True, slots=True)
+class Counterparty:
+    """Who the bank said the other side of a movement was.
+
+    One value rather than two loose `str | None` parameters: the pair travels
+    through the dataframe row, `post_entry`, this service and the rule matcher,
+    and as separate arguments transposing name and iban type-checks and
+    silently matches the wrong patterns against the wrong fields (design §3.2).
+    """
+
+    name: str | None
+    iban: str | None
+
+
 @crud_create
 def add_journal_entry_service(
     ctx: DbTransactionContext,
@@ -37,9 +51,16 @@ def add_journal_entry_service(
     reference: str,
     description: str,
     lines: Iterable[LineSpec],
+    counterparty: Counterparty | None = None,
 ) -> Result[JournalEntry, JournalError]:
     def op(session: Session) -> JournalEntry:
-        entry = JournalEntry(entry_date=entry_date, reference=reference, description=description)
+        entry = JournalEntry(
+            entry_date=entry_date,
+            reference=reference,
+            description=description,
+            counterparty_name=counterparty.name if counterparty else None,
+            counterparty_iban=counterparty.iban if counterparty else None,
+        )
         entry.lines = [
             JournalLine(
                 account_id=line.account_id,

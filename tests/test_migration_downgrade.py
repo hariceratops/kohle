@@ -17,6 +17,11 @@ from alembic import command
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# The revision the multi-unit ledger migration replaced. Downgrading *to* it is
+# what undoes that migration, and unlike "-1" it keeps meaning that as newer
+# revisions land on top of head.
+BEFORE_MULTI_UNIT = "62313518700b"
+
 
 @pytest.fixture
 def migrated_db(tmp_path: Path) -> Iterator[tuple[Config, Path]]:
@@ -58,7 +63,7 @@ def test_downgrade_round_trips_when_every_account_fits_the_old_schema(migrated_d
         "VALUES (1, 'Checking', 'asset', 'DE1', NULL, '2026-01-01')",
     )
 
-    command.downgrade(config, "-1")
+    command.downgrade(config, BEFORE_MULTI_UNIT)
     assert "transactions" in _tables(db)
     assert "journal_lines" not in _tables(db)
 
@@ -81,7 +86,7 @@ def test_downgrade_refuses_when_an_account_has_no_iban(migrated_db) -> None:
     # Two IBAN-less accounts is what used to collapse to a duplicate '' and
     # kill the migration part-way through.
     with pytest.raises(RuntimeError) as exc_info:
-        command.downgrade(config, "-1")
+        command.downgrade(config, BEFORE_MULTI_UNIT)
     assert "no IBAN" in str(exc_info.value)
     assert "journal_lines" in _tables(db), "refusal must leave the schema untouched"
 
@@ -97,7 +102,7 @@ def test_downgrade_refuses_rather_than_dropping_child_accounts(migrated_db) -> N
     )
 
     with pytest.raises(RuntimeError) as exc_info:
-        command.downgrade(config, "-1")
+        command.downgrade(config, BEFORE_MULTI_UNIT)
     assert "parent" in str(exc_info.value)
     assert "journal_lines" in _tables(db)
 
@@ -115,8 +120,53 @@ def test_downgrade_refuses_rather_than_dropping_journal_entries(migrated_db) -> 
     )
 
     with pytest.raises(RuntimeError) as exc_info:
-        command.downgrade(config, "-1")
+        command.downgrade(config, BEFORE_MULTI_UNIT)
     assert "journal entrie" in str(exc_info.value)
+
+
+def _seed_entry(db: Path, entry_values: str) -> None:
+    _exec(
+        db,
+        "INSERT INTO accounts (id, name, type, iban, parent_id, created_at) "
+        "VALUES (1, 'Checking', 'asset', 'DE1', NULL, '2026-01-01')",
+        "INSERT INTO units (id, kind, identifier, name, created_at) "
+        "VALUES (1, 'currency', 'EUR', 'Euro', '2026-01-01')",
+        "INSERT INTO journal_entries "
+        "(id, entry_date, reference, description, counterparty_name, counterparty_iban, created_at) "
+        "VALUES " + entry_values,
+    )
+
+
+def test_counterparty_columns_round_trip_when_no_entry_carries_one(migrated_db) -> None:
+    config, db = migrated_db
+    _seed_entry(db, "(1, '2026-03-01', 'ref-1', 'Aldi', NULL, NULL, '2026-01-01')")
+
+    command.downgrade(config, "-1")
+    conn = sqlite3.connect(db)
+    columns = {r[1] for r in conn.execute("PRAGMA table_info(journal_entries)")}
+    conn.close()
+    assert "counterparty_name" not in columns
+    assert "counterparty_iban" not in columns
+
+    command.upgrade(config, "head")
+    conn = sqlite3.connect(db)
+    assert conn.execute(
+        "SELECT description, counterparty_name FROM journal_entries"
+    ).fetchall() == [("Aldi", None)]
+    conn.close()
+
+
+def test_downgrade_refuses_rather_than_dropping_a_counterparty(migrated_db) -> None:
+    config, db = migrated_db
+    _seed_entry(db, "(1, '2026-03-01', 'ref-1', 'Aldi', 'ALDI SUED', NULL, '2026-01-01')")
+
+    with pytest.raises(RuntimeError) as exc_info:
+        command.downgrade(config, "-1")
+    assert "counterparty" in str(exc_info.value)
+    conn = sqlite3.connect(db)
+    columns = {r[1] for r in conn.execute("PRAGMA table_info(journal_entries)")}
+    conn.close()
+    assert "counterparty_name" in columns, "refusal must leave the schema untouched"
 
 
 def test_downgrade_refuses_rather_than_dropping_non_eur_units(migrated_db) -> None:
@@ -128,5 +178,5 @@ def test_downgrade_refuses_rather_than_dropping_non_eur_units(migrated_db) -> No
     )
 
     with pytest.raises(RuntimeError) as exc_info:
-        command.downgrade(config, "-1")
+        command.downgrade(config, BEFORE_MULTI_UNIT)
     assert "non-EUR unit" in str(exc_info.value)

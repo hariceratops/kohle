@@ -292,6 +292,7 @@ def entries_in_period(make_session, account_name, start, end):
         {
             "date": line.entry.entry_date,
             "description": line.entry.description,
+            "counterparty": line.entry.counterparty_name or "-",
             "side": "dr" if line.is_debit else "cr",
             "quantity": line.quantity,
             "unit": line.unit.identifier,

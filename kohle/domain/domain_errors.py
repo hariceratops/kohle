@@ -153,10 +153,20 @@ class EndDatePrecedesStartDateError(Exception):
 class DataframeMissingColumn:
     columns: list[str]
 
+    # The plugin contract has no version negotiation, so this message is its
+    # whole enforcement mechanism: it is what a plugin author sees on the first
+    # import after getting the frame wrong.
+    def __str__(self) -> str:
+        return f"Statement is missing required column(s): {', '.join(self.columns)}"
+
 
 @dataclass
 class DataframeColumnTypeMismatch:
     mismatches: dict[str, str]  # column -> actual dtype
+
+    def __str__(self) -> str:
+        wrong = ", ".join(f"{column} is {dtype}" for column, dtype in self.mismatches.items())
+        return f"Statement column(s) have the wrong type: {wrong}"
 
 
 DataframeValidationError = DataframeMissingColumn | DataframeColumnTypeMismatch

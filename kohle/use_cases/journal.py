@@ -41,6 +41,7 @@ from kohle.services.account_services import (
     get_account_by_name_service,
 )
 from kohle.services.journal_services import (
+    Counterparty,
     LineSpec,
     account_lines_service,
     add_journal_entry_service,
@@ -86,6 +87,19 @@ def parse_date(input_date: str) -> Result[date, InvalidDateError]:
         return Result.err(InvalidDateError(input_date))
 
 
+def _optional_str(value) -> str | None:
+    """A statement cell as either text or nothing.
+
+    `to_dict("records")` hands back `pd.NA` for a missing string cell, which
+    must not reach a `String` column; `''` and `'   '` are the same fact as
+    absent, and a placeholder would be a value a rule could match (design §3.1).
+    """
+    if pd.isna(value):
+        return None
+    text = str(value).strip()
+    return text or None
+
+
 def _get_or_create_account(
     ctx: DbTransactionContext, name: str, account_type: AccountType
 ):
@@ -122,11 +136,12 @@ def post_entry(
     reference: str,
     description: str,
     lines: list[LineSpec],
+    counterparty: Counterparty | None = None,
 ) -> Result[JournalEntry, JournalError]:
     invalid = validate_lines(ctx, lines)
     if invalid:
         return Result.err(invalid)
-    return add_journal_entry_service(ctx, entry_date, reference, description, lines)
+    return add_journal_entry_service(ctx, entry_date, reference, description, lines, counterparty)
 
 
 class RecordJournalEntry(UnitOfWork[JournalEntry, JournalError]):
@@ -297,7 +312,8 @@ class ImportStatement(UnitOfWork[int, ImportStatementError]):
                 "description": "string",
                 "amount": "float",
                 "date": "datetime",
-                "iban": "string",
+                "counterparty_name": "string",
+                "counterparty_iban": "string",
             }
             invalid_df = validate_df_schema(df, schema)
             if invalid_df:
@@ -367,12 +383,12 @@ class ImportStatement(UnitOfWork[int, ImportStatementError]):
                         is_debit=amount < 0,
                     ),
                 ]
-                invalid = validate_lines(ctx, lines)
-                if invalid:
-                    return Result.err(invalid)
-
-                entry_res = add_journal_entry_service(
-                    ctx, row["date"], row["reference"], row["description"], lines
+                counterparty = Counterparty(
+                    _optional_str(row["counterparty_name"]),
+                    _optional_str(row["counterparty_iban"]),
+                )
+                entry_res = post_entry(
+                    ctx, row["date"], row["reference"], row["description"], lines, counterparty
                 )
                 if entry_res.is_err:
                     return Result.err(entry_res.unwrap_err())
