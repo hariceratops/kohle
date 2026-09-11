@@ -1,9 +1,11 @@
-from sqlalchemy.orm import Session
+from collections.abc import Iterable
+
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from kohle.core.result import Result
 from kohle.domain.domain_errors import ClassificationError
-from kohle.domain.models import Classification
-from kohle.infrastructure.crud import crud_create
+from kohle.domain.models import Classification, JournalEntry
+from kohle.infrastructure.crud import crud_create, crud_retrieve
 from kohle.infrastructure.transaction_context import DbTransactionContext
 
 
@@ -31,5 +33,36 @@ def add_classification_service(
         )
         session.add(classification)
         return classification
+
+    return ctx.run(op).map_err(lambda err: ClassificationError(str(err)))
+
+
+@crud_retrieve
+def unclassified_classifications_service(
+    ctx: DbTransactionContext, bucket_account_ids: Iterable[int]
+) -> Result[list[Classification], ClassificationError]:
+    """Classifications still sitting on one of the unclassified buckets.
+
+    Filters on final_account_id rather than matched_rule_id IS NULL: a
+    corrected fall-through row still has no matched rule, but its final
+    account has moved off the bucket, and that move — not the rule
+    attribution — is what makes it no longer unclassified (design §6.1).
+    """
+
+    def op(session: Session) -> list[Classification]:
+        return (
+            session.query(Classification)
+            .join(JournalEntry, Classification.journal_entry_id == JournalEntry.id)
+            .options(
+                # joinedload for the scalar, selectinload for the collection:
+                # a joinedload across both would cartesian-expand the row set
+                # for SQLAlchemy to then de-duplicate, which is wasted I/O.
+                joinedload(Classification.final_account),
+                selectinload(Classification.entry).selectinload(JournalEntry.lines),
+            )
+            .filter(Classification.final_account_id.in_(list(bucket_account_ids)))
+            .order_by(JournalEntry.entry_date.asc(), Classification.journal_entry_id.asc())
+            .all()
+        )
 
     return ctx.run(op).map_err(lambda err: ClassificationError(str(err)))

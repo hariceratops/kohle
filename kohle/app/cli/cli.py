@@ -8,6 +8,7 @@ from kohle.domain.domain_errors import AccountNotFoundError
 from kohle.domain.models import DEFAULT_RULE_PRIORITY, AccountType, UnitKind
 from kohle.plugin.plugin_manager import load_plugins
 from kohle.use_cases.accounts import AddAccount, ListAccount, ListChildAccounts
+from kohle.use_cases.classification import ListUnclassified
 from kohle.use_cases.journal import (
     BASE_CURRENCY,
     CrossUnitLine,
@@ -411,6 +412,33 @@ def remove_rule_cmd(make_session, rule_id: int):
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
     click.echo(f"Removed rule {rule_id}")
+
+
+@cli.command()
+@click.pass_obj
+def list_unclassified_cmd(make_session):
+    list_unclassified = ListUnclassified(make_session())
+    res = list_unclassified.execute()
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    lines = res.unwrap()
+    if not lines:
+        click.echo("No unclassified lines")
+        return
+    # entry_id first, matching list-rules printing the id remove-rule takes:
+    # it is reclassify's handle onto the line (design §2.4).
+    rows = [
+        {
+            "entry_id": line.entry_id,
+            "date": line.entry_date,
+            "description": line.description,
+            "counterparty": line.counterparty_name or "-",
+            "amount": line.amount,
+            "account": line.account_name,
+        }
+        for line in lines
+    ]
+    click.echo(tabulate(rows, headers="keys", floatfmt=".2f"))
 
 
 if __name__ == "__main__":

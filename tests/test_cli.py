@@ -19,9 +19,11 @@ from kohle.app.cli.cli import cli
 from kohle.domain.models import (
     Account,
     AccountType,
+    Classification,
     JournalEntry,
     JournalLine,
     Operation,
+    OperationGroup,
     UnitKind,
 )
 from kohle.services.journal_services import LineSpec
@@ -791,3 +793,87 @@ def test_remove_rule_on_an_unknown_id_reports_the_miss(session_factory: sessionm
 
     assert result.exit_code != 0
     assert "Rule id 42 not found" in result.output
+
+
+def test_list_unclassified_on_an_empty_ledger_prints_the_empty_message(
+    session_factory: sessionmaker,
+) -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(cli, ["list-unclassified"], obj=session_factory)
+
+    assert result.exit_code == 0
+    assert result.output.strip() == "No unclassified lines"
+
+
+def test_list_unclassified_is_read_only_and_leaves_no_group_behind(
+    session_factory: sessionmaker,
+) -> None:
+    # Bucket resolution has to use the strict lookup, not
+    # _get_or_create_account: with the lazy OperationGroup behaviour from
+    # issue 011, a read-only command that wrote anything would leave a group.
+    runner = CliRunner()
+
+    result = runner.invoke(cli, ["list-unclassified"], obj=session_factory)
+    assert result.exit_code == 0
+
+    session = session_factory()
+    try:
+        assert session.query(Account).count() == 0
+        assert session.query(OperationGroup).count() == 0
+    finally:
+        session.close()
+
+
+def test_list_unclassified_shows_the_fallen_through_line(session_factory: sessionmaker) -> None:
+    # Seeded through the ORM rather than through import-statement: only an
+    # import produces a classification, and that needs a plugin.
+    runner = CliRunner()
+    runner.invoke(cli, ["add-account", "Checking", "--type", "asset"], obj=session_factory)
+    runner.invoke(
+        cli, ["add-account", "Unclassified Expense", "--type", "expense"], obj=session_factory
+    )
+    runner.invoke(
+        cli, ["add-account", "Unclassified Income", "--type", "income"], obj=session_factory
+    )
+
+    session = session_factory()
+    try:
+        eur = AddUnit(session).execute("EUR", "Euro", UnitKind.currency).unwrap()
+        checking = session.query(Account).filter_by(name="Checking").one()
+        bucket = session.query(Account).filter_by(name="Unclassified Expense").one()
+        entry = JournalEntry(
+            entry_date=date(2026, 3, 5),
+            reference="ref-1",
+            description="Unknown shop",
+            counterparty_name="SOME SHOP",
+            counterparty_iban=None,
+        )
+        entry.lines = [
+            JournalLine(account_id=bucket.id, unit_id=eur.id, quantity=Decimal(80),
+                        unit_price=Decimal(1), is_debit=True),
+            JournalLine(account_id=checking.id, unit_id=eur.id, quantity=Decimal(80),
+                        unit_price=Decimal(1), is_debit=False),
+        ]
+        session.add(entry)
+        session.flush()
+        session.add(Classification(
+            journal_entry_id=entry.id,
+            proposed_account_id=bucket.id,
+            matched_rule_id=None,
+            final_account_id=bucket.id,
+        ))
+        session.commit()
+    finally:
+        session.close()
+
+    result = runner.invoke(cli, ["list-unclassified"], obj=session_factory)
+
+    assert result.exit_code == 0
+    assert result.output.splitlines()[0].split() == [
+        "entry_id", "date", "description", "counterparty", "amount", "account",
+    ]
+    row = next(line for line in result.output.splitlines() if "Unknown" in line)
+    assert row.split() == [
+        "1", "2026-03-05", "Unknown", "shop", "SOME", "SHOP", "80.00", "Unclassified", "Expense",
+    ]

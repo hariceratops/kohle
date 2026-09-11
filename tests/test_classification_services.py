@@ -19,7 +19,10 @@ from kohle.domain.domain_errors import ClassificationError
 from kohle.domain.models import AccountType, Classification, UnitKind
 from kohle.infrastructure.transaction_context import DbTransactionContext
 from kohle.services.account_services import add_account_service
-from kohle.services.classification_services import add_classification_service
+from kohle.services.classification_services import (
+    add_classification_service,
+    unclassified_classifications_service,
+)
 from kohle.services.journal_services import LineSpec, add_journal_entry_service
 from kohle.services.rule_services import add_rule_service
 from kohle.services.unit_services import add_unit_service
@@ -118,11 +121,36 @@ def test_one_entry_cannot_hold_two_classifications(session: Session) -> None:
     assert session.query(Classification).filter(Classification.journal_entry_id == entry_id).count() <= 1
 
 
-@pytest.mark.skip(reason="scaffold: issues 016, 017")
-def test_reading_and_correcting_classifications() -> None:
-    # TODO(016) — unclassified_classifications_service returns rows whose
-    #   final_account_id is a bucket; a matched row is absent.
+def test_unclassified_classifications_returns_only_bucket_rows(session: Session) -> None:
+    ctx = DbTransactionContext(session)
+    ledger = _Ledger(ctx)
+    matched_entry_id = ledger.entry(ctx, "ref-1", ledger.groceries)
+    fallen_through_entry_id = ledger.entry(ctx, "ref-2", ledger.bucket)
 
+    add_classification_service(
+        ctx,
+        journal_entry_id=matched_entry_id,
+        proposed_account_id=ledger.groceries,
+        matched_rule_id=ledger.rule,
+        final_account_id=ledger.groceries,
+    )
+    add_classification_service(
+        ctx,
+        journal_entry_id=fallen_through_entry_id,
+        proposed_account_id=ledger.bucket,
+        matched_rule_id=None,
+        final_account_id=ledger.bucket,
+    )
+
+    result = unclassified_classifications_service(ctx, [ledger.bucket])
+
+    assert result.is_ok
+    rows = result.unwrap()
+    assert [row.journal_entry_id for row in rows] == [fallen_through_entry_id]
+
+
+@pytest.mark.skip(reason="scaffold: issue 017")
+def test_reading_and_correcting_classifications() -> None:
     # TODO(017) — set_classification_outcome_service moves final_account_id
     #   and sets corrected, leaving proposed_account_id and matched_rule_id
     #   as they were: they are the record of what the engine got wrong.

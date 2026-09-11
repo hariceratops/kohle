@@ -228,3 +228,9 @@ RecordEntryError = AccountError | UnitError | JournalError | BaseCurrencyAsCross
 AddRuleError = AccountError | RuleError | JournalError
 
 BalanceError = AccountError | JournalError
+
+# AccountError survives an infrastructure failure resolving a bucket; the one
+# AccountError case the use case actually handles — AccountNotFoundError,
+# meaning nothing has ever been imported — is swallowed into an empty list
+# rather than reaching here (design §6.2).
+ListUnclassifiedError = AccountError | ClassificationError

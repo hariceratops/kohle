@@ -156,9 +156,20 @@ matched (none, for a fall-through), where it landed, and whether a human has
 corrected it. That record is what a later classifier would learn from, which is
 why it is written from the first line classified rather than added afterwards.
 
+```bash
+kohle-cli list-unclassified
+```
+
+Lists every imported line still sitting in `Unclassified Expense` or
+`Unclassified Income` — the queue of lines that need a new rule or a manual
+correction. Each row carries enough to write a rule from it: the entry id,
+date, description, counterparty, amount and the account it landed on. Nothing
+imported yet, or everything already classified, both print `No unclassified
+lines` rather than an error; the command is read-only and creates no accounts
+and no operation group of its own.
+
 > [!NOTE]
-> Finding what fell through and correcting it are the next two slices. See
-> `dev/issues/016-list-lines-no-rule-classified.md` and
+> Correcting what `list-unclassified` finds is the next slice. See
 > `dev/issues/017-correct-a-classification-with-an-adjusting-entry.md`.
 
 ### Writing importer plugins
