@@ -161,6 +161,10 @@ class RuleNotFoundError(RuleError):
         return f"Rule id {self.rule_id} not found"
 
 
+class ClassificationError(Exception):
+    pass
+
+
 class InvalidDateError(Exception):
     def __init__(self, date_str: str) -> None:
         super().__init__()
@@ -212,7 +216,9 @@ ImportStatementError = \
         AccountNotFoundError | \
         JournalError | \
         UnitError | \
-        DataframeValidationError
+        DataframeValidationError | \
+        RuleError | \
+        ClassificationError
 
 RecordEntryError = AccountError | UnitError | JournalError | BaseCurrencyAsCrossUnit
 

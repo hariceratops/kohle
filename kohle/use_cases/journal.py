@@ -40,6 +40,7 @@ from kohle.services.account_services import (
     descendant_account_ids_service,
     get_account_by_name_service,
 )
+from kohle.services.classification_services import add_classification_service
 from kohle.services.journal_services import (
     Counterparty,
     LineSpec,
@@ -48,7 +49,9 @@ from kohle.services.journal_services import (
     existing_references_service,
     query_lines_by_period_service,
 )
+from kohle.services.rule_services import list_rules_service
 from kohle.services.unit_services import get_unit_by_identifier_service
+from kohle.use_cases.rules import compile_rules, match_rule
 from kohle.use_cases.units import get_or_create_unit
 
 BASE_CURRENCY = "EUR"
@@ -303,8 +306,9 @@ class RecordSplitEntry(UnitOfWork[JournalEntry, RecordEntryError]):
 
 
 class ImportStatement(UnitOfWork[int, ImportStatementError]):
-    """Statement rows become balanced entries against an unclassified bucket.
-    Choosing a better counterpart account is the classifier's job."""
+    """Statement rows become balanced entries, each posted to the account its
+    first matching rule names, or to an unclassified bucket when none matches.
+    Every row's decision is recorded, matched or not."""
 
     def execute(self, account_name: str, df: pd.DataFrame) -> Result[int, ImportStatementError]:
         def use_case(ctx: DbTransactionContext) -> Result[int, ImportStatementError]:
@@ -362,11 +366,29 @@ class ImportStatement(UnitOfWork[int, ImportStatementError]):
             if new_rows.empty:
                 return Result.ok(0)
 
+            # Loaded and compiled once for the whole statement: a query per row
+            # is N x M, and re.compile per row recompiles a fixed rule set.
+            rules_res = list_rules_service(ctx)
+            if rules_res.is_err:
+                return Result.err(rules_res.unwrap_err())
+            compiled = compile_rules(rules_res.unwrap())
+
             imported = 0
             for row in new_rows.to_dict("records"):
                 amount = Decimal(str(row["amount"]))
                 magnitude = abs(amount)
-                counterpart_id = expense_id if amount < 0 else income_id
+                counterparty = Counterparty(
+                    _optional_str(row["counterparty_name"]),
+                    _optional_str(row["counterparty_iban"]),
+                )
+                matched = match_rule(compiled, row["description"], counterparty)
+                # A matched rule whose account has since gained a child fails
+                # the import loudly through validate_lines, rather than falling
+                # back to the bucket: a silent fallback would leave the user's
+                # rules quietly disabled with nothing saying why.
+                counterpart_id = matched.account_id if matched else (
+                    expense_id if amount < 0 else income_id
+                )
                 lines = [
                     LineSpec(
                         account_id=account.id,
@@ -383,15 +405,25 @@ class ImportStatement(UnitOfWork[int, ImportStatementError]):
                         is_debit=amount < 0,
                     ),
                 ]
-                counterparty = Counterparty(
-                    _optional_str(row["counterparty_name"]),
-                    _optional_str(row["counterparty_iban"]),
-                )
                 entry_res = post_entry(
                     ctx, row["date"], row["reference"], row["description"], lines, counterparty
                 )
                 if entry_res.is_err:
                     return Result.err(entry_res.unwrap_err())
+
+                # Written on both paths, so what the engine decided has one
+                # place to be read from whether or not a rule fired. The two
+                # account columns hold the same value here and diverge only
+                # when a human corrects the line.
+                classification_res = add_classification_service(
+                    ctx,
+                    journal_entry_id=entry_res.unwrap().id,
+                    proposed_account_id=counterpart_id,
+                    matched_rule_id=matched.rule_id if matched else None,
+                    final_account_id=counterpart_id,
+                )
+                if classification_res.is_err:
+                    return Result.err(classification_res.unwrap_err())
                 imported += 1
 
             return Result.ok(imported)

@@ -1,4 +1,6 @@
 import re
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 
 from kohle.core.result import Result
 from kohle.domain.domain_errors import (
@@ -15,6 +17,7 @@ from kohle.services.account_services import (
     account_has_children_service,
     get_account_by_name_service,
 )
+from kohle.services.journal_services import Counterparty
 from kohle.services.rule_services import (
     add_rule_service,
     list_rules_service,
@@ -25,6 +28,49 @@ from kohle.services.rule_services import (
 # REWE SAGT DANKE and Rewe Markt GmbH are the same payee and a user writing
 # 'rewe' means both. (?-i:...) restores case sensitivity within a pattern.
 PATTERN_FLAGS = re.IGNORECASE
+
+
+@dataclass(frozen=True, slots=True)
+class CompiledRule:
+    """A rule with its pattern already compiled, carrying the two ids the
+    classification record needs. An ORM Rule cannot hold a re.Pattern, and the
+    compilation has to happen once per import rather than once per row."""
+
+    rule_id: int
+    account_id: int
+    pattern: re.Pattern[str]
+
+
+def compile_rules(rules: Iterable[Rule]) -> list[CompiledRule]:
+    """Compile a rule set in the order the caller supplies it.
+
+    Order-dependent and must not sort: `list_rules_service`'s
+    `(priority, id)` ordering is the evaluation contract, and `match_rule`
+    takes the first hit (design §2.3).
+
+    Returns a plain list rather than a Result: every pattern here compiled
+    when its rule was created, so a failure means the database was edited by
+    hand, and `re.error` propagating into the transaction boundary rolls the
+    import back with the message intact.
+    """
+    return [CompiledRule(rule.id, rule.account_id, re.compile(rule.pattern, PATTERN_FLAGS)) for rule in rules]
+
+
+def match_rule(
+    compiled: Sequence[CompiledRule], description: str, counterparty: Counterparty
+) -> CompiledRule | None:
+    """The first rule whose pattern hits the description or either counterparty
+    field, matched per field so that an anchored pattern means "this exact
+    IBAN" rather than "start and end of a blob".
+
+    Pure and session-free: making this a unit of work would open a second
+    transaction inside the import loop (design §5.2).
+    """
+    fields = (description, counterparty.name, counterparty.iban)
+    for rule in compiled:
+        if any(rule.pattern.search(field) for field in fields if field is not None):
+            return rule
+    return None
 
 
 class AddRule(UnitOfWork[Rule, AddRuleError]):

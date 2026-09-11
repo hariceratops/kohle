@@ -145,9 +145,21 @@ The target must be a leaf account, since only leaves can be posted to.
 `remove-rule` retires a rule rather than erasing it: past classifications keep
 naming the pattern that made them.
 
+Rules are applied while a statement is imported: each row takes the account its
+first matching rule names, and a row matching nothing lands in its unclassified
+bucket exactly as it did before any rule existed. If a rule's target has since
+gained a child account the import fails naming it, rather than quietly falling
+back to the bucket and leaving the rule silently disabled.
+
+Every imported row is recorded either way — what was proposed, which rule
+matched (none, for a fall-through), where it landed, and whether a human has
+corrected it. That record is what a later classifier would learn from, which is
+why it is written from the first line classified rather than added afterwards.
+
 > [!NOTE]
-> Nothing matches on rules yet — the import path picks them up in the next
-> slice. See `dev/issues/015-classify-imported-lines-and-record-every-classification.md`.
+> Finding what fell through and correcting it are the next two slices. See
+> `dev/issues/016-list-lines-no-rule-classified.md` and
+> `dev/issues/017-correct-a-classification-with-an-adjusting-entry.md`.
 
 ### Writing importer plugins
 A new plugin can be rolled out by defining an entry point to kohle plugins

@@ -12,10 +12,17 @@ from decimal import Decimal
 
 import pandas as pd
 import pytest
-from sqlalchemy.orm import Session
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session, sessionmaker
 
-from kohle.domain.domain_errors import DataframeMissingColumn
-from kohle.domain.models import AccountType
+from kohle.domain.domain_errors import DataframeMissingColumn, PostingToNonLeafAccount
+from kohle.domain.models import (
+    AccountType,
+    Classification,
+    JournalEntry,
+    Operation,
+    OperationGroup,
+)
 from kohle.use_cases.accounts import AddAccount
 from kohle.use_cases.journal import (
     ImportStatement,
@@ -25,6 +32,7 @@ from kohle.use_cases.journal import (
     RecordSplitEntry,
     _optional_str,
 )
+from kohle.use_cases.rules import AddRule
 
 
 def _ledger(session: Session) -> None:
@@ -146,23 +154,152 @@ def test_optional_str_normalises_a_statement_cell(value, expected) -> None:
     assert _optional_str(value) == expected
 
 
-@pytest.mark.skip(reason="scaffold: issue 015")
-def test_classification_in_the_import_loop() -> None:
-    # TODO(015) — one test per site:
-    #   - a row matching a rule posts to that rule's target account
-    #   - a row matching nothing posts to the unclassified bucket exactly as
-    #     before; import with an empty rule set is unchanged behaviour
-    #   - a classification row is written on both paths
-    #   - posting still routes through post_entry: balance-by-value and
-    #     leaf-only are not reimplemented here
-    #
-    # TODO(015) REGRESSION — one import produces exactly ONE OperationGroup,
-    #   holding every entry and every classification. Extends
-    #   test_write_creates_exactly_one_group_holding_its_operations. This is
-    #   the guard against someone making the classifier a UnitOfWork, which
-    #   would commit and close the session on the first row and half-commit
-    #   the statement (§5.2).
-    #
-    # TODO(015) REGRESSION — a row failing mid-import leaves no entries, no
-    #   classifications and no group. Atomicity asserted, not assumed.
-    raise NotImplementedError
+def _landing_account(session: Session, description: str) -> str:
+    """The account the counterpart line of an imported row landed on."""
+    entry = session.query(JournalEntry).filter(JournalEntry.description == description).one()
+    return ({line.account.name for line in entry.lines} - {"Checking"}).pop()
+
+
+def _classification(session: Session, description: str) -> Classification:
+    return (
+        session.query(Classification)
+        .join(JournalEntry, Classification.journal_entry_id == JournalEntry.id)
+        .filter(JournalEntry.description == description)
+        .one()
+    )
+
+
+def _two_rows(statement_df, statement_row):
+    return statement_df([
+        statement_row(date(2026, 3, 5), -80.0, "ALDI SUED 1234", "ALDI SUED", None),
+        statement_row(date(2026, 3, 6), -25.0, "Kiosk am Eck"),
+    ])
+
+
+def test_a_matched_row_posts_to_its_rule_target(session: Session, statement_df, statement_row) -> None:
+    _ledger(session)
+    rule = AddRule(session).execute("ALDI", "Groceries").unwrap()
+
+    assert ImportStatement(session).execute("Checking", _two_rows(statement_df, statement_row)).unwrap() == 2
+
+    assert _landing_account(session, "ALDI SUED 1234") == "Groceries"
+    classification = _classification(session, "ALDI SUED 1234")
+    assert classification.matched_rule_id == rule.id
+    assert classification.final_account_id == classification.proposed_account_id
+    assert classification.corrected is False
+
+
+def test_a_row_matching_nothing_still_lands_in_the_bucket(
+    session: Session, statement_df, statement_row
+) -> None:
+    _ledger(session)
+    AddRule(session).execute("ALDI", "Groceries")
+
+    assert ImportStatement(session).execute("Checking", _two_rows(statement_df, statement_row)).unwrap() == 2
+
+    assert _landing_account(session, "Kiosk am Eck") == "Unclassified Expense"
+    # Recorded on the fall-through path too, so there is one place to read
+    # from whether or not a rule fired.
+    classification = _classification(session, "Kiosk am Eck")
+    assert classification.matched_rule_id is None
+    assert classification.final_account_id == classification.proposed_account_id
+
+
+def test_an_empty_rule_set_imports_exactly_as_before(
+    session: Session, statement_df, statement_row
+) -> None:
+    _ledger(session)
+
+    assert ImportStatement(session).execute("Checking", _two_rows(statement_df, statement_row)).unwrap() == 2
+
+    assert _landing_account(session, "ALDI SUED 1234") == "Unclassified Expense"
+    assert _landing_account(session, "Kiosk am Eck") == "Unclassified Expense"
+    assert session.query(Classification).count() == 2
+
+
+def test_importing_the_same_statement_twice_still_imports_nothing(
+    session: Session, statement_df, statement_row
+) -> None:
+    _ledger(session)
+    AddRule(session).execute("ALDI", "Groceries")
+    df = _two_rows(statement_df, statement_row)
+
+    assert ImportStatement(session).execute("Checking", df).unwrap() == 2
+    assert ImportStatement(session).execute("Checking", df).unwrap() == 0
+
+    assert session.query(Classification).count() == 2
+
+
+def test_a_rule_target_that_has_gained_a_child_fails_the_import(
+    session: Session, statement_df, statement_row
+) -> None:
+    # Posting still goes through post_entry, so leaf-only posting is enforced
+    # by validate_lines rather than reimplemented here. Failing loudly beats
+    # falling back to the bucket: a silent fallback would leave the user's
+    # rules disabled with nothing saying why (design §5.3).
+    _ledger(session)
+    AddRule(session).execute("ALDI", "Groceries")
+    AddAccount(session).execute("Organic", AccountType.expense, parent_name="Groceries")
+
+    result = ImportStatement(session).execute("Checking", _two_rows(statement_df, statement_row))
+
+    assert result.is_err
+    assert isinstance(result.unwrap_err(), PostingToNonLeafAccount)
+
+
+def test_one_import_produces_one_group_holding_every_write(
+    session_factory: sessionmaker, statement_df, statement_row
+) -> None:
+    # REGRESSION: guards against the classifier being written as a UnitOfWork,
+    # which would commit and close the session on the first row and leave the
+    # statement half-imported (design §5.2).
+    AddAccount(session_factory()).execute("Checking", AccountType.asset, "DE1")
+    AddAccount(session_factory()).execute("Groceries", AccountType.expense)
+    AddRule(session_factory()).execute("ALDI", "Groceries")
+
+    with session_factory() as session:
+        groups_before = session.scalar(select(func.count()).select_from(OperationGroup))
+
+    assert ImportStatement(session_factory()).execute(
+        "Checking", _two_rows(statement_df, statement_row)
+    ).unwrap() == 2
+
+    with session_factory() as session:
+        groups = session.scalars(select(OperationGroup.id).order_by(OperationGroup.id)).all()
+        import_ops = session.scalars(
+            select(Operation).where(Operation.group_id == groups[-1])
+        ).all()
+
+    assert len(groups) == groups_before + 1
+    # One group per use-case run, not per row: the EUR unit, both bucket
+    # accounts, both entries and both classifications are one logical write.
+    assert {op.entity_type for op in import_ops} >= {"units", "accounts", "journal_entries", "classifications"}
+    assert len([op for op in import_ops if op.entity_type == "classifications"]) == 2
+
+
+def test_a_row_failing_mid_import_leaves_nothing_behind(
+    session_factory: sessionmaker, statement_df, statement_row
+) -> None:
+    # REGRESSION: atomicity asserted rather than assumed. A partial commit
+    # would leave entries with no classification — invisible to
+    # list-unclassified, and so permanently lost.
+    AddAccount(session_factory()).execute("Checking", AccountType.asset, "DE1")
+    AddAccount(session_factory()).execute("Groceries", AccountType.expense)
+    AddAccount(session_factory()).execute("Kiosk", AccountType.expense)
+    AddRule(session_factory()).execute("ALDI", "Groceries")
+    AddRule(session_factory()).execute("Kiosk", "Kiosk")
+    # The second row's rule target stops being a leaf, so the import fails
+    # after the first row has already been written.
+    AddAccount(session_factory()).execute("Snacks", AccountType.expense, parent_name="Kiosk")
+
+    with session_factory() as session:
+        groups_before = session.scalar(select(func.count()).select_from(OperationGroup))
+
+    assert ImportStatement(session_factory()).execute(
+        "Checking", _two_rows(statement_df, statement_row)
+    ).is_err
+
+    with session_factory() as session:
+        assert session.scalar(select(func.count()).select_from(JournalEntry)) == 0
+        assert session.scalar(select(func.count()).select_from(Classification)) == 0
+        assert session.scalar(select(func.count()).select_from(OperationGroup)) == groups_before
