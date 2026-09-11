@@ -5,7 +5,7 @@ from tabulate import tabulate
 
 from kohle.db.connection import session_local
 from kohle.domain.domain_errors import AccountNotFoundError
-from kohle.domain.models import AccountType, UnitKind
+from kohle.domain.models import DEFAULT_RULE_PRIORITY, AccountType, UnitKind
 from kohle.plugin.plugin_manager import load_plugins
 from kohle.use_cases.accounts import AddAccount, ListAccount, ListChildAccounts
 from kohle.use_cases.journal import (
@@ -19,6 +19,7 @@ from kohle.use_cases.journal import (
     RecordSplitEntry,
 )
 from kohle.use_cases.operations import ListOperations
+from kohle.use_cases.rules import AddRule, ListRules, RemoveRule
 from kohle.use_cases.units import AddUnit, ListUnits
 
 
@@ -356,6 +357,60 @@ def list_operations_cmd(make_session):
         click.echo("No operations")
         return
     click.echo(tabulate(rows, headers="keys"))
+
+
+@cli.command()
+@click.argument("pattern")
+@click.argument("account")
+@click.option(
+    "--priority",
+    type=int,
+    default=DEFAULT_RULE_PRIORITY,
+    help="Lower numbers are evaluated first; ties break on rule id",
+)
+@click.pass_obj
+def add_rule_cmd(make_session, pattern: str, account: str, priority: int):
+    add_rule = AddRule(make_session())
+    res = add_rule.execute(pattern, account, priority)
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    click.echo(f"Added rule {res.unwrap().id}: {pattern} -> {account} (priority {priority})")
+
+
+@cli.command()
+@click.pass_obj
+def list_rules_cmd(make_session):
+    list_rules = ListRules(make_session())
+    res = list_rules.execute()
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    rules = res.unwrap()
+    if not rules:
+        click.echo("No rules")
+        return
+    # Rendered in evaluation order, with the id remove-rule takes: the order
+    # rules fire in is only useful if it is the order they are printed in.
+    rows = [
+        {
+            "id": rule.id,
+            "priority": rule.priority,
+            "pattern": rule.pattern,
+            "account": rule.account.name,
+        }
+        for rule in rules
+    ]
+    click.echo(tabulate(rows, headers="keys"))
+
+
+@cli.command()
+@click.argument("rule_id", type=int)
+@click.pass_obj
+def remove_rule_cmd(make_session, rule_id: int):
+    remove_rule = RemoveRule(make_session())
+    res = remove_rule.execute(rule_id)
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    click.echo(f"Removed rule {rule_id}")
 
 
 if __name__ == "__main__":

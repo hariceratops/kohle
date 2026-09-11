@@ -130,6 +130,37 @@ class DuplicateLineInEntry(JournalError):
         return "Two lines on the same account, unit and side; combine them"
 
 
+class RuleError(Exception):
+    pass
+
+
+class EmptyRulePattern(RuleError):
+    """An empty pattern compiles fine and matches every line, which is the one
+    catch-all nobody writes on purpose."""
+
+    def __str__(self) -> str:
+        return "Rule pattern cannot be empty"
+
+
+class InvalidRulePattern(RuleError):
+    def __init__(self, pattern: str, reason: str) -> None:
+        super().__init__()
+        self.pattern = pattern
+        self.reason = reason
+
+    def __str__(self) -> str:
+        return f"Invalid rule pattern {self.pattern!r}: {self.reason}"
+
+
+class RuleNotFoundError(RuleError):
+    def __init__(self, rule_id: int) -> None:
+        super().__init__()
+        self.rule_id = rule_id
+
+    def __str__(self) -> str:
+        return f"Rule id {self.rule_id} not found"
+
+
 class InvalidDateError(Exception):
     def __init__(self, date_str: str) -> None:
         super().__init__()
@@ -184,5 +215,10 @@ ImportStatementError = \
         DataframeValidationError
 
 RecordEntryError = AccountError | UnitError | JournalError | BaseCurrencyAsCrossUnit
+
+# JournalError because a rule pointing at a parent account is refused with the
+# ledger's own PostingToNonLeafAccount, checked at rule creation rather than at
+# the import it would otherwise break.
+AddRuleError = AccountError | RuleError | JournalError
 
 BalanceError = AccountError | JournalError

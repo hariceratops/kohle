@@ -113,6 +113,42 @@ for entries made by hand, which have none.
 A failing command exits non-zero and writes to stderr, so `kohle-cli ... ||
 handle-failure` works and a redirect captures results rather than errors.
 
+### Classification rules
+
+An imported line that matches no rule lands in `Unclassified Expense` or
+`Unclassified Income`. A rule sends it somewhere better:
+
+```bash
+kohle-cli add-rule 'REWE|ALDI|LIDL' Groceries
+kohle-cli add-rule '^DE89370400440532013000$' Rent --priority 10
+kohle-cli list-rules
+kohle-cli remove-rule 3
+```
+
+The pattern is a Python regular expression, matched case-insensitively against
+the description, the counterparty name and the counterparty IBAN, each on its
+own — which is what makes `^DE89...$` mean "this exact counterparty IBAN".
+`(?-i:REWE)` restores case sensitivity inside a pattern. A malformed pattern is
+refused when the rule is created, naming the position:
+
+```
+$ kohle-cli add-rule 'REWE[' Groceries
+Error: Invalid rule pattern 'REWE[': unterminated character set at position 4
+```
+
+Rules are evaluated lowest `priority` first, ties broken by id, and the first
+match wins — which is the order `list-rules` prints them in. `--priority`
+defaults to 100, leaving room to slot a rule either side of an existing one
+without renumbering.
+
+The target must be a leaf account, since only leaves can be posted to.
+`remove-rule` retires a rule rather than erasing it: past classifications keep
+naming the pattern that made them.
+
+> [!NOTE]
+> Nothing matches on rules yet — the import path picks them up in the next
+> slice. See `dev/issues/015-classify-imported-lines-and-record-every-classification.md`.
+
 ### Writing importer plugins
 A new plugin can be rolled out by defining an entry point to kohle plugins
 ```toml

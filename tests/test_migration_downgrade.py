@@ -17,10 +17,12 @@ from alembic import command
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# The revision the multi-unit ledger migration replaced. Downgrading *to* it is
-# what undoes that migration, and unlike "-1" it keeps meaning that as newer
+# The revision each migration under test replaced. Downgrading *to* one is what
+# undoes the migration above it, and unlike "-1" it keeps meaning that as newer
 # revisions land on top of head.
 BEFORE_MULTI_UNIT = "62313518700b"
+BEFORE_COUNTERPARTY = "7f3c1d9a2b40"
+BEFORE_RULES = "a1d7c4e9b208"
 
 
 @pytest.fixture
@@ -141,7 +143,7 @@ def test_counterparty_columns_round_trip_when_no_entry_carries_one(migrated_db) 
     config, db = migrated_db
     _seed_entry(db, "(1, '2026-03-01', 'ref-1', 'Aldi', NULL, NULL, '2026-01-01')")
 
-    command.downgrade(config, "-1")
+    command.downgrade(config, BEFORE_COUNTERPARTY)
     conn = sqlite3.connect(db)
     columns = {r[1] for r in conn.execute("PRAGMA table_info(journal_entries)")}
     conn.close()
@@ -161,7 +163,7 @@ def test_downgrade_refuses_rather_than_dropping_a_counterparty(migrated_db) -> N
     _seed_entry(db, "(1, '2026-03-01', 'ref-1', 'Aldi', 'ALDI SUED', NULL, '2026-01-01')")
 
     with pytest.raises(RuntimeError) as exc_info:
-        command.downgrade(config, "-1")
+        command.downgrade(config, BEFORE_COUNTERPARTY)
     assert "counterparty" in str(exc_info.value)
     conn = sqlite3.connect(db)
     columns = {r[1] for r in conn.execute("PRAGMA table_info(journal_entries)")}
@@ -180,3 +182,30 @@ def test_downgrade_refuses_rather_than_dropping_non_eur_units(migrated_db) -> No
     with pytest.raises(RuntimeError) as exc_info:
         command.downgrade(config, BEFORE_MULTI_UNIT)
     assert "non-EUR unit" in str(exc_info.value)
+
+
+def test_rules_table_round_trips_when_no_rule_exists(migrated_db) -> None:
+    config, db = migrated_db
+    assert "rules" in _tables(db)
+
+    command.downgrade(config, BEFORE_RULES)
+    assert "rules" not in _tables(db)
+
+    command.upgrade(config, "head")
+    assert "rules" in _tables(db)
+
+
+def test_downgrade_refuses_rather_than_dropping_the_rule_set(migrated_db) -> None:
+    config, db = migrated_db
+    _exec(
+        db,
+        "INSERT INTO accounts (id, name, type, iban, parent_id, created_at) "
+        "VALUES (1, 'Groceries', 'expense', NULL, NULL, '2026-01-01')",
+        "INSERT INTO rules (id, pattern, account_id, priority, created_at) "
+        "VALUES (1, 'REWE', 1, 100, '2026-01-01')",
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        command.downgrade(config, BEFORE_RULES)
+    assert "classification rule" in str(exc_info.value)
+    assert "rules" in _tables(db), "refusal must leave the schema untouched"

@@ -720,3 +720,74 @@ def test_entries_in_period_renders_a_missing_counterparty_as_dash(
     assert result.exit_code == 0
     entry_row = next(line for line in result.output.splitlines() if "Aldi" in line)
     assert entry_row.split() == ["2026-03-01", "Aldi", "-", "cr", "80.00", "EUR", "80.00"]
+
+
+def test_add_rule_reports_a_malformed_pattern_without_a_traceback(
+    session_factory: sessionmaker,
+) -> None:
+    runner = CliRunner()
+    runner.invoke(cli, ["add-account", "Groceries", "--type", "expense"], obj=session_factory)
+
+    result = runner.invoke(cli, ["add-rule", "REWE[", "Groceries"], obj=session_factory)
+
+    assert result.exit_code != 0
+    assert "unterminated character set at position 4" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_add_rule_reports_an_unknown_account(session_factory: sessionmaker) -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(cli, ["add-rule", "REWE", "Grocerys"], obj=session_factory)
+
+    assert result.exit_code != 0
+    assert "Account 'Grocerys' not found" in result.output
+
+
+def test_list_rules_renders_evaluation_order_with_the_id_remove_rule_takes(
+    session_factory: sessionmaker,
+) -> None:
+    runner = CliRunner()
+    runner.invoke(cli, ["add-account", "Groceries", "--type", "expense"], obj=session_factory)
+    runner.invoke(cli, ["add-account", "Misc", "--type", "expense"], obj=session_factory)
+    runner.invoke(cli, ["add-rule", ".", "Misc", "--priority", "900"], obj=session_factory)
+    runner.invoke(cli, ["add-rule", "REWE|ALDI", "Groceries", "--priority", "10"], obj=session_factory)
+
+    result = runner.invoke(cli, ["list-rules"], obj=session_factory)
+
+    assert result.exit_code == 0
+    assert result.output.splitlines()[0].split() == ["id", "priority", "pattern", "account"]
+    rows = [line.split() for line in result.output.splitlines()[2:]]
+    assert rows == [["2", "10", "REWE|ALDI", "Groceries"], ["1", "900", ".", "Misc"]]
+
+
+def test_list_rules_empty_says_so_instead_of_printing_a_blank_line(
+    session_factory: sessionmaker,
+) -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(cli, ["list-rules"], obj=session_factory)
+
+    assert result.exit_code == 0
+    assert result.output.strip() == "No rules"
+
+
+def test_remove_rule_drops_it_from_the_listing(session_factory: sessionmaker) -> None:
+    runner = CliRunner()
+    runner.invoke(cli, ["add-account", "Groceries", "--type", "expense"], obj=session_factory)
+    runner.invoke(cli, ["add-rule", "REWE", "Groceries"], obj=session_factory)
+
+    result = runner.invoke(cli, ["remove-rule", "1"], obj=session_factory)
+
+    assert result.exit_code == 0
+    assert "Removed rule 1" in result.output
+    assert runner.invoke(cli, ["list-rules"], obj=session_factory).output.strip() == "No rules"
+
+
+def test_remove_rule_on_an_unknown_id_reports_the_miss(session_factory: sessionmaker) -> None:
+    runner = CliRunner()
+
+    result = runner.invoke(cli, ["remove-rule", "42"], obj=session_factory)
+
+    assert result.exit_code != 0
+    assert "Rule id 42 not found" in result.output
