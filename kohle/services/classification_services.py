@@ -3,9 +3,9 @@ from collections.abc import Iterable
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from kohle.core.result import Result
-from kohle.domain.domain_errors import ClassificationError
+from kohle.domain.domain_errors import ClassificationError, NoClassificationForEntry
 from kohle.domain.models import Classification, JournalEntry
-from kohle.infrastructure.crud import crud_create, crud_retrieve
+from kohle.infrastructure.crud import crud_create, crud_retrieve, crud_update
 from kohle.infrastructure.transaction_context import DbTransactionContext
 
 
@@ -35,6 +35,66 @@ def add_classification_service(
         return classification
 
     return ctx.run(op).map_err(lambda err: ClassificationError(str(err)))
+
+
+@crud_retrieve
+def classification_by_entry_service(
+    ctx: DbTransactionContext, journal_entry_id: int
+) -> Result[Classification, ClassificationError]:
+    """The one classification row for a journal entry — reclassify's lookup.
+
+    joinedload for the entry (scalar), selectinload for its lines
+    (collection): the same reasoning as unclassified_classifications_service
+    below, and reclassify needs the original counterpart line loaded before
+    the session closes.
+    """
+
+    def op(session: Session) -> Classification | None:
+        return (
+            session.query(Classification)
+            .options(joinedload(Classification.entry).selectinload(JournalEntry.lines))
+            .filter(Classification.journal_entry_id == journal_entry_id)
+            .one_or_none()
+        )
+
+    return (
+        ctx.run(op)
+        .map_err(lambda err: ClassificationError(str(err)))
+        .and_then(lambda classification:
+            Result.ok(classification)
+            if classification is not None
+            else Result.err(NoClassificationForEntry(journal_entry_id))
+        )
+    )
+
+
+@crud_update
+def set_classification_outcome_service(
+    ctx: DbTransactionContext, classification_id: int, final_account_id: int
+) -> Result[Classification, ClassificationError]:
+    """Correct the record: final_account_id moves, corrected is set.
+
+    proposed_account_id and matched_rule_id are left untouched — they are the
+    record of what the engine got wrong, which is the reason they exist
+    (design §7.2).
+    """
+
+    def op(session: Session) -> Classification | None:
+        classification = session.get(Classification, classification_id)
+        if classification is not None:
+            classification.final_account_id = final_account_id
+            classification.corrected = True
+        return classification
+
+    return (
+        ctx.run(op)
+        .map_err(lambda err: ClassificationError(str(err)))
+        .and_then(lambda classification:
+            Result.ok(classification)
+            if classification is not None
+            else Result.err(ClassificationError(f"Classification id {classification_id} not found"))
+        )
+    )
 
 
 @crud_retrieve

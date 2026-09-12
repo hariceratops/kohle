@@ -165,6 +165,19 @@ class ClassificationError(Exception):
     pass
 
 
+class NoClassificationForEntry(ClassificationError):
+    """Raised by `reclassify` for an unknown entry id or one that was never
+    classified — hand-entered `record`/`record-split` entries have no
+    classification row to correct."""
+
+    def __init__(self, entry_id: int) -> None:
+        super().__init__()
+        self.entry_id = entry_id
+
+    def __str__(self) -> str:
+        return f"Journal entry id {self.entry_id} has no classification to correct"
+
+
 class InvalidDateError(Exception):
     def __init__(self, date_str: str) -> None:
         super().__init__()
@@ -234,3 +247,8 @@ BalanceError = AccountError | JournalError
 # meaning nothing has ever been imported — is swallowed into an empty list
 # rather than reaching here (design §6.2).
 ListUnclassifiedError = AccountError | ClassificationError
+
+# JournalError surfaces PostingToNonLeafAccount from validate_lines inside
+# post_entry, unchanged and not re-implemented for the adjusting entry
+# (design §7.4).
+ReclassifyError = AccountError | JournalError | ClassificationError

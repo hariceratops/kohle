@@ -168,9 +168,28 @@ imported yet, or everything already classified, both print `No unclassified
 lines` rather than an error; the command is read-only and creates no accounts
 and no operation group of its own.
 
-> [!NOTE]
-> Correcting what `list-unclassified` finds is the next slice. See
-> `dev/issues/017-correct-a-classification-with-an-adjusting-entry.md`.
+```bash
+kohle-cli reclassify 42 Groceries
+```
+
+Moves a classified line onto a different account — whether it was matched by a
+wrong rule or fell through to an unclassified bucket — by posting a reversing
+pair through `post_entry`: the wrong account is credited and the right one
+debited, for the original amount, dated the same day as the original entry.
+The original entry is never edited, voided or deleted; the ledger stays
+append-only. `42` is the journal entry id, exactly what `list-unclassified`
+prints in its first column.
+
+The classification record moves with it: `final_account_id` becomes the new
+account and `corrected` is set, while the proposed account and the rule that
+matched are left exactly as they were — they are the record of what the
+engine got wrong, not something a correction should erase. Reclassifying an
+already-corrected line reverses out of its current account, not its original
+proposal, so a second correction lands the amount on the new target without
+disturbing the first.
+
+An unknown entry id, an unknown target account, or a non-leaf target all fail
+with a clear error rather than a traceback.
 
 ### Writing importer plugins
 A new plugin can be rolled out by defining an entry point to kohle plugins

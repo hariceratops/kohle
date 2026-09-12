@@ -8,7 +8,7 @@ from kohle.domain.domain_errors import AccountNotFoundError
 from kohle.domain.models import DEFAULT_RULE_PRIORITY, AccountType, UnitKind
 from kohle.plugin.plugin_manager import load_plugins
 from kohle.use_cases.accounts import AddAccount, ListAccount, ListChildAccounts
-from kohle.use_cases.classification import ListUnclassified
+from kohle.use_cases.classification import ListUnclassified, Reclassify
 from kohle.use_cases.journal import (
     BASE_CURRENCY,
     CrossUnitLine,
@@ -439,6 +439,18 @@ def list_unclassified_cmd(make_session):
         for line in lines
     ]
     click.echo(tabulate(rows, headers="keys", floatfmt=".2f"))
+
+
+@cli.command()
+@click.argument("entry_id", type=int)
+@click.argument("account")
+@click.pass_obj
+def reclassify_cmd(make_session, entry_id: int, account: str):
+    reclassify = Reclassify(make_session())
+    res = reclassify.execute(entry_id, account)
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    click.echo(f"Reclassified entry {entry_id} to {account}")
 
 
 if __name__ == "__main__":

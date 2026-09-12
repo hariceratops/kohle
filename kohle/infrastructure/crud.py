@@ -30,6 +30,8 @@ crud_create = _record_write("create")
 # list-operations exists to say what happened, and "retired" is what happened.
 crud_delete = _record_write("delete")
 
+crud_update = _record_write("update")
+
 
 def crud_retrieve(fn):
     def wrapper(ctx: DbTransactionContext, *args, **kwargs):
