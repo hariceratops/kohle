@@ -507,6 +507,48 @@ def test_list_accounts_puts_parentless_accounts_at_top_level(session_factory: se
     assert any(line.startswith("Cash") for line in lines)
 
 
+def test_list_accounts_shows_a_new_root_as_a_distinct_top_level_branch(
+    session_factory: sessionmaker,
+) -> None:
+    # Generic "a new root shows up" case (issue 018's last criterion): any
+    # account with no parent is its own top-level branch, sibling to the
+    # others, which is exactly what the People root needs and nothing more.
+    runner = CliRunner()
+    runner.invoke(cli, ["add-account", "Checking", "--type", "asset"], obj=session_factory)
+    runner.invoke(cli, ["add-account", "People", "--type", "asset"], obj=session_factory)
+
+    result = runner.invoke(cli, ["list-accounts"], obj=session_factory)
+
+    lines = result.output.splitlines()
+    assert any(line.startswith("Checking") for line in lines)
+    people_line = next(line for line in lines if line.startswith("People"))
+    assert not people_line.startswith("|")
+
+
+def test_person_account_created_under_people_can_be_posted_to(
+    session_factory: sessionmaker,
+) -> None:
+    runner = CliRunner()
+    runner.invoke(cli, ["add-account", "People", "--type", "asset"], obj=session_factory)
+    runner.invoke(cli, ["add-account", "Checking", "--type", "asset"], obj=session_factory)
+    runner.invoke(
+        cli, ["add-account", "Alice", "--type", "asset", "--parent", "People"], obj=session_factory
+    )
+
+    result = runner.invoke(
+        cli,
+        ["record", "2026-03-01", "Dinner split", "48", "--from", "Checking", "--to", "Alice"],
+        obj=session_factory,
+    )
+
+    assert result.exit_code == 0
+    assert "credited Checking" in result.output
+    assert "debited Alice" in result.output
+
+    balance_result = runner.invoke(cli, ["balance", "Alice"], obj=session_factory)
+    assert "48" in balance_result.output
+
+
 def test_list_accounts_renders_three_level_nesting(session_factory: sessionmaker) -> None:
     runner = CliRunner()
     runner.invoke(cli, ["add-account", "Cash", "--type", "asset"], obj=session_factory)
@@ -877,3 +919,39 @@ def test_list_unclassified_shows_the_fallen_through_line(session_factory: sessio
     assert row.split() == [
         "1", "2026-03-05", "Unknown", "shop", "SOME", "SHOP", "80.00", "Unclassified", "Expense",
     ]
+
+
+@pytest.mark.skip(reason="scaffold: issue 019")
+def test_split_line_cli() -> None:
+    # TODO(019) — one test per site:
+    #   - split-line divides an imported line's value between the own expense
+    #     account and one or more person accounts, using the people_root
+    #     fixture and an imported line with a classification
+    #   - a malformed --share (not a NAME:VALUE colon pair) exits non-zero
+    #     naming the offending string
+    #   - shares not summing to the line's quantity exits non-zero with
+    #     SplitDoesNotSumToLine's message, not a traceback
+    raise NotImplementedError
+
+
+@pytest.mark.skip(reason="scaffold: issue 022")
+def test_who_owes_what_cli() -> None:
+    # TODO(022) — who-owes-what on a ledger with no person accounts prints the
+    #   empty message, matching the "No rules" / "No holdings" house style;
+    #   --by-group breaks the view down per group (design §7.2)
+    raise NotImplementedError
+
+
+@pytest.mark.skip(reason="scaffold: issue 023")
+def test_settle_up_cli() -> None:
+    # TODO(023) — settle-up with nothing outstanding prints "No transfers
+    #   needed"; the spec's acceptance case (one intermediary -> one transfer)
+    #   renders as a table naming the `record` invocation shape (design §8.3)
+    raise NotImplementedError
+
+
+@pytest.mark.skip(reason="scaffold: issue 024")
+def test_net_worth_cli() -> None:
+    # TODO(024) — net-worth renders the receivables line even when it is
+    #   zero, and the total visibly includes it (design §2.4, §9.3)
+    raise NotImplementedError

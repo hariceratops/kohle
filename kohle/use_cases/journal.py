@@ -56,6 +56,7 @@ from kohle.use_cases.units import get_or_create_unit
 
 BASE_CURRENCY = "EUR"
 UNCLASSIFIED_EXPENSE = "Unclassified Expense"
+PEOPLE_ROOT = "People"
 UNCLASSIFIED_INCOME = "Unclassified Income"
 
 

@@ -7,6 +7,9 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from kohle.db.connection import base
+from kohle.domain.models import AccountType
+from kohle.use_cases.accounts import AddAccount
+from kohle.use_cases.journal import PEOPLE_ROOT
 
 
 @pytest.fixture
@@ -39,6 +42,20 @@ def session_factory():
     base.metadata.create_all(bind=engine)
     yield SessionLocal
     base.metadata.drop_all(bind=engine)
+
+
+@pytest.fixture
+def people_root(session: Session):
+    """Seed the `People` root account.
+
+    The real migration (dev/design/expense-splitting.md §3.1, §10.1) seeds
+    this row directly with an INSERT; tests build the schema from
+    `base.metadata` instead of running Alembic, so the row does not exist
+    unless a test asks for it. Every splitting test needs this fixture — its
+    absence surfaces as an `AccountNotFoundError` from a use case that looks
+    correct (design §3.2).
+    """
+    return AddAccount(session).execute(PEOPLE_ROOT, AccountType.asset).unwrap()
 
 
 @pytest.fixture

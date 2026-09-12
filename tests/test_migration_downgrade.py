@@ -24,6 +24,11 @@ BEFORE_MULTI_UNIT = "62313518700b"
 BEFORE_COUNTERPARTY = "7f3c1d9a2b40"
 BEFORE_RULES = "a1d7c4e9b208"
 BEFORE_CLASSIFICATIONS = "c5b8e2f47a13"
+# TODO: set to the revision each expense-splitting migration replaces, once written
+# (design §10: three migrations, one per schema-bearing slice — 018, 019, 021).
+BEFORE_PEOPLE_ROOT = "3e7b91c0af52"
+BEFORE_SPLITS = "TODO"
+BEFORE_SPLIT_GROUPS = "TODO"
 
 
 @pytest.fixture
@@ -62,8 +67,9 @@ def test_downgrade_round_trips_when_every_account_fits_the_old_schema(migrated_d
     config, db = migrated_db
     _exec(
         db,
+        # id 2, not 1: the People root migration seeds id 1 on every migrated_db.
         "INSERT INTO accounts (id, name, type, iban, parent_id, created_at) "
-        "VALUES (1, 'Checking', 'asset', 'DE1', NULL, '2026-01-01')",
+        "VALUES (2, 'Checking', 'asset', 'DE1', NULL, '2026-01-01')",
     )
 
     command.downgrade(config, BEFORE_MULTI_UNIT)
@@ -72,7 +78,11 @@ def test_downgrade_round_trips_when_every_account_fits_the_old_schema(migrated_d
 
     command.upgrade(config, "head")
     conn = sqlite3.connect(db)
-    assert conn.execute("SELECT name, iban FROM accounts").fetchall() == [("Checking", "DE1")]
+    # Re-upgrading past the People-root migration re-seeds it, so "Checking"
+    # is no longer the only account.
+    assert conn.execute(
+        "SELECT name, iban FROM accounts WHERE name = 'Checking'"
+    ).fetchall() == [("Checking", "DE1")]
     conn.close()
 
 
@@ -81,9 +91,9 @@ def test_downgrade_refuses_when_an_account_has_no_iban(migrated_db) -> None:
     _exec(
         db,
         "INSERT INTO accounts (id, name, type, iban, parent_id, created_at) "
-        "VALUES (1, 'Groceries', 'expense', NULL, NULL, '2026-01-01')",
+        "VALUES (2, 'Groceries', 'expense', NULL, NULL, '2026-01-01')",
         "INSERT INTO accounts (id, name, type, iban, parent_id, created_at) "
-        "VALUES (2, 'Rent', 'expense', NULL, NULL, '2026-01-01')",
+        "VALUES (3, 'Rent', 'expense', NULL, NULL, '2026-01-01')",
     )
 
     # Two IBAN-less accounts is what used to collapse to a duplicate '' and
@@ -99,9 +109,9 @@ def test_downgrade_refuses_rather_than_dropping_child_accounts(migrated_db) -> N
     _exec(
         db,
         "INSERT INTO accounts (id, name, type, iban, parent_id, created_at) "
-        "VALUES (1, 'Cash', 'asset', 'DE1', NULL, '2026-01-01')",
+        "VALUES (2, 'Cash', 'asset', 'DE1', NULL, '2026-01-01')",
         "INSERT INTO accounts (id, name, type, iban, parent_id, created_at) "
-        "VALUES (2, 'Groceries', 'asset', 'DE2', 1, '2026-01-01')",
+        "VALUES (3, 'Groceries', 'asset', 'DE2', 2, '2026-01-01')",
     )
 
     with pytest.raises(RuntimeError) as exc_info:
@@ -115,7 +125,7 @@ def test_downgrade_refuses_rather_than_dropping_journal_entries(migrated_db) -> 
     _exec(
         db,
         "INSERT INTO accounts (id, name, type, iban, parent_id, created_at) "
-        "VALUES (1, 'Checking', 'asset', 'DE1', NULL, '2026-01-01')",
+        "VALUES (2, 'Checking', 'asset', 'DE1', NULL, '2026-01-01')",
         "INSERT INTO units (id, kind, identifier, name, created_at) "
         "VALUES (1, 'currency', 'EUR', 'Euro', '2026-01-01')",
         "INSERT INTO journal_entries (id, entry_date, reference, description, created_at) "
@@ -130,8 +140,9 @@ def test_downgrade_refuses_rather_than_dropping_journal_entries(migrated_db) -> 
 def _seed_entry(db: Path, entry_values: str) -> None:
     _exec(
         db,
+        # id 2, not 1: the People root migration seeds id 1 on every migrated_db.
         "INSERT INTO accounts (id, name, type, iban, parent_id, created_at) "
-        "VALUES (1, 'Checking', 'asset', 'DE1', NULL, '2026-01-01')",
+        "VALUES (2, 'Checking', 'asset', 'DE1', NULL, '2026-01-01')",
         "INSERT INTO units (id, kind, identifier, name, created_at) "
         "VALUES (1, 'currency', 'EUR', 'Euro', '2026-01-01')",
         "INSERT INTO journal_entries "
@@ -201,9 +212,9 @@ def test_downgrade_refuses_rather_than_dropping_the_rule_set(migrated_db) -> Non
     _exec(
         db,
         "INSERT INTO accounts (id, name, type, iban, parent_id, created_at) "
-        "VALUES (1, 'Groceries', 'expense', NULL, NULL, '2026-01-01')",
+        "VALUES (2, 'Groceries', 'expense', NULL, NULL, '2026-01-01')",
         "INSERT INTO rules (id, pattern, account_id, priority, created_at) "
-        "VALUES (1, 'REWE', 1, 100, '2026-01-01')",
+        "VALUES (1, 'REWE', 2, 100, '2026-01-01')",
     )
 
     with pytest.raises(RuntimeError) as exc_info:
@@ -229,13 +240,13 @@ def test_downgrade_refuses_rather_than_dropping_classifications(migrated_db) -> 
     _exec(
         db,
         "INSERT INTO accounts (id, name, type, iban, parent_id, created_at) "
-        "VALUES (2, 'Groceries', 'expense', NULL, NULL, '2026-01-01')",
+        "VALUES (3, 'Groceries', 'expense', NULL, NULL, '2026-01-01')",
         "INSERT INTO rules (id, pattern, account_id, priority, created_at) "
-        "VALUES (1, 'ALDI', 2, 100, '2026-01-01')",
+        "VALUES (1, 'ALDI', 3, 100, '2026-01-01')",
         "INSERT INTO classifications "
         "(id, journal_entry_id, proposed_account_id, matched_rule_id, final_account_id, "
         "corrected, created_at) "
-        "VALUES (1, 1, 2, 1, 2, 0, '2026-01-01')",
+        "VALUES (1, 1, 3, 1, 3, 0, '2026-01-01')",
     )
 
     # This is the labelled data the whole feature exists to accumulate, and the
@@ -244,3 +255,86 @@ def test_downgrade_refuses_rather_than_dropping_classifications(migrated_db) -> 
         command.downgrade(config, BEFORE_CLASSIFICATIONS)
     assert "classification record" in str(exc_info.value)
     assert "classifications" in _tables(db), "refusal must leave the schema untouched"
+
+
+def test_upgrade_seeds_the_people_root(migrated_db) -> None:
+    _, db = migrated_db
+    conn = sqlite3.connect(db)
+    rows = conn.execute(
+        "SELECT name, type, parent_id FROM accounts WHERE name = 'People'"
+    ).fetchall()
+    conn.close()
+    assert rows == [("People", "asset", None)]
+
+
+def test_people_root_round_trips_when_the_branch_is_empty(migrated_db) -> None:
+    config, db = migrated_db
+    assert "People" in {r[0] for r in sqlite3.connect(db).execute("SELECT name FROM accounts")}
+
+    command.downgrade(config, BEFORE_PEOPLE_ROOT)
+    conn = sqlite3.connect(db)
+    names = {r[0] for r in conn.execute("SELECT name FROM accounts")}
+    conn.close()
+    assert "People" not in names
+
+    command.upgrade(config, "head")
+    conn = sqlite3.connect(db)
+    rows = conn.execute("SELECT name, type, parent_id FROM accounts WHERE name = 'People'").fetchall()
+    conn.close()
+    assert rows == [("People", "asset", None)]
+
+
+def test_downgrade_refuses_rather_than_orphaning_a_person_account(migrated_db) -> None:
+    config, db = migrated_db
+    _exec(
+        db,
+        "INSERT INTO accounts (name, type, iban, parent_id, created_at) "
+        "VALUES ('Alice', 'asset', NULL, (SELECT id FROM accounts WHERE name = 'People'), '2026-01-01')",
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        command.downgrade(config, BEFORE_PEOPLE_ROOT)
+    assert "1 child" in str(exc_info.value)
+    assert "People" in {r[0] for r in sqlite3.connect(db).execute("SELECT name FROM accounts")}, (
+        "refusal must leave the schema untouched"
+    )
+
+
+def test_downgrade_refuses_rather_than_dropping_lines_on_a_person_account(migrated_db) -> None:
+    config, db = migrated_db
+    _exec(
+        db,
+        "INSERT INTO accounts (name, type, iban, parent_id, created_at) "
+        "VALUES ('Alice', 'asset', NULL, (SELECT id FROM accounts WHERE name = 'People'), '2026-01-01')",
+        "INSERT INTO units (id, kind, identifier, name, created_at) "
+        "VALUES (1, 'currency', 'EUR', 'Euro', '2026-01-01')",
+        "INSERT INTO journal_entries (id, entry_date, reference, description, created_at) "
+        "VALUES (1, '2026-03-01', 'ref-1', 'Dinner', '2026-01-01')",
+        "INSERT INTO journal_lines "
+        "(entry_id, account_id, unit_id, quantity, unit_price, is_debit, created_at) "
+        "VALUES (1, (SELECT id FROM accounts WHERE name = 'Alice'), 1, 48, 1, 1, '2026-01-01')",
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        command.downgrade(config, BEFORE_PEOPLE_ROOT)
+    assert "People" in str(exc_info.value)
+    assert "People" in {r[0] for r in sqlite3.connect(db).execute("SELECT name FROM accounts")}, (
+        "refusal must leave the schema untouched"
+    )
+
+
+def test_upgrade_refuses_on_a_pre_existing_people_account(tmp_path: Path) -> None:
+    db = tmp_path / "kohle.db"
+    config = Config(str(ROOT / "alembic.ini"))
+    config.set_main_option("script_location", str(ROOT / "alembic"))
+    config.set_main_option("sqlalchemy.url", f"sqlite:///{db}")
+    command.upgrade(config, BEFORE_PEOPLE_ROOT)
+    _exec(
+        db,
+        "INSERT INTO accounts (name, type, iban, parent_id, created_at) "
+        "VALUES ('People', 'expense', NULL, NULL, '2026-01-01')",
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        command.upgrade(config, "head")
+    assert "People" in str(exc_info.value)
