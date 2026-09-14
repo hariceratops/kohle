@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from kohle.core.result import Result
 from kohle.domain.domain_errors import (
+    EmptySplitGroupName,
     JournalError,
     NoSplitForEntry,
     NotAPersonAccount,
@@ -12,7 +13,7 @@ from kohle.domain.domain_errors import (
     SplitError,
     SplitImportedEntryError,
 )
-from kohle.domain.models import JournalEntry
+from kohle.domain.models import JournalEntry, SplitGroup
 from kohle.infrastructure.transaction_context import DbTransactionContext
 from kohle.infrastructure.uow import UnitOfWork
 from kohle.services.account_services import (
@@ -22,7 +23,10 @@ from kohle.services.account_services import (
 from kohle.services.classification_services import classification_by_entry_service
 from kohle.services.journal_services import LineSpec
 from kohle.services.split_services import (
+    add_split_group_service,
+    get_split_group_by_name_service,
     set_split_adjusting_entry_service,
+    set_split_group_service,
     split_by_entry_service,
 )
 from kohle.use_cases.journal import PEOPLE_ROOT, post_entry
@@ -41,6 +45,22 @@ class PersonShare:
     quantity: Decimal
 
 
+class AddSplitGroup(UnitOfWork[SplitGroup, SplitError]):
+    """Creates a trip/label splits can be tagged under (design §2.2, §6).
+    Groups are created explicitly and looked up strictly — `split-line
+    --group` never auto-vivifies a group from a typo, the same rule that
+    makes a typo in `--from` an error rather than a new account."""
+
+    def execute(self, name: str) -> Result[SplitGroup, SplitError]:
+        def use_case(ctx: DbTransactionContext) -> Result[SplitGroup, SplitError]:
+            text = name.strip()
+            if not text:
+                return Result.err(EmptySplitGroupName())
+            return add_split_group_service(ctx, text)
+
+        return self._run(use_case)
+
+
 class SplitImportedEntry(UnitOfWork[JournalEntry, SplitImportedEntryError]):
     """Divides an already-imported line between the user's own share and one
     or more person accounts, by reversing the line's current allocation and
@@ -50,7 +70,11 @@ class SplitImportedEntry(UnitOfWork[JournalEntry, SplitImportedEntryError]):
     """
 
     def execute(
-        self, entry_id: int, own_share: Decimal, shares: Iterable[PersonShare]
+        self,
+        entry_id: int,
+        own_share: Decimal,
+        shares: Iterable[PersonShare],
+        group_name: str | None = None,
     ) -> Result[JournalEntry, SplitImportedEntryError]:
         def use_case(ctx: DbTransactionContext) -> Result[JournalEntry, SplitImportedEntryError]:
             classification_res = classification_by_entry_service(ctx, entry_id)
@@ -142,6 +166,19 @@ class SplitImportedEntry(UnitOfWork[JournalEntry, SplitImportedEntryError]):
             split_res = set_split_adjusting_entry_service(ctx, entry_id, adjusting_entry.id)
             if split_res.is_err:
                 return Result.err(split_res.unwrap_err())
+
+            # --group is authoritative on every run: absent, it clears the
+            # group; given, it resolves strictly and sets or moves it
+            # (design §5.3). A typo does not create a second group.
+            group_id: int | None = None
+            if group_name is not None:
+                group_res = get_split_group_by_name_service(ctx, group_name)
+                if group_res.is_err:
+                    return Result.err(group_res.unwrap_err())
+                group_id = group_res.unwrap().id
+            group_set_res = set_split_group_service(ctx, entry_id, group_id)
+            if group_set_res.is_err:
+                return Result.err(group_set_res.unwrap_err())
 
             return Result.ok(adjusting_entry)
 

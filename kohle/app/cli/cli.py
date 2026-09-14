@@ -21,7 +21,12 @@ from kohle.use_cases.journal import (
 )
 from kohle.use_cases.operations import ListOperations
 from kohle.use_cases.rules import AddRule, ListRules, RemoveRule
-from kohle.use_cases.splitting import PersonShare, SplitImportedEntry, UnsplitEntry
+from kohle.use_cases.splitting import (
+    AddSplitGroup,
+    PersonShare,
+    SplitImportedEntry,
+    UnsplitEntry,
+)
 from kohle.use_cases.units import AddUnit, ListUnits
 
 
@@ -475,6 +480,17 @@ def reclassify_cmd(make_session, entry_id: int, account: str):
 
 
 @cli.command()
+@click.argument("name")
+@click.pass_obj
+def add_group_cmd(make_session, name: str):
+    add_group = AddSplitGroup(make_session())
+    res = add_group.execute(name)
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    click.echo(f"Added split group {name} with id {res.unwrap().id}")
+
+
+@cli.command()
 @click.argument("entry_id", type=int)
 @click.option("--mine", "own_share", type=DECIMAL, required=True, help="Your own share of the line")
 @click.option(
@@ -485,10 +501,16 @@ def reclassify_cmd(make_session, entry_id: int, account: str):
     callback=_parse_shares,
     help="PERSON:QUANTITY, repeatable, one per person account",
 )
+@click.option(
+    "--group", "group_name", default=None,
+    help="Trip/label to tag the split under; absent clears it, present sets or moves it",
+)
 @click.pass_obj
-def split_line_cmd(make_session, entry_id: int, own_share: Decimal, shares: list[PersonShare]):
+def split_line_cmd(
+    make_session, entry_id: int, own_share: Decimal, shares: list[PersonShare], group_name: str | None
+):
     split = SplitImportedEntry(make_session())
-    res = split.execute(entry_id, own_share, shares)
+    res = split.execute(entry_id, own_share, shares, group_name)
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
     click.echo(f"Split entry {entry_id}: {own_share} own, " + ", ".join(f"{s.person_name} {s.quantity}" for s in shares))

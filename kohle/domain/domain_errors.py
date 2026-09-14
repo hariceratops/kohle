@@ -212,6 +212,29 @@ class SplitDoesNotSumToLine(SplitError):
         return f"Split shares sum to {self.given}, not the line's {self.line_quantity}"
 
 
+class EmptySplitGroupName(SplitError):
+    def __str__(self) -> str:
+        return "Split group name cannot be empty"
+
+
+class DuplicateSplitGroup(SplitError):
+    def __init__(self, name: str) -> None:
+        super().__init__()
+        self.name = name
+
+    def __str__(self) -> str:
+        return f"Split group {self.name} already exists"
+
+
+class SplitGroupNotFound(SplitError):
+    def __init__(self, name: str) -> None:
+        super().__init__()
+        self.name = name
+
+    def __str__(self) -> str:
+        return f"Split group {self.name!r} not found"
+
+
 class NoSplitForEntry(SplitError):
     def __init__(self, entry_id: int) -> None:
         super().__init__()

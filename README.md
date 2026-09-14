@@ -260,6 +260,24 @@ undone first. The full history — the original import, the first split, and
 the correction pair — stays readable through `entries-in-period` and
 `list-operations`; only the `splits` row's current pointer moves.
 
+### Grouping splits under a trip label
+
+A split can optionally be tagged with a group — a trip label that ties
+several splits together. Groups are created explicitly and looked up
+strictly, the same rule that stops a typo in `--from` from becoming a new
+account:
+
+```bash
+kohle-cli add-group "Italy trip"
+kohle-cli split-line 42 --mine 32 --share Alice:48 --group "Italy trip"
+```
+
+`--group` is authoritative on every run of `split-line`: omitting it clears
+the split's group, and naming a different one moves it. Splitting a line
+without `--group` works exactly as before — grouping is additive. An unknown
+group name fails with a clear error rather than silently creating a second
+group with a similar spelling.
+
 ### Writing importer plugins
 A new plugin can be rolled out by defining an entry point to kohle plugins
 ```toml

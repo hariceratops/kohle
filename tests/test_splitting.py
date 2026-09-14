@@ -18,19 +18,28 @@ from sqlalchemy.orm import Session
 
 from kohle.domain.domain_errors import (
     AccountNotFoundError,
+    DuplicateSplitGroup,
+    EmptySplitGroupName,
     NoClassificationForEntry,
     NoSplitForEntry,
     NotAPersonAccount,
     SplitDoesNotSumToLine,
+    SplitGroupNotFound,
 )
 from kohle.domain.models import AccountType, UnitKind
 from kohle.infrastructure.transaction_context import DbTransactionContext
 from kohle.services.account_services import add_account_service
 from kohle.services.classification_services import add_classification_service
 from kohle.services.journal_services import LineSpec, add_journal_entry_service
+from kohle.services.split_services import split_by_entry_service
 from kohle.services.unit_services import add_unit_service
 from kohle.use_cases.journal import RecordSimpleEntry
-from kohle.use_cases.splitting import PersonShare, SplitImportedEntry, UnsplitEntry
+from kohle.use_cases.splitting import (
+    AddSplitGroup,
+    PersonShare,
+    SplitImportedEntry,
+    UnsplitEntry,
+)
 
 
 def _imported_dinner(ctx: DbTransactionContext, checking_id: int, eating_out_id: int, eur_id: int) -> int:
@@ -154,11 +163,73 @@ def test_unsplit_entry_already_undone(session: Session, people_root) -> None:
     assert isinstance(result.unwrap_err(), NoSplitForEntry)
 
 
-@pytest.mark.skip(reason="scaffold: issue 021")
-def test_add_split_group() -> None:
-    # TODO(021) — EmptySplitGroupName on a blank/whitespace-only name;
-    #   DuplicateSplitGroup on a repeated name
-    raise NotImplementedError
+def test_add_split_group(session: Session) -> None:
+    result = AddSplitGroup(session).execute("  ")
+    assert result.is_err
+    assert isinstance(result.unwrap_err(), EmptySplitGroupName)
+
+    created = AddSplitGroup(session).execute("Italy trip")
+    assert created.is_ok
+    assert created.unwrap().name == "Italy trip"
+
+    duplicate = AddSplitGroup(session).execute("Italy trip")
+    assert duplicate.is_err
+    duplicate_err = duplicate.unwrap_err()
+    assert isinstance(duplicate_err, DuplicateSplitGroup)
+    assert duplicate_err.name == "Italy trip"
+
+
+def test_split_imported_entry_with_an_unknown_group(session: Session, people_root) -> None:
+    ctx = DbTransactionContext(session)
+    checking = add_account_service(ctx, "Checking", AccountType.asset, "DE1").unwrap().id
+    eating_out = add_account_service(ctx, "Eating out", AccountType.expense).unwrap().id
+    add_account_service(ctx, "Alice", AccountType.asset, None, people_root.id)
+    eur = add_unit_service(ctx, "EUR", "Euro", UnitKind.currency).unwrap().id
+    entry_id = _imported_dinner(ctx, checking, eating_out, eur)
+    session.commit()
+
+    result = SplitImportedEntry(session).execute(
+        entry_id, Decimal(32), [PersonShare("Alice", Decimal(48))], "Itlay trip"
+    )
+    assert result.is_err
+    err = result.unwrap_err()
+    assert isinstance(err, SplitGroupNotFound)
+    assert err.name == "Itlay trip"
+
+
+def test_split_imported_entry_group_is_authoritative_on_every_run(session: Session, people_root) -> None:
+    ctx = DbTransactionContext(session)
+    checking = add_account_service(ctx, "Checking", AccountType.asset, "DE1").unwrap().id
+    eating_out = add_account_service(ctx, "Eating out", AccountType.expense).unwrap().id
+    add_account_service(ctx, "Alice", AccountType.asset, None, people_root.id)
+    eur = add_unit_service(ctx, "EUR", "Euro", UnitKind.currency).unwrap().id
+    entry_id = _imported_dinner(ctx, checking, eating_out, eur)
+    italy = AddSplitGroup(session).execute("Italy trip").unwrap()
+    spain = AddSplitGroup(session).execute("Spain trip").unwrap()
+    session.commit()
+
+    split = SplitImportedEntry(session).execute(
+        entry_id, Decimal(32), [PersonShare("Alice", Decimal(48))], "Italy trip"
+    )
+    assert split.is_ok
+    row = split_by_entry_service(DbTransactionContext(session), entry_id).unwrap()
+    assert row.group_id == italy.id
+
+    # Re-splitting with a different --group moves it.
+    split = SplitImportedEntry(session).execute(
+        entry_id, Decimal(40), [PersonShare("Alice", Decimal(40))], "Spain trip"
+    )
+    assert split.is_ok
+    row = split_by_entry_service(DbTransactionContext(session), entry_id).unwrap()
+    assert row.group_id == spain.id
+
+    # Re-splitting without --group clears it.
+    split = SplitImportedEntry(session).execute(
+        entry_id, Decimal(40), [PersonShare("Alice", Decimal(40))]
+    )
+    assert split.is_ok
+    row = split_by_entry_service(DbTransactionContext(session), entry_id).unwrap()
+    assert row.group_id is None
 
 
 @pytest.mark.skip(reason="scaffold: issue 022")
