@@ -20,10 +20,11 @@ on what a price source said on any particular day.
 
 Accounts form a tree and everything is an account: bank accounts, virtual
 sub-accounts for earmarked savings, instruments, expense categories, and
-eventually people. A parent account's balance is the sum of its children, so
-only leaf accounts may be posted to. Account names are globally unique
-because lookup is by bare name; scoping a name to its parent needs qualified
-paths, which do not exist yet.
+people (their own `People` branch, holding what they owe or are owed). A
+parent account's balance is the sum of its children, so only leaf accounts
+may be posted to. Account names are globally unique because lookup is by
+bare name; scoping a name to its parent needs qualified paths, which do not
+exist yet.
 
 Code is layered `app` → `use_cases` → `services` → `infrastructure` /
 `domain`. Use cases validate and compose; services own persistence and are
