@@ -39,6 +39,7 @@ from kohle.services.account_services import (
     add_account_service,
     descendant_account_ids_service,
     get_account_by_name_service,
+    list_accounts_service,
 )
 from kohle.services.classification_services import add_classification_service
 from kohle.services.journal_services import (
@@ -541,5 +542,83 @@ class QueryAccountBalance(UnitOfWork[list[UnitBalance], BalanceError]):
                 return Result.err(account_res.unwrap_err())
 
             return account_balance(ctx, account_res.unwrap().id)
+
+        return self._run(use_case)
+
+
+def _at_cost(balances: Iterable[UnitBalance]) -> Decimal:
+    """`quantity * average_cost`, not `sum(line.value)` — the two coincide
+    for a euro-only ledger and diverge the moment a holding is partly sold,
+    because the sale's counter-line is priced at the sale price, not the
+    cost basis, and so carries the realised gain invisibly (design §9.3).
+    `average_cost` is `None` only when `quantity` is 0, so skipping it here
+    contributes 0 either way."""
+    return sum(
+        (b.quantity * b.average_cost for b in balances if b.average_cost is not None),
+        Decimal(0),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class NetWorthReport:
+    own: list[UnitBalance]
+    receivables: list[UnitBalance]
+
+    @property
+    def own_at_cost(self) -> Decimal:
+        return _at_cost(self.own)
+
+    @property
+    def receivables_at_cost(self) -> Decimal:
+        return _at_cost(self.receivables)
+
+    @property
+    def net_worth_at_cost(self) -> Decimal:
+        return self.own_at_cost + self.receivables_at_cost
+
+
+class NetWorth(UnitOfWork[NetWorthReport, BalanceError]):
+    """Net worth at recorded cost (design §9). Income and expense accounts
+    are excluded — every entry balances, so including them would always net
+    to exactly 0, which would look like a bug rather than a definition error
+    (design §9.2). Receivables are the People subtree, unioned in by
+    membership rather than selected by account type, so a person account
+    still counts even with the default `expense` type `add-account` gives
+    it, and nothing is double-counted since the partition is by subtree.
+    Market valuation is a separate, deferred spec (design §9.4) — this is
+    `quantity * average_cost`, see `_at_cost`.
+    """
+
+    def execute(self) -> Result[NetWorthReport, BalanceError]:
+        def use_case(ctx: DbTransactionContext) -> Result[NetWorthReport, BalanceError]:
+            people_res = get_account_by_name_service(ctx, PEOPLE_ROOT)
+            if people_res.is_err:
+                return Result.err(people_res.unwrap_err())
+
+            people_ids_res = descendant_account_ids_service(ctx, people_res.unwrap().id)
+            if people_ids_res.is_err:
+                return Result.err(people_ids_res.unwrap_err())
+            people_ids = set(people_ids_res.unwrap())
+
+            accounts_res = list_accounts_service(ctx)
+            if accounts_res.is_err:
+                return Result.err(accounts_res.unwrap_err())
+            balance_sheet_ids = {
+                a.id for a in accounts_res.unwrap()
+                if a.type in (AccountType.asset, AccountType.liability)
+            } | people_ids
+
+            own_lines_res = account_lines_service(ctx, balance_sheet_ids - people_ids)
+            if own_lines_res.is_err:
+                return Result.err(own_lines_res.unwrap_err())
+
+            receivables_lines_res = account_lines_service(ctx, people_ids)
+            if receivables_lines_res.is_err:
+                return Result.err(receivables_lines_res.unwrap_err())
+
+            return Result.ok(NetWorthReport(
+                own=aggregate_by_unit(own_lines_res.unwrap()),
+                receivables=aggregate_by_unit(receivables_lines_res.unwrap()),
+            ))
 
         return self._run(use_case)

@@ -341,6 +341,37 @@ into one suggestion. Nothing is written; this is a pure read over current
 balances, computed fresh on every call, and `No transfers needed` prints when
 every balance is already zero.
 
+### Net worth
+
+`net-worth` totals your own accounts plus what's owed to you (the `People`
+branch, per-person balances are `balance <person>` or `who-owes-what`):
+
+```bash
+kohle-cli net-worth
+```
+
+```
+section                   unit    quantity    at cost
+------------------------  ------  ---------  --------
+Own accounts              EUR      4796.00    4796.00
+Receivables (People)      EUR        16.00      16.00
+
+Net worth (at cost): 4812.00
+```
+
+The total folds receivables in rather than reporting them next to net worth,
+but the breakdown above is what makes that checkable instead of a bare number
+you have to trust. Income and expense accounts are excluded — every entry
+balances, so including them would always report exactly 0. A person account
+with a negative balance (you owe them) lowers the total; a positive one
+(they owe you) raises it.
+
+Every figure is reported **at recorded cost**, not current market value —
+"at cost" is in the output label because a holding bought at 100 and now
+worth 140 is still reported at 100. Market valuation needs a price feed,
+which this codebase doesn't have yet; that's the separate, deferred
+`portfolio-and-profit-reporting` work.
+
 ### Writing importer plugins
 A new plugin can be rolled out by defining an entry point to kohle plugins
 ```toml

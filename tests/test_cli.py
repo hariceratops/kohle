@@ -1095,8 +1095,23 @@ def test_settle_up_cli_one_intermediary_renders_one_transfer(session_factory: se
     )
 
 
-@pytest.mark.skip(reason="scaffold: issue 024")
-def test_net_worth_cli() -> None:
-    # TODO(024) — net-worth renders the receivables line even when it is
-    #   zero, and the total visibly includes it (design §2.4, §9.3)
-    raise NotImplementedError
+def test_net_worth_cli_renders_receivables_and_the_total_visibly(
+    session_factory: sessionmaker,
+) -> None:
+    _seed_split_line_ledger(session_factory)
+    entry_id = _seed_imported_dinner(session_factory)
+    runner = CliRunner()
+    split_result = runner.invoke(
+        cli,
+        ["split-line", str(entry_id), "--mine", "32", "--share", "Alice:48"],
+        obj=session_factory,
+    )
+    assert split_result.exit_code == 0
+
+    result = runner.invoke(cli, ["net-worth"], obj=session_factory)
+    assert result.exit_code == 0
+    assert "Receivables (People)" in result.output
+    assert "at cost" in result.output
+    # Checking is credited 80 for the dinner (own account), Alice owes 48
+    # (receivable) — net worth is the two combined, not either alone.
+    assert "Net worth (at cost): -32.00" in result.output

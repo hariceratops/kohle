@@ -14,6 +14,7 @@ from kohle.use_cases.journal import (
     CrossUnitLine,
     ImportStatement,
     LineInput,
+    NetWorth,
     QueryAccountBalance,
     QueryJournalByPeriod,
     RecordSimpleEntry,
@@ -587,6 +588,35 @@ def _print_who_owes_what_by_group(make_session):
     # do not fall as debts get settled, unlike who-owes-what's own totals
     # (design §2.3, §7.2).
     click.echo("\nNote: group figures are historical allocations, not settlement-adjusted balances.")
+
+
+def _net_worth_rows(section: str, balances: list) -> list[dict]:
+    return [
+        {
+            "section": section,
+            "unit": b.unit_identifier,
+            "quantity": b.quantity,
+            "at cost": b.quantity * b.average_cost if b.average_cost is not None else Decimal(0),
+        }
+        for b in balances
+    ]
+
+
+@cli.command()
+@click.pass_obj
+def net_worth_cmd(make_session):
+    res = NetWorth(make_session()).execute()
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    report = res.unwrap()
+    rows = _net_worth_rows("Own accounts", report.own) + _net_worth_rows(
+        "Receivables (People)", report.receivables
+    )
+    click.echo(tabulate(rows, headers="keys", floatfmt=".2f"))
+    # The total folds receivables in rather than reporting them separately
+    # (design §2.4) — the breakdown above is what makes that checkable
+    # rather than a bare number the user has to trust.
+    click.echo(f"\nNet worth (at cost): {report.net_worth_at_cost:.2f}")
 
 
 @cli.command()
