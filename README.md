@@ -305,6 +305,42 @@ balance. If Alice has since paid you back, `who-owes-what` shows it and the
 group total still doesn't, which is why the two are never labelled the same
 thing.
 
+### Suggesting settling transfers
+
+`settle-up` suggests the minimum set of transfers that zeroes out every
+current person balance — three people who cancel through one intermediary
+need one transfer, not three:
+
+```bash
+kohle-cli settle-up
+```
+
+```
+payer   payee   unit   quantity
+------  ------  -----  --------
+Alice   Bob     EUR       50.00
+
+Settle with: kohle-cli record <date> "<description>" 50.00 --from Alice --to Bob
+```
+
+`you` stands in for your own side of a transfer. The command has no way to
+know which of your accounts should stand in for "you" in a `record`
+invocation — a "default cash account" setting would be a configuration
+mechanism this codebase does not have — so `<your account>` is left for you
+to fill in, along with the date and description.
+
+```bash
+kohle-cli settle-up --group "Italy trip"
+```
+
+`--group` restricts the suggestion to a group's participants while keeping
+each of their full, current balances — not the group's historical
+allocation total — and recomputes your own position as the negation of just
+that subset. Netting runs once per unit: euros and shares are never combined
+into one suggestion. Nothing is written; this is a pure read over current
+balances, computed fresh on every call, and `No transfers needed` prints when
+every balance is already zero.
+
 ### Writing importer plugins
 A new plugin can be rolled out by defining an entry point to kohle plugins
 ```toml

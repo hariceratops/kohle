@@ -1,4 +1,4 @@
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from decimal import Decimal
 from uuid import uuid4
@@ -262,37 +262,41 @@ class GroupAllocation:
     allocations: list[PersonBalance]
 
 
+def _person_balances(ctx: DbTransactionContext) -> Result[list[PersonBalance], WhoOwesWhatError]:
+    """Every person account's current balance, by unit — the shared read
+    behind `WhoOwesWhat` and `SettleUp`'s global (unscoped) participant set
+    (design §7.1, §8.2). Every person account is listed, including one with
+    no lines: driven by the account tree rather than by the lines, a settled
+    person (their lines cancel) gets a UnitBalance with quantity 0, and a
+    person never split against gets an empty balances list — the
+    distinction issue 022's last criterion asks for."""
+    people_res = get_account_by_name_service(ctx, PEOPLE_ROOT)
+    if people_res.is_err:
+        return Result.err(people_res.unwrap_err())
+
+    children_res = list_child_accounts_service(ctx, people_res.unwrap().id)
+    if children_res.is_err:
+        return Result.err(children_res.unwrap_err())
+
+    balances: list[PersonBalance] = []
+    for person in children_res.unwrap():
+        balance_res = account_balance(ctx, person.id)
+        if balance_res.is_err:
+            return Result.err(balance_res.unwrap_err())
+        balances.append(PersonBalance(person.name, balance_res.unwrap()))
+
+    return Result.ok(balances)
+
+
 class WhoOwesWhat(UnitOfWork[list[PersonBalance], WhoOwesWhatError]):
     """The net balance of every person account — the same figure `balance
     Alice` gives, listed for the whole People branch at once (design §7.1).
-
-    Every person account is listed, including one with no lines: driven by
-    the account tree rather than by the lines, a settled person (their
-    lines cancel) gets a UnitBalance with quantity 0, and a person never
-    split against gets an empty balances list — the distinction issue 022's
-    last criterion asks for.
+    See `_person_balances` for what "every person account" and "balance"
+    mean here.
     """
 
     def execute(self) -> Result[list[PersonBalance], WhoOwesWhatError]:
-        def use_case(ctx: DbTransactionContext) -> Result[list[PersonBalance], WhoOwesWhatError]:
-            people_res = get_account_by_name_service(ctx, PEOPLE_ROOT)
-            if people_res.is_err:
-                return Result.err(people_res.unwrap_err())
-
-            children_res = list_child_accounts_service(ctx, people_res.unwrap().id)
-            if children_res.is_err:
-                return Result.err(children_res.unwrap_err())
-
-            balances: list[PersonBalance] = []
-            for person in children_res.unwrap():
-                balance_res = account_balance(ctx, person.id)
-                if balance_res.is_err:
-                    return Result.err(balance_res.unwrap_err())
-                balances.append(PersonBalance(person.name, balance_res.unwrap()))
-
-            return Result.ok(balances)
-
-        return self._run(use_case)
+        return self._run(_person_balances)
 
 
 class WhoOwesWhatByGroup(UnitOfWork[list[GroupAllocation], WhoOwesWhatError]):
@@ -353,3 +357,132 @@ class WhoOwesWhatByGroup(UnitOfWork[list[GroupAllocation], WhoOwesWhatError]):
             return Result.ok(report)
 
         return self._run(use_case)
+
+
+SettleUpError = WhoOwesWhatError
+
+
+@dataclass(frozen=True, slots=True)
+class SuggestedTransfer:
+    payer: str | None
+    payee: str | None
+    unit_identifier: str
+    quantity: Decimal
+
+
+def settle(positions: Mapping[str | None, Decimal]) -> list[tuple[str | None, str | None, Decimal]]:
+    """Debt-simplification netting for one unit (design §8.1): pure and
+    DB-free, the same treatment `match_rule` and `aggregate_by_unit` already
+    get, for the same reason.
+
+    `positions` maps participant (`None` is you) to the net amount they must
+    pay out — positive owes, negative is owed — and sums to exactly zero by
+    construction (§2.3), which is what guarantees this terminates with every
+    participant at zero rather than at a residue.
+
+    Greedy max-payer / max-receiver: repeatedly take the largest positive and
+    the largest negative position, emit a transfer of `min(payer, -receiver)`,
+    subtract, drop anyone who reaches zero. At most `n - 1` transfers for `n`
+    participants. Ties break on `(-amount, name or "")`, a total order, so the
+    same input always produces the same suggestion.
+    """
+    remaining = {name: amount for name, amount in positions.items() if amount != 0}
+
+    def key(name: str | None) -> tuple[Decimal, str]:
+        return (-remaining[name], name or "")
+
+    transfers: list[tuple[str | None, str | None, Decimal]] = []
+    while remaining:
+        payer = min(remaining, key=key)
+        receiver = max(remaining, key=key)
+        quantity = min(remaining[payer], -remaining[receiver])
+        transfers.append((payer, receiver, quantity))
+        remaining[payer] -= quantity
+        remaining[receiver] += quantity
+        if remaining[payer] == 0:
+            del remaining[payer]
+        if remaining[receiver] == 0:
+            del remaining[receiver]
+    return transfers
+
+
+class SettleUp(UnitOfWork[list[SuggestedTransfer], SettleUpError]):
+    """The minimum set of settling transfers that zeroes out every person
+    balance — globally, or restricted to one group's participants (design
+    §8, §2.3). Nets once per unit (§8.2): euros and shares are never
+    combined into one suggestion.
+
+    A pure read: resolves current balances and returns values, writing
+    nothing — since issue 011 made `OperationGroup` creation lazy, this
+    leaves no group behind (§8.2's third criterion).
+    """
+
+    def execute(self, group_name: str | None = None) -> Result[list[SuggestedTransfer], SettleUpError]:
+        def use_case(ctx: DbTransactionContext) -> Result[list[SuggestedTransfer], SettleUpError]:
+            balances_res = _person_balances(ctx)
+            if balances_res.is_err:
+                return Result.err(balances_res.unwrap_err())
+            balances = balances_res.unwrap()
+
+            if group_name is not None:
+                names_res = _group_participant_names(ctx, group_name)
+                if names_res.is_err:
+                    return Result.err(names_res.unwrap_err())
+                names = names_res.unwrap()
+                balances = [person for person in balances if person.person_name in names]
+
+            # --group keeps each included person's full current balance and
+            # recomputes "you" as the negation of just that subset's sum
+            # (design §2.3, §8.2) — building positions from `balances` as
+            # filtered above does exactly that, with no separate code path
+            # for the unscoped case.
+            positions_by_unit: dict[str, dict[str | None, Decimal]] = {}
+            for person in balances:
+                for unit_balance in person.balances:
+                    positions_by_unit.setdefault(unit_balance.unit_identifier, {})[
+                        person.person_name
+                    ] = unit_balance.quantity
+            for unit_positions in positions_by_unit.values():
+                unit_positions[None] = -sum(unit_positions.values(), start=Decimal(0))
+
+            transfers = [
+                SuggestedTransfer(payer, payee, unit_identifier, quantity)
+                for unit_identifier in sorted(positions_by_unit)
+                for payer, payee, quantity in settle(positions_by_unit[unit_identifier])
+            ]
+            return Result.ok(transfers)
+
+        return self._run(use_case)
+
+
+def _group_participant_names(
+    ctx: DbTransactionContext, group_name: str
+) -> Result[set[str], SettleUpError]:
+    """The people appearing in a group's current splits (design §8.2) — the
+    same current-adjusting-entry filter `WhoOwesWhatByGroup` applies, since
+    an undone split's group tag is stale rather than a live participation.
+    """
+    group_res = get_split_group_by_name_service(ctx, group_name)
+    if group_res.is_err:
+        return Result.err(group_res.unwrap_err())
+
+    splits_res = splits_in_group_service(ctx, group_res.unwrap().id)
+    if splits_res.is_err:
+        return Result.err(splits_res.unwrap_err())
+
+    people_res = get_account_by_name_service(ctx, PEOPLE_ROOT)
+    if people_res.is_err:
+        return Result.err(people_res.unwrap_err())
+    people_ids_res = descendant_account_ids_service(ctx, people_res.unwrap().id)
+    if people_ids_res.is_err:
+        return Result.err(people_ids_res.unwrap_err())
+    people_ids = set(people_ids_res.unwrap())
+
+    names: set[str] = set()
+    for split in splits_res.unwrap():
+        if split.adjusting_entry_id is None:
+            continue
+        for line in split.adjusting_entry.lines:
+            if line.account_id in people_ids:
+                names.add(line.account.name)
+    return Result.ok(names)

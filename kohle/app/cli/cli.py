@@ -24,6 +24,7 @@ from kohle.use_cases.rules import AddRule, ListRules, RemoveRule
 from kohle.use_cases.splitting import (
     AddSplitGroup,
     PersonShare,
+    SettleUp,
     SplitImportedEntry,
     UnsplitEntry,
     WhoOwesWhat,
@@ -586,6 +587,46 @@ def _print_who_owes_what_by_group(make_session):
     # do not fall as debts get settled, unlike who-owes-what's own totals
     # (design §2.3, §7.2).
     click.echo("\nNote: group figures are historical allocations, not settlement-adjusted balances.")
+
+
+@cli.command()
+@click.option(
+    "--group", "group_name", default=None,
+    help="Restrict to one group's participants, keeping their full balances (design §8.2)",
+)
+@click.pass_obj
+def settle_up_cmd(make_session, group_name: str | None):
+    res = SettleUp(make_session()).execute(group_name)
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    transfers = res.unwrap()
+    if not transfers:
+        click.echo("No transfers needed")
+        return
+
+    rows = [
+        {
+            "payer": transfer.payer or "you",
+            "payee": transfer.payee or "you",
+            "unit": transfer.unit_identifier,
+            "quantity": transfer.quantity,
+        }
+        for transfer in transfers
+    ]
+    click.echo(tabulate(rows, headers="keys", floatfmt=".2f"))
+
+    # The command has no way to know which cash account either side of a
+    # transfer touching "you" should use, and a "default cash account"
+    # setting would be a configuration mechanism this codebase does not
+    # have — the user supplies their own account and fills in the date and
+    # description (design §8.3).
+    for transfer in transfers:
+        payer = transfer.payer or "<your account>"
+        payee = transfer.payee or "<your account>"
+        click.echo(
+            f'Settle with: kohle-cli record <date> "<description>" {transfer.quantity:.2f} '
+            f"--from {payer} --to {payee}"
+        )
 
 
 if __name__ == "__main__":

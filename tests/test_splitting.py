@@ -13,7 +13,6 @@ Requires the `people_root` fixture (conftest.py) — the migration-seeded
 from datetime import date
 from decimal import Decimal
 
-import pytest
 from sqlalchemy.orm import Session
 
 from kohle.domain.domain_errors import (
@@ -26,7 +25,7 @@ from kohle.domain.domain_errors import (
     SplitDoesNotSumToLine,
     SplitGroupNotFound,
 )
-from kohle.domain.models import AccountType, UnitKind
+from kohle.domain.models import AccountType, OperationGroup, UnitKind
 from kohle.infrastructure.transaction_context import DbTransactionContext
 from kohle.services.account_services import add_account_service
 from kohle.services.classification_services import add_classification_service
@@ -37,7 +36,9 @@ from kohle.use_cases.journal import RecordSimpleEntry
 from kohle.use_cases.splitting import (
     AddSplitGroup,
     PersonShare,
+    SettleUp,
     SplitImportedEntry,
+    SuggestedTransfer,
     UnsplitEntry,
     WhoOwesWhat,
 )
@@ -266,10 +267,68 @@ def test_who_owes_what(session: Session, people_root) -> None:
     assert people["Bob"].balances == []
 
 
-@pytest.mark.skip(reason="scaffold: issue 023")
-def test_settle_up_use_case() -> None:
-    # TODO(023) — --group restricts the participant set to that group's
-    #   people while still netting their full current balances, not the
-    #   group's allocation total (design §2.3); nothing is stored, no
-    #   OperationGroup is left behind
-    raise NotImplementedError
+def test_settle_up_use_case(session: Session, people_root) -> None:
+    ctx = DbTransactionContext(session)
+    checking = add_account_service(ctx, "Checking", AccountType.asset, "DE1").unwrap().id
+    eating_out = add_account_service(ctx, "Eating out", AccountType.expense).unwrap().id
+    alice = add_account_service(ctx, "Alice", AccountType.asset, None, people_root.id).unwrap().id
+    add_account_service(ctx, "Bob", AccountType.asset, None, people_root.id)
+    eur = add_unit_service(ctx, "EUR", "Euro", UnitKind.currency).unwrap().id
+    dinner_id = _imported_dinner(ctx, checking, eating_out, eur)
+
+    grocery_lines = [
+        LineSpec(eating_out, eur, Decimal(60), Decimal(1), is_debit=True),
+        LineSpec(checking, eur, Decimal(60), Decimal(1), is_debit=False),
+    ]
+    grocery_id = add_journal_entry_service(
+        ctx, date(2026, 3, 2), "ref-groceries", "Groceries with Bob", grocery_lines
+    ).unwrap().id
+    add_classification_service(
+        ctx, journal_entry_id=grocery_id, proposed_account_id=eating_out,
+        matched_rule_id=None, final_account_id=eating_out,
+    )
+    AddSplitGroup(session).execute("Italy trip")
+    session.commit()
+
+    SplitImportedEntry(session).execute(
+        dinner_id, Decimal(32), [PersonShare("Alice", Decimal(48))], "Italy trip"
+    )
+    SplitImportedEntry(session).execute(grocery_id, Decimal(40), [PersonShare("Bob", Decimal(20))])
+
+    # Alice pays back part of what she owes: settle-up must use her live
+    # balance (28), not the 48 she was originally split for.
+    ctx2 = DbTransactionContext(session)
+    add_journal_entry_service(
+        ctx2, date(2026, 3, 6), "settle-alice-partial", "Alice pays back some",
+        [
+            LineSpec(alice, eur, Decimal(20), Decimal(1), is_debit=False),
+            LineSpec(checking, eur, Decimal(20), Decimal(1), is_debit=True),
+        ],
+    )
+    session.commit()
+
+    groups_before = session.query(OperationGroup).count()
+
+    global_result = SettleUp(session).execute()
+    assert global_result.is_ok
+    global_transfers = {
+        (t.payer, t.payee, t.unit_identifier, t.quantity) for t in global_result.unwrap()
+    }
+    assert global_transfers == {
+        ("Alice", None, "EUR", Decimal(28)),
+        ("Bob", None, "EUR", Decimal(20)),
+    }
+
+    # Bob was never split under "Italy trip": scoping to the group excludes
+    # him and recomputes "you" as the negation of just Alice's balance
+    # (design §2.3, §8.2).
+    scoped_result = SettleUp(session).execute("Italy trip")
+    assert scoped_result.is_ok
+    assert scoped_result.unwrap() == [SuggestedTransfer("Alice", None, "EUR", Decimal(28))]
+
+    unknown_result = SettleUp(session).execute("Spain trip")
+    assert unknown_result.is_err
+    assert isinstance(unknown_result.unwrap_err(), SplitGroupNotFound)
+
+    # A pure read: no OperationGroup left behind by either call.
+    assert session.query(OperationGroup).count() == groups_before

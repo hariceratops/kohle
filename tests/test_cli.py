@@ -1065,12 +1065,34 @@ def test_who_owes_what_cli_lists_every_person_and_breaks_down_by_group(
     assert "not settlement-adjusted" in by_group.output
 
 
-@pytest.mark.skip(reason="scaffold: issue 023")
-def test_settle_up_cli() -> None:
-    # TODO(023) — settle-up with nothing outstanding prints "No transfers
-    #   needed"; the spec's acceptance case (one intermediary -> one transfer)
-    #   renders as a table naming the `record` invocation shape (design §8.3)
-    raise NotImplementedError
+def test_settle_up_cli_nothing_outstanding(session_factory: sessionmaker) -> None:
+    _seed_split_line_ledger(session_factory)
+    runner = CliRunner()
+    result = runner.invoke(cli, ["settle-up"], obj=session_factory)
+    assert result.exit_code == 0
+    assert "No transfers needed" in result.output
+
+
+def test_settle_up_cli_one_intermediary_renders_one_transfer(session_factory: sessionmaker) -> None:
+    _seed_split_line_ledger(session_factory)
+    entry_id = _seed_imported_dinner(session_factory)
+    runner = CliRunner()
+    split_result = runner.invoke(
+        cli,
+        ["split-line", str(entry_id), "--mine", "32", "--share", "Alice:48"],
+        obj=session_factory,
+    )
+    assert split_result.exit_code == 0
+
+    result = runner.invoke(cli, ["settle-up"], obj=session_factory)
+    assert result.exit_code == 0
+    row = next(line for line in result.output.splitlines() if "Alice" in line)
+    assert "you" in row
+    assert "48.00" in row
+    assert (
+        'Settle with: kohle-cli record <date> "<description>" 48.00 '
+        "--from Alice --to <your account>" in result.output
+    )
 
 
 @pytest.mark.skip(reason="scaffold: issue 024")
