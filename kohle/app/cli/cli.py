@@ -21,7 +21,7 @@ from kohle.use_cases.journal import (
 )
 from kohle.use_cases.operations import ListOperations
 from kohle.use_cases.rules import AddRule, ListRules, RemoveRule
-from kohle.use_cases.splitting import PersonShare, SplitImportedEntry
+from kohle.use_cases.splitting import PersonShare, SplitImportedEntry, UnsplitEntry
 from kohle.use_cases.units import AddUnit, ListUnits
 
 
@@ -492,6 +492,17 @@ def split_line_cmd(make_session, entry_id: int, own_share: Decimal, shares: list
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
     click.echo(f"Split entry {entry_id}: {own_share} own, " + ", ".join(f"{s.person_name} {s.quantity}" for s in shares))
+
+
+@cli.command()
+@click.argument("entry_id", type=int)
+@click.pass_obj
+def unsplit_line_cmd(make_session, entry_id: int):
+    unsplit = UnsplitEntry(make_session())
+    res = unsplit.execute(entry_id)
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    click.echo(f"Undid the split of entry {entry_id}")
 
 
 if __name__ == "__main__":

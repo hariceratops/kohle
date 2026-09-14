@@ -5,8 +5,11 @@ from uuid import uuid4
 
 from kohle.core.result import Result
 from kohle.domain.domain_errors import (
+    JournalError,
+    NoSplitForEntry,
     NotAPersonAccount,
     SplitDoesNotSumToLine,
+    SplitError,
     SplitImportedEntryError,
 )
 from kohle.domain.models import JournalEntry
@@ -18,8 +21,13 @@ from kohle.services.account_services import (
 )
 from kohle.services.classification_services import classification_by_entry_service
 from kohle.services.journal_services import LineSpec
-from kohle.services.split_services import set_split_adjusting_entry_service
+from kohle.services.split_services import (
+    set_split_adjusting_entry_service,
+    split_by_entry_service,
+)
 from kohle.use_cases.journal import PEOPLE_ROOT, post_entry
+
+UnsplitEntryError = JournalError | SplitError
 
 # splitting.py may import from journal.py (post_entry, PEOPLE_ROOT) and reach
 # classification_by_entry_service in the services layer directly; journal.py
@@ -109,6 +117,19 @@ class SplitImportedEntry(UnitOfWork[JournalEntry, SplitImportedEntryError]):
                 )
             lines.extend(share_lines)
 
+            # Re-splitting an already-split entry is an edit, not a refusal
+            # (design §5.3): mirror the current allocation away first, in the
+            # same transaction, before posting the new one. A split that was
+            # already undone (adjusting_entry_id IS NULL) has nothing to
+            # mirror and is treated as a fresh split.
+            existing_res = split_by_entry_service(ctx, entry_id)
+            if existing_res.is_err and not isinstance(existing_res.unwrap_err(), NoSplitForEntry):
+                return Result.err(existing_res.unwrap_err())
+            if existing_res.is_ok and existing_res.unwrap().adjusting_entry_id is not None:
+                unsplit_res = _post_unsplit_entry(ctx, entry, existing_res.unwrap().adjusting_entry)
+                if unsplit_res.is_err:
+                    return Result.err(unsplit_res.unwrap_err())
+
             # Dated the original entry's date, not today — the same reasoning
             # Reclassify's adjusting entry follows.
             adjusting_entry_res = post_entry(
@@ -123,5 +144,59 @@ class SplitImportedEntry(UnitOfWork[JournalEntry, SplitImportedEntryError]):
                 return Result.err(split_res.unwrap_err())
 
             return Result.ok(adjusting_entry)
+
+        return self._run(use_case)
+
+
+def _post_unsplit_entry(
+    ctx: DbTransactionContext, entry: JournalEntry, adjusting_entry: JournalEntry
+) -> Result[JournalEntry, JournalError]:
+    """Mirrors an adjusting entry's lines with every side flipped — same
+    accounts, units, quantities and prices, opposite sides. Because the split
+    entry states the complete allocation, mirroring it restores the pre-split
+    state exactly with no arithmetic (design §5.1). Shared by `UnsplitEntry`
+    and the edit path in `SplitImportedEntry`, which mirrors the *existing*
+    adjusting entry before posting the new one (design §5.3).
+    """
+    lines = [
+        LineSpec(
+            line.account_id, line.unit_id, line.quantity, line.unit_price, is_debit=not line.is_debit,
+        )
+        for line in adjusting_entry.lines
+    ]
+    return post_entry(ctx, entry.entry_date, uuid4().hex, f"Unsplit: {entry.description}", lines)
+
+
+class UnsplitEntry(UnitOfWork[JournalEntry, UnsplitEntryError]):
+    """Undoes a previously-recorded split by mirroring its current adjusting
+    entry, restoring the expense account and person account balances to what
+    they were before the split (design §5.1). The `splits` row survives with
+    `adjusting_entry_id` set to NULL rather than being deleted or
+    soft-deleted, keeping "the split of this line" a single referent for any
+    later `split-line` on the same entry (design §4.4).
+    """
+
+    def execute(self, entry_id: int) -> Result[JournalEntry, UnsplitEntryError]:
+        def use_case(ctx: DbTransactionContext) -> Result[JournalEntry, UnsplitEntryError]:
+            split_res = split_by_entry_service(ctx, entry_id)
+            if split_res.is_err:
+                return Result.err(split_res.unwrap_err())
+            split = split_res.unwrap()
+            # An entry that was split and then undone already has
+            # adjusting_entry_id IS NULL — there is no current split to
+            # undo, and that is the same NoSplitForEntry an unknown
+            # reference gets (design §5.1).
+            if split.adjusting_entry_id is None:
+                return Result.err(NoSplitForEntry(entry_id))
+
+            mirror_res = _post_unsplit_entry(ctx, split.entry, split.adjusting_entry)
+            if mirror_res.is_err:
+                return Result.err(mirror_res.unwrap_err())
+
+            update_res = set_split_adjusting_entry_service(ctx, entry_id, None)
+            if update_res.is_err:
+                return Result.err(update_res.unwrap_err())
+
+            return Result.ok(mirror_res.unwrap())
 
         return self._run(use_case)

@@ -229,6 +229,37 @@ line has no classification to split against, and fails the same way
 target account, and shares that don't sum to the line's amount all fail with
 a clear error rather than a traceback.
 
+### Undoing or editing a split
+
+A split can be undone entirely:
+
+```bash
+kohle-cli unsplit-line 42
+```
+
+`unsplit-line` posts a mirror of the split's current adjusting entry — same
+accounts, units, quantities and prices, every side flipped — which restores
+the expense account and person account balances to exactly what they were
+before the split, with no arithmetic of its own. The original entry and the
+first split's adjusting entry are both left exactly as they were; the undo is
+a further entry, not an edit. An unknown entry id, or one with no current
+split to undo, fails with a clear error rather than a traceback.
+
+A split can also be corrected to different shares by re-running `split-line`
+on the same entry:
+
+```bash
+kohle-cli split-line 42 --mine 40 --share Alice:40
+```
+
+Re-splitting an already-split entry replaces the allocation rather than
+refusing: it mirrors the existing adjusting entry (exactly what
+`unsplit-line` posts) and then posts the new split, both in one transaction,
+so a failure anywhere leaves the previous split intact. Nothing needs to be
+undone first. The full history — the original import, the first split, and
+the correction pair — stays readable through `entries-in-period` and
+`list-operations`; only the `splits` row's current pointer moves.
+
 ### Writing importer plugins
 A new plugin can be rolled out by defining an entry point to kohle plugins
 ```toml

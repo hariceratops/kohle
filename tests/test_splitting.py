@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from kohle.domain.domain_errors import (
     AccountNotFoundError,
     NoClassificationForEntry,
+    NoSplitForEntry,
     NotAPersonAccount,
     SplitDoesNotSumToLine,
 )
@@ -29,7 +30,7 @@ from kohle.services.classification_services import add_classification_service
 from kohle.services.journal_services import LineSpec, add_journal_entry_service
 from kohle.services.unit_services import add_unit_service
 from kohle.use_cases.journal import RecordSimpleEntry
-from kohle.use_cases.splitting import PersonShare, SplitImportedEntry
+from kohle.use_cases.splitting import PersonShare, SplitImportedEntry, UnsplitEntry
 
 
 def _imported_dinner(ctx: DbTransactionContext, checking_id: int, eating_out_id: int, eur_id: int) -> int:
@@ -117,11 +118,40 @@ def test_split_imported_entry_shares_not_summing_to_the_line(session: Session, p
     assert err.given == Decimal(72)
 
 
-@pytest.mark.skip(reason="scaffold: issue 020")
-def test_unsplit_entry() -> None:
-    # TODO(020) — an entry with no splits row, and one already undone (its
-    #   splits row has adjusting_entry_id IS NULL) -> both NoSplitForEntry
-    raise NotImplementedError
+def test_unsplit_entry_with_no_splits_row(session: Session, people_root) -> None:
+    ctx = DbTransactionContext(session)
+    checking = add_account_service(ctx, "Checking", AccountType.asset, "DE1").unwrap().id
+    eating_out = add_account_service(ctx, "Eating out", AccountType.expense).unwrap().id
+    eur = add_unit_service(ctx, "EUR", "Euro", UnitKind.currency).unwrap().id
+    entry_id = _imported_dinner(ctx, checking, eating_out, eur)
+    session.commit()
+
+    result = UnsplitEntry(session).execute(entry_id)
+    assert result.is_err
+    assert isinstance(result.unwrap_err(), NoSplitForEntry)
+
+
+def test_unsplit_entry_already_undone(session: Session, people_root) -> None:
+    ctx = DbTransactionContext(session)
+    checking = add_account_service(ctx, "Checking", AccountType.asset, "DE1").unwrap().id
+    eating_out = add_account_service(ctx, "Eating out", AccountType.expense).unwrap().id
+    add_account_service(ctx, "Alice", AccountType.asset, None, people_root.id)
+    eur = add_unit_service(ctx, "EUR", "Euro", UnitKind.currency).unwrap().id
+    entry_id = _imported_dinner(ctx, checking, eating_out, eur)
+    session.commit()
+
+    split = SplitImportedEntry(session).execute(entry_id, Decimal(32), [PersonShare("Alice", Decimal(48))])
+    assert split.is_ok
+
+    undone = UnsplitEntry(session).execute(entry_id)
+    assert undone.is_ok
+
+    # The splits row has adjusting_entry_id IS NULL now — undoing it a
+    # second time is the same NoSplitForEntry an unknown reference gets
+    # (design §5.1).
+    result = UnsplitEntry(session).execute(entry_id)
+    assert result.is_err
+    assert isinstance(result.unwrap_err(), NoSplitForEntry)
 
 
 @pytest.mark.skip(reason="scaffold: issue 021")
