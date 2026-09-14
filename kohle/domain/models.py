@@ -269,6 +269,38 @@ class Classification(base, Archivable):
         )
 
 
+class Split(base, Archivable):
+    """The split of one imported line: where it links back to and what
+    currently effects it.
+
+    `adjusting_entry_id` is the *current* effecting entry, nullable because
+    undo (issue 020) sets it to NULL — the split then has a history but no
+    current allocation. UniqueConstraint(journal_entry_id) is what makes "the
+    split of this line" a phrase with a single referent, so a second split of
+    the same entry is an update, not a second row (design §4.4).
+    """
+
+    __tablename__ = "splits"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    journal_entry_id: Mapped[int] = mapped_column(ForeignKey("journal_entries.id"), nullable=False)
+    adjusting_entry_id: Mapped[int | None] = mapped_column(ForeignKey("journal_entries.id"), nullable=True)
+
+    # Both relationships point at journal_entries, so SQLAlchemy needs the
+    # join spelled out with foreign_keys= on each.
+    entry: Mapped["JournalEntry"] = relationship("JournalEntry", foreign_keys=[journal_entry_id])
+    adjusting_entry: Mapped["JournalEntry | None"] = relationship(
+        "JournalEntry", foreign_keys=[adjusting_entry_id]
+    )
+
+    __table_args__ = (
+        UniqueConstraint("journal_entry_id", name="uq_split_journal_entry"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<Split(id={self.id}, entry_id={self.journal_entry_id}, adjusting_entry_id={self.adjusting_entry_id})>"
+
+
 class Price(base):
     """Fetched valuation for a unit on a date. Written by price plugins, read
     only by reporting — never by transaction recording."""

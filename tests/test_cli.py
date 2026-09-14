@@ -763,7 +763,9 @@ def test_entries_in_period_renders_a_missing_counterparty_as_dash(
 
     assert result.exit_code == 0
     entry_row = next(line for line in result.output.splitlines() if "Aldi" in line)
-    assert entry_row.split() == ["2026-03-01", "Aldi", "-", "cr", "80.00", "EUR", "80.00"]
+    # entry_id leads, matching list-unclassified — split-line's handle onto
+    # the line (design §4.1).
+    assert entry_row.split()[1:] == ["2026-03-01", "Aldi", "-", "cr", "80.00", "EUR", "80.00"]
 
 
 def test_add_rule_reports_a_malformed_pattern_without_a_traceback(
@@ -921,17 +923,96 @@ def test_list_unclassified_shows_the_fallen_through_line(session_factory: sessio
     ]
 
 
-@pytest.mark.skip(reason="scaffold: issue 019")
-def test_split_line_cli() -> None:
-    # TODO(019) — one test per site:
-    #   - split-line divides an imported line's value between the own expense
-    #     account and one or more person accounts, using the people_root
-    #     fixture and an imported line with a classification
-    #   - a malformed --share (not a NAME:VALUE colon pair) exits non-zero
-    #     naming the offending string
-    #   - shares not summing to the line's quantity exits non-zero with
-    #     SplitDoesNotSumToLine's message, not a traceback
-    raise NotImplementedError
+def _seed_imported_dinner(session_factory: sessionmaker) -> int:
+    """A classified imported line to split, seeded through the ORM: only an
+    import produces a classification, and that needs a plugin (same trick
+    test_list_unclassified_shows_the_fallen_through_line uses)."""
+    session = session_factory()
+    try:
+        eur = AddUnit(session).execute("EUR", "Euro", UnitKind.currency).unwrap()
+        checking = session.query(Account).filter_by(name="Checking").one()
+        eating_out = session.query(Account).filter_by(name="Eating out").one()
+        entry = JournalEntry(
+            entry_date=date(2026, 3, 5), reference="ref-dinner", description="Dinner",
+        )
+        entry.lines = [
+            JournalLine(account_id=eating_out.id, unit_id=eur.id, quantity=Decimal(80),
+                        unit_price=Decimal(1), is_debit=True),
+            JournalLine(account_id=checking.id, unit_id=eur.id, quantity=Decimal(80),
+                        unit_price=Decimal(1), is_debit=False),
+        ]
+        session.add(entry)
+        session.flush()
+        session.add(Classification(
+            journal_entry_id=entry.id,
+            proposed_account_id=eating_out.id,
+            matched_rule_id=None,
+            final_account_id=eating_out.id,
+        ))
+        session.commit()
+        return entry.id
+    finally:
+        session.close()
+
+
+def _seed_split_line_ledger(session_factory: sessionmaker) -> None:
+    runner = CliRunner()
+    runner.invoke(cli, ["add-account", "Checking", "--type", "asset"], obj=session_factory)
+    runner.invoke(cli, ["add-account", "Eating out", "--type", "expense"], obj=session_factory)
+    runner.invoke(cli, ["add-account", "People", "--type", "asset"], obj=session_factory)
+    runner.invoke(
+        cli, ["add-account", "Alice", "--type", "asset", "--parent", "People"], obj=session_factory
+    )
+
+
+def test_split_line_cli_divides_an_imported_line(session_factory: sessionmaker) -> None:
+    _seed_split_line_ledger(session_factory)
+    entry_id = _seed_imported_dinner(session_factory)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        ["split-line", str(entry_id), "--mine", "32", "--share", "Alice:48"],
+        obj=session_factory,
+    )
+
+    assert result.exit_code == 0
+
+    balance = runner.invoke(cli, ["balance", "Eating out"], obj=session_factory)
+    assert "32.00" in balance.output
+    alice_balance = runner.invoke(cli, ["balance", "Alice"], obj=session_factory)
+    assert "48.00" in alice_balance.output
+
+
+def test_split_line_cli_malformed_share_names_the_offending_string(session_factory: sessionmaker) -> None:
+    _seed_split_line_ledger(session_factory)
+    entry_id = _seed_imported_dinner(session_factory)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        ["split-line", str(entry_id), "--mine", "32", "--share", "NoColonHere"],
+        obj=session_factory,
+    )
+
+    assert result.exit_code != 0
+    assert "NoColonHere" in result.output
+
+
+def test_split_line_cli_shares_not_summing_to_the_line(session_factory: sessionmaker) -> None:
+    _seed_split_line_ledger(session_factory)
+    entry_id = _seed_imported_dinner(session_factory)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        ["split-line", str(entry_id), "--mine", "32", "--share", "Alice:40"],
+        obj=session_factory,
+    )
+
+    assert result.exit_code != 0
+    assert "80" in result.output
+    assert "72" in result.output
 
 
 @pytest.mark.skip(reason="scaffold: issue 022")

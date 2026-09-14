@@ -10,19 +10,111 @@ Requires the `people_root` fixture (conftest.py) — the migration-seeded
 §3.2), and every one of these use cases resolves it strictly.
 """
 
+from datetime import date
+from decimal import Decimal
+
 import pytest
+from sqlalchemy.orm import Session
+
+from kohle.domain.domain_errors import (
+    AccountNotFoundError,
+    NoClassificationForEntry,
+    NotAPersonAccount,
+    SplitDoesNotSumToLine,
+)
+from kohle.domain.models import AccountType, UnitKind
+from kohle.infrastructure.transaction_context import DbTransactionContext
+from kohle.services.account_services import add_account_service
+from kohle.services.classification_services import add_classification_service
+from kohle.services.journal_services import LineSpec, add_journal_entry_service
+from kohle.services.unit_services import add_unit_service
+from kohle.use_cases.journal import RecordSimpleEntry
+from kohle.use_cases.splitting import PersonShare, SplitImportedEntry
 
 
-@pytest.mark.skip(reason="scaffold: issue 019")
-def test_split_imported_entry() -> None:
-    # TODO(019) — one test per site:
-    #   - splitting a hand-entered `record` line -> NoClassificationForEntry
-    #     (only imported lines have a classification, design §4.2)
-    #   - an unknown person account -> AccountNotFoundError
-    #   - a named account outside the People branch -> NotAPersonAccount
-    #   - shares not summing to the line's quantity -> SplitDoesNotSumToLine
-    #   - an unknown --group name -> SplitGroupNotFound
-    raise NotImplementedError
+def _imported_dinner(ctx: DbTransactionContext, checking_id: int, eating_out_id: int, eur_id: int) -> int:
+    value = Decimal(80)
+    lines = [
+        LineSpec(eating_out_id, eur_id, value, Decimal(1), is_debit=True),
+        LineSpec(checking_id, eur_id, value, Decimal(1), is_debit=False),
+    ]
+    entry_id = add_journal_entry_service(
+        ctx, date(2026, 3, 1), "ref-dinner", "Dinner with Alice", lines
+    ).unwrap().id
+    add_classification_service(
+        ctx,
+        journal_entry_id=entry_id,
+        proposed_account_id=eating_out_id,
+        matched_rule_id=None,
+        final_account_id=eating_out_id,
+    ).unwrap()
+    return entry_id
+
+
+def test_split_imported_entry_a_hand_entered_line_has_no_classification(
+    session: Session, people_root
+) -> None:
+    ctx = DbTransactionContext(session)
+    add_account_service(ctx, "Checking", AccountType.asset, "DE1")
+    add_account_service(ctx, "Eating out", AccountType.expense)
+    add_account_service(ctx, "Alice", AccountType.asset, None, people_root.id)
+    session.commit()
+
+    recorded = RecordSimpleEntry(session).execute(
+        date(2026, 3, 1), "Manual entry", Decimal(80), "Checking", "Eating out"
+    )
+    assert recorded.is_ok
+
+    # record/record-split entries have no classification row — only imported
+    # lines can be split (design §4.2).
+    result = SplitImportedEntry(session).execute(
+        recorded.unwrap().id, Decimal(32), [PersonShare("Alice", Decimal(48))]
+    )
+    assert result.is_err
+    assert isinstance(result.unwrap_err(), NoClassificationForEntry)
+
+
+def test_split_imported_entry_an_unknown_person_account(session: Session, people_root) -> None:
+    ctx = DbTransactionContext(session)
+    checking = add_account_service(ctx, "Checking", AccountType.asset, "DE1").unwrap().id
+    eating_out = add_account_service(ctx, "Eating out", AccountType.expense).unwrap().id
+    eur = add_unit_service(ctx, "EUR", "Euro", UnitKind.currency).unwrap().id
+    entry_id = _imported_dinner(ctx, checking, eating_out, eur)
+    session.commit()
+
+    result = SplitImportedEntry(session).execute(entry_id, Decimal(32), [PersonShare("Bob", Decimal(48))])
+    assert result.is_err
+    assert isinstance(result.unwrap_err(), AccountNotFoundError)
+
+
+def test_split_imported_entry_an_account_outside_the_people_branch(session: Session, people_root) -> None:
+    ctx = DbTransactionContext(session)
+    checking = add_account_service(ctx, "Checking", AccountType.asset, "DE1").unwrap().id
+    eating_out = add_account_service(ctx, "Eating out", AccountType.expense).unwrap().id
+    eur = add_unit_service(ctx, "EUR", "Euro", UnitKind.currency).unwrap().id
+    entry_id = _imported_dinner(ctx, checking, eating_out, eur)
+    session.commit()
+
+    result = SplitImportedEntry(session).execute(entry_id, Decimal(32), [PersonShare("Checking", Decimal(48))])
+    assert result.is_err
+    assert isinstance(result.unwrap_err(), NotAPersonAccount)
+
+
+def test_split_imported_entry_shares_not_summing_to_the_line(session: Session, people_root) -> None:
+    ctx = DbTransactionContext(session)
+    checking = add_account_service(ctx, "Checking", AccountType.asset, "DE1").unwrap().id
+    eating_out = add_account_service(ctx, "Eating out", AccountType.expense).unwrap().id
+    add_account_service(ctx, "Alice", AccountType.asset, None, people_root.id)
+    eur = add_unit_service(ctx, "EUR", "Euro", UnitKind.currency).unwrap().id
+    entry_id = _imported_dinner(ctx, checking, eating_out, eur)
+    session.commit()
+
+    result = SplitImportedEntry(session).execute(entry_id, Decimal(32), [PersonShare("Alice", Decimal(40))])
+    assert result.is_err
+    err = result.unwrap_err()
+    assert isinstance(err, SplitDoesNotSumToLine)
+    assert err.line_quantity == Decimal(80)
+    assert err.given == Decimal(72)
 
 
 @pytest.mark.skip(reason="scaffold: issue 020")

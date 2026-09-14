@@ -191,6 +191,44 @@ disturbing the first.
 An unknown entry id, an unknown target account, or a non-leaf target all fail
 with a clear error rather than a traceback.
 
+### Splitting an imported line with someone else
+
+People are ordinary accounts, created under the seeded `People` root with
+the account command every other account uses:
+
+```bash
+kohle-cli add-account Alice --type asset --parent People
+```
+
+An already-imported line can then be divided between your own share and one
+or more people, after the fact:
+
+```bash
+kohle-cli split-line 42 --mine 32 --share Alice:48
+```
+
+`42` is the journal entry id, printed by `entries-in-period`'s first column.
+`--mine` is required and states your own share; every `--share PERSON:AMOUNT`
+adds a person's share, repeatable for more than one person. The three must
+sum to the original line's amount exactly — `--mine 32 --share Alice:40` on
+an 80 EUR line fails naming both figures, rather than silently posting a
+line that no longer balances against what was imported.
+
+The split posts a reversing-and-re-posting adjusting entry through the same
+mechanism `reclassify` uses: the original line is never edited, voided or
+deleted. An €80 dinner split `--mine 32 --share Alice:48` leaves the expense
+account holding 32 and `Alice` holding a 48 receivable. Splitting a line that
+was reclassified first takes the shares out of the corrected account, not
+the original bucket; splitting first and then reclassifying is refused,
+since the account reclassify would reverse out of no longer holds the full
+amount.
+
+Only imported lines can be split — a hand-entered `record`/`record-split`
+line has no classification to split against, and fails the same way
+`reclassify` does on one. An unknown entry id, an unknown or non-`People`
+target account, and shares that don't sum to the line's amount all fail with
+a clear error rather than a traceback.
+
 ### Writing importer plugins
 A new plugin can be rolled out by defining an entry point to kohle plugins
 ```toml

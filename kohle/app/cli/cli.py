@@ -21,6 +21,7 @@ from kohle.use_cases.journal import (
 )
 from kohle.use_cases.operations import ListOperations
 from kohle.use_cases.rules import AddRule, ListRules, RemoveRule
+from kohle.use_cases.splitting import PersonShare, SplitImportedEntry
 from kohle.use_cases.units import AddUnit, ListUnits
 
 
@@ -61,6 +62,21 @@ def _parse_line(raw: str) -> LineInput:
 
 def _parse_lines(ctx, param, values: tuple[str, ...]) -> list[LineInput]:
     return [_parse_line(value) for value in values]
+
+
+def _parse_share(raw: str) -> PersonShare:
+    name, _, quantity_str = raw.rpartition(":")
+    if not name:
+        raise click.BadParameter(f"{raw!r} does not split into NAME:QUANTITY")
+    try:
+        quantity = Decimal(quantity_str)
+    except InvalidOperation:
+        raise click.BadParameter(f"{raw!r}: {quantity_str!r} is not a valid decimal quantity") from None
+    return PersonShare(name, quantity)
+
+
+def _parse_shares(ctx, param, values: tuple[str, ...]) -> list[PersonShare]:
+    return [_parse_share(value) for value in values]
 
 
 def _account_tree_rows(accounts: list, root_name: str | None = None) -> list[dict]:
@@ -292,6 +308,11 @@ def entries_in_period(make_session, account_name, start, end):
         raise click.ClickException(str(res.unwrap_err()))
     rows = [
         {
+            # First column, matching list-unclassified: it is split-line's
+            # handle onto the line, and entries-in-period is otherwise the
+            # only place a classified-away line's id can be read at all
+            # (design §4.1).
+            "entry_id": line.entry.id,
             "date": line.entry.entry_date,
             "description": line.entry.description,
             "counterparty": line.entry.counterparty_name or "-",
@@ -451,6 +472,26 @@ def reclassify_cmd(make_session, entry_id: int, account: str):
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
     click.echo(f"Reclassified entry {entry_id} to {account}")
+
+
+@cli.command()
+@click.argument("entry_id", type=int)
+@click.option("--mine", "own_share", type=DECIMAL, required=True, help="Your own share of the line")
+@click.option(
+    "--share",
+    "shares",
+    multiple=True,
+    required=True,
+    callback=_parse_shares,
+    help="PERSON:QUANTITY, repeatable, one per person account",
+)
+@click.pass_obj
+def split_line_cmd(make_session, entry_id: int, own_share: Decimal, shares: list[PersonShare]):
+    split = SplitImportedEntry(make_session())
+    res = split.execute(entry_id, own_share, shares)
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    click.echo(f"Split entry {entry_id}: {own_share} own, " + ", ".join(f"{s.person_name} {s.quantity}" for s in shares))
 
 
 if __name__ == "__main__":
