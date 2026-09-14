@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from kohle.core.result import Result
 from kohle.domain.domain_errors import (
+    AccountError,
     EmptySplitGroupName,
     JournalError,
     NoSplitForEntry,
@@ -13,25 +14,35 @@ from kohle.domain.domain_errors import (
     SplitError,
     SplitImportedEntryError,
 )
-from kohle.domain.models import JournalEntry, SplitGroup
+from kohle.domain.models import JournalEntry, JournalLine, SplitGroup
 from kohle.infrastructure.transaction_context import DbTransactionContext
 from kohle.infrastructure.uow import UnitOfWork
 from kohle.services.account_services import (
     descendant_account_ids_service,
     get_account_by_name_service,
+    list_child_accounts_service,
 )
 from kohle.services.classification_services import classification_by_entry_service
 from kohle.services.journal_services import LineSpec
 from kohle.services.split_services import (
     add_split_group_service,
     get_split_group_by_name_service,
+    list_split_groups_service,
     set_split_adjusting_entry_service,
     set_split_group_service,
     split_by_entry_service,
+    splits_in_group_service,
 )
-from kohle.use_cases.journal import PEOPLE_ROOT, post_entry
+from kohle.use_cases.journal import (
+    PEOPLE_ROOT,
+    UnitBalance,
+    account_balance,
+    aggregate_by_unit,
+    post_entry,
+)
 
 UnsplitEntryError = JournalError | SplitError
+WhoOwesWhatError = AccountError | JournalError | SplitError
 
 # splitting.py may import from journal.py (post_entry, PEOPLE_ROOT) and reach
 # classification_by_entry_service in the services layer directly; journal.py
@@ -235,5 +246,110 @@ class UnsplitEntry(UnitOfWork[JournalEntry, UnsplitEntryError]):
                 return Result.err(update_res.unwrap_err())
 
             return Result.ok(mirror_res.unwrap())
+
+        return self._run(use_case)
+
+
+@dataclass(frozen=True, slots=True)
+class PersonBalance:
+    person_name: str
+    balances: list[UnitBalance]
+
+
+@dataclass(frozen=True, slots=True)
+class GroupAllocation:
+    group_name: str
+    allocations: list[PersonBalance]
+
+
+class WhoOwesWhat(UnitOfWork[list[PersonBalance], WhoOwesWhatError]):
+    """The net balance of every person account — the same figure `balance
+    Alice` gives, listed for the whole People branch at once (design §7.1).
+
+    Every person account is listed, including one with no lines: driven by
+    the account tree rather than by the lines, a settled person (their
+    lines cancel) gets a UnitBalance with quantity 0, and a person never
+    split against gets an empty balances list — the distinction issue 022's
+    last criterion asks for.
+    """
+
+    def execute(self) -> Result[list[PersonBalance], WhoOwesWhatError]:
+        def use_case(ctx: DbTransactionContext) -> Result[list[PersonBalance], WhoOwesWhatError]:
+            people_res = get_account_by_name_service(ctx, PEOPLE_ROOT)
+            if people_res.is_err:
+                return Result.err(people_res.unwrap_err())
+
+            children_res = list_child_accounts_service(ctx, people_res.unwrap().id)
+            if children_res.is_err:
+                return Result.err(children_res.unwrap_err())
+
+            balances: list[PersonBalance] = []
+            for person in children_res.unwrap():
+                balance_res = account_balance(ctx, person.id)
+                if balance_res.is_err:
+                    return Result.err(balance_res.unwrap_err())
+                balances.append(PersonBalance(person.name, balance_res.unwrap()))
+
+            return Result.ok(balances)
+
+        return self._run(use_case)
+
+
+class WhoOwesWhatByGroup(UnitOfWork[list[GroupAllocation], WhoOwesWhatError]):
+    """The per-group breakdown behind `who-owes-what --by-group` (design
+    §7.2): one block per group, including a group with no splits, so the
+    report doubles as the group listing (design §2.2). Splits with no group
+    appear in neither block and are unaffected in the global view.
+
+    Computed from the current adjusting entries only — a split that has
+    been undone (adjusting_entry_id IS NULL) contributes nothing (design
+    §6) — and it is **not** the same figure `WhoOwesWhat` reports: it is a
+    historical allocation, not a live, settlement-adjusted balance (design
+    §2.3, §7.2).
+    """
+
+    def execute(self) -> Result[list[GroupAllocation], WhoOwesWhatError]:
+        def use_case(ctx: DbTransactionContext) -> Result[list[GroupAllocation], WhoOwesWhatError]:
+            people_res = get_account_by_name_service(ctx, PEOPLE_ROOT)
+            if people_res.is_err:
+                return Result.err(people_res.unwrap_err())
+            people_ids_res = descendant_account_ids_service(ctx, people_res.unwrap().id)
+            if people_ids_res.is_err:
+                return Result.err(people_ids_res.unwrap_err())
+            people_ids = set(people_ids_res.unwrap())
+
+            groups_res = list_split_groups_service(ctx)
+            if groups_res.is_err:
+                return Result.err(groups_res.unwrap_err())
+
+            report: list[GroupAllocation] = []
+            for group in groups_res.unwrap():
+                splits_res = splits_in_group_service(ctx, group.id)
+                if splits_res.is_err:
+                    return Result.err(splits_res.unwrap_err())
+
+                lines_by_person: dict[str, list[JournalLine]] = {}
+                for split in splits_res.unwrap():
+                    if split.adjusting_entry_id is None:
+                        continue
+                    for line in split.adjusting_entry.lines:
+                        if line.account_id not in people_ids:
+                            continue
+                        lines_by_person.setdefault(line.account.name, []).append(line)
+
+                allocations = [
+                    # (entry_date, line id), matching account_lines_service's
+                    # order — aggregate_by_unit's fold is order-dependent
+                    # (design §6.4) and these lines come from an eager-loaded
+                    # collection with no ordering guarantee of its own.
+                    PersonBalance(
+                        person_name,
+                        aggregate_by_unit(sorted(lines, key=lambda line: (line.entry.entry_date, line.id))),
+                    )
+                    for person_name, lines in sorted(lines_by_person.items())
+                ]
+                report.append(GroupAllocation(group.name, allocations))
+
+            return Result.ok(report)
 
         return self._run(use_case)

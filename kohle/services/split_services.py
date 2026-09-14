@@ -143,6 +143,18 @@ def get_split_group_by_name_service(ctx: DbTransactionContext, name: str) -> Res
 
 
 @crud_retrieve
+def list_split_groups_service(ctx: DbTransactionContext) -> Result[list[SplitGroup], SplitError]:
+    """Every group, including one with no splits yet — `who-owes-what
+    --by-group` enumerates all of them rather than only the ones with
+    current allocations (design §2.2, §7.2)."""
+
+    def op(session: Session) -> list[SplitGroup]:
+        return session.query(SplitGroup).order_by(SplitGroup.name).all()
+
+    return ctx.run(op).map_err(lambda err: SplitError(str(err)))
+
+
+@crud_retrieve
 def splits_in_group_service(ctx: DbTransactionContext, group_id: int) -> Result[list[Split], SplitError]:
     """The group's member splits, with everything the group report reads
     eager-loaded before the session closes (design §6)."""

@@ -6,7 +6,7 @@ one where sale price cannot contaminate cost basis. These cases are where the
 spec was underspecified, so they are the ones worth pinning down.
 See dev/design/cli-record-and-balances.md section 6.4.
 
-Issue 002 only builds the quantity-aggregation half of `_aggregate_by_unit`
+Issue 002 only builds the quantity-aggregation half of `aggregate_by_unit`
 (a straightforward sum, not yet the moving-average fold); those cases are
 covered here. The average-cost cases above stay TODO for issue 005.
 """
@@ -14,7 +14,7 @@ covered here. The average-cost cases above stay TODO for issue 005.
 from decimal import Decimal
 
 from kohle.domain.models import JournalLine, Unit, UnitKind
-from kohle.use_cases.journal import _aggregate_by_unit
+from kohle.use_cases.journal import aggregate_by_unit
 
 
 def _line(
@@ -34,13 +34,13 @@ def test_multiple_units_stay_separate() -> None:
         _line(5, is_debit=True, unit_identifier="IE00B4L5Y983"),
     ]
 
-    balances = {b.unit_identifier: b.quantity for b in _aggregate_by_unit(lines)}
+    balances = {b.unit_identifier: b.quantity for b in aggregate_by_unit(lines)}
 
     assert balances == {"EUR": Decimal(10), "IE00B4L5Y983": Decimal(5)}
 
 
 def test_empty_line_list_yields_no_rows() -> None:
-    assert _aggregate_by_unit([]) == []
+    assert aggregate_by_unit([]) == []
 
 
 def test_debits_minus_credits() -> None:
@@ -49,7 +49,7 @@ def test_debits_minus_credits() -> None:
         _line(30, is_debit=False),
     ]
 
-    balances = _aggregate_by_unit(lines)
+    balances = aggregate_by_unit(lines)
 
     assert len(balances) == 1
     assert balances[0].quantity == Decimal(70)
@@ -69,7 +69,7 @@ def test_buy_sell_buy_uses_moving_average_not_the_rejected_readings() -> None:
         _line(10, is_debit=True, price=200),
     ]
 
-    balances = _aggregate_by_unit(lines)
+    balances = aggregate_by_unit(lines)
 
     assert len(balances) == 1
     assert balances[0].quantity == Decimal(25)
@@ -88,8 +88,8 @@ def test_order_dependence_pins_the_service_ordering_dependency() -> None:
     ]
     reordered = [lines[0], lines[2], lines[1], lines[3]]
 
-    in_order = _aggregate_by_unit(lines)[0].average_cost
-    out_of_order = _aggregate_by_unit(reordered)[0].average_cost
+    in_order = aggregate_by_unit(lines)[0].average_cost
+    out_of_order = aggregate_by_unit(reordered)[0].average_cost
 
     assert in_order == Decimal(146)
     assert out_of_order != in_order
@@ -98,7 +98,7 @@ def test_order_dependence_pins_the_service_ordering_dependency() -> None:
 def test_single_purchase_reports_its_own_price_as_the_average() -> None:
     lines = [_line(10, is_debit=True, price=100)]
 
-    balances = _aggregate_by_unit(lines)
+    balances = aggregate_by_unit(lines)
 
     assert len(balances) == 1
     assert balances[0].average_cost == Decimal(100)
@@ -110,7 +110,7 @@ def test_base_currency_holdings_report_average_cost_of_one() -> None:
         _line(80, is_debit=False, price=1),
     ]
 
-    balances = _aggregate_by_unit(lines)
+    balances = aggregate_by_unit(lines)
 
     assert len(balances) == 1
     assert balances[0].average_cost == Decimal(1)
@@ -122,7 +122,7 @@ def test_selling_entire_holding_takes_average_cost_to_none() -> None:
         _line(10, is_debit=False, price=130),
     ]
 
-    balances = _aggregate_by_unit(lines)
+    balances = aggregate_by_unit(lines)
 
     assert len(balances) == 1
     assert balances[0].quantity == Decimal(0)
@@ -138,7 +138,7 @@ def test_quantity_going_negative_is_reported_not_rejected() -> None:
         _line(200, is_debit=False, price=1),
     ]
 
-    balances = _aggregate_by_unit(lines)
+    balances = aggregate_by_unit(lines)
 
     assert len(balances) == 1
     assert balances[0].quantity == Decimal(-150)
@@ -151,7 +151,7 @@ def test_credit_at_zero_quantity_falls_back_to_the_line_price() -> None:
     # rather than dividing by zero.
     lines = [_line(5, is_debit=False, unit_identifier="IE00B4L5Y983", price=90)]
 
-    balances = _aggregate_by_unit(lines)
+    balances = aggregate_by_unit(lines)
 
     assert len(balances) == 1
     assert balances[0].quantity == Decimal(-5)
@@ -159,7 +159,7 @@ def test_credit_at_zero_quantity_falls_back_to_the_line_price() -> None:
 
 
 def test_account_with_no_lines_yields_no_rows() -> None:
-    assert _aggregate_by_unit([]) == []
+    assert aggregate_by_unit([]) == []
 
 
 def test_two_units_in_one_account_stay_separate() -> None:
@@ -168,7 +168,7 @@ def test_two_units_in_one_account_stay_separate() -> None:
         _line(5, is_debit=True, unit_identifier="IE00B4L5Y983", price=90),
     ]
 
-    balances = {b.unit_identifier: b for b in _aggregate_by_unit(lines)}
+    balances = {b.unit_identifier: b for b in aggregate_by_unit(lines)}
 
     assert balances["EUR"].average_cost == Decimal(1)
     assert balances["IE00B4L5Y983"].average_cost == Decimal(90)

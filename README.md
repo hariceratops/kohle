@@ -278,6 +278,33 @@ without `--group` works exactly as before — grouping is additive. An unknown
 group name fails with a clear error rather than silently creating a second
 group with a similar spelling.
 
+### Reporting who owes what
+
+`who-owes-what` lists the net balance of every account under `People` — the
+same figure `balance Alice` would give, for everyone at once:
+
+```bash
+kohle-cli who-owes-what
+```
+
+Every person account is listed, including one that has never been split
+against — it renders as `-`, distinct from a settled person's `0.00`, whose
+lines exist and happen to cancel out.
+
+```bash
+kohle-cli who-owes-what --by-group
+```
+
+`--by-group` breaks the view down into one block per group, including a group
+with no splits yet, so this doubles as the group listing. Splits with no
+group appear in neither block, and the global view is unaffected either way.
+The per-group column is labelled `from splits`, not `balance`: it sums the
+current adjusting entries in that group only, so it is a historical
+allocation — what a trip cost each person — not a live, settlement-adjusted
+balance. If Alice has since paid you back, `who-owes-what` shows it and the
+group total still doesn't, which is why the two are never labelled the same
+thing.
+
 ### Writing importer plugins
 A new plugin can be rolled out by defining an entry point to kohle plugins
 ```toml

@@ -498,7 +498,7 @@ class _RunningCost:
         return self.basis / self.quantity
 
 
-def _aggregate_by_unit(lines: Iterable[JournalLine]) -> list[UnitBalance]:
+def aggregate_by_unit(lines: Iterable[JournalLine]) -> list[UnitBalance]:
     """Moving-average cost fold, one accumulator per unit.
 
     Order-dependent: consumes the caller's ordering as-is and must not sort,
@@ -517,6 +517,22 @@ def _aggregate_by_unit(lines: Iterable[JournalLine]) -> list[UnitBalance]:
     ]
 
 
+def account_balance(ctx: DbTransactionContext, account_id: int) -> Result[list[UnitBalance], BalanceError]:
+    """The balance of an account and its descendants, by unit — the fold
+    `QueryAccountBalance` runs for `balance`, factored out so `WhoOwesWhat`
+    can call it once per person account without a name lookup (design §7.1,
+    §9.2)."""
+    descendants_res = descendant_account_ids_service(ctx, account_id)
+    if descendants_res.is_err:
+        return Result.err(descendants_res.unwrap_err())
+
+    lines_res = account_lines_service(ctx, descendants_res.unwrap())
+    if lines_res.is_err:
+        return Result.err(lines_res.unwrap_err())
+
+    return Result.ok(aggregate_by_unit(lines_res.unwrap()))
+
+
 class QueryAccountBalance(UnitOfWork[list[UnitBalance], BalanceError]):
     def execute(self, account_name: str) -> Result[list[UnitBalance], BalanceError]:
         def use_case(ctx: DbTransactionContext) -> Result[list[UnitBalance], BalanceError]:
@@ -524,14 +540,6 @@ class QueryAccountBalance(UnitOfWork[list[UnitBalance], BalanceError]):
             if account_res.is_err:
                 return Result.err(account_res.unwrap_err())
 
-            descendants_res = descendant_account_ids_service(ctx, account_res.unwrap().id)
-            if descendants_res.is_err:
-                return Result.err(descendants_res.unwrap_err())
-
-            lines_res = account_lines_service(ctx, descendants_res.unwrap())
-            if lines_res.is_err:
-                return Result.err(lines_res.unwrap_err())
-
-            return Result.ok(_aggregate_by_unit(lines_res.unwrap()))
+            return account_balance(ctx, account_res.unwrap().id)
 
         return self._run(use_case)

@@ -26,6 +26,8 @@ from kohle.use_cases.splitting import (
     PersonShare,
     SplitImportedEntry,
     UnsplitEntry,
+    WhoOwesWhat,
+    WhoOwesWhatByGroup,
 )
 from kohle.use_cases.units import AddUnit, ListUnits
 
@@ -525,6 +527,65 @@ def unsplit_line_cmd(make_session, entry_id: int):
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
     click.echo(f"Undid the split of entry {entry_id}")
+
+
+@cli.command()
+@click.option("--by-group", is_flag=True, default=False, help="Break the view down per group instead")
+@click.pass_obj
+def who_owes_what_cmd(make_session, by_group: bool):
+    if by_group:
+        _print_who_owes_what_by_group(make_session)
+        return
+
+    res = WhoOwesWhat(make_session()).execute()
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    people = res.unwrap()
+    if not people:
+        click.echo("No person accounts")
+        return
+    # A person with no balances at all (never split against) renders "-",
+    # distinct from a settled person's UnitBalance(quantity=0) rendering
+    # "0.00" — the distinction issue 022's last criterion asks for (design
+    # §7.1).
+    rows = [
+        row
+        for person in people
+        for row in (
+            [{"person": person.person_name, "unit": "-", "balance": "-"}]
+            if not person.balances
+            else [
+                {"person": person.person_name, "unit": b.unit_identifier, "balance": b.quantity}
+                for b in person.balances
+            ]
+        )
+    ]
+    click.echo(tabulate(rows, headers="keys", floatfmt=".2f"))
+
+
+def _print_who_owes_what_by_group(make_session):
+    res = WhoOwesWhatByGroup(make_session()).execute()
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    groups = res.unwrap()
+    if not groups:
+        click.echo("No split groups")
+        return
+    for group in groups:
+        click.echo(f"\n{group.group_name}")
+        if not group.allocations:
+            click.echo("  No splits in this group")
+            continue
+        rows = [
+            {"person": person.person_name, "unit": b.unit_identifier, "from splits": b.quantity}
+            for person in group.allocations
+            for b in person.balances
+        ]
+        click.echo(tabulate(rows, headers="keys", floatfmt=".2f"))
+    # These figures are a historical allocation, not a live balance: they
+    # do not fall as debts get settled, unlike who-owes-what's own totals
+    # (design §2.3, §7.2).
+    click.echo("\nNote: group figures are historical allocations, not settlement-adjusted balances.")
 
 
 if __name__ == "__main__":

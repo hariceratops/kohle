@@ -39,6 +39,7 @@ from kohle.use_cases.splitting import (
     PersonShare,
     SplitImportedEntry,
     UnsplitEntry,
+    WhoOwesWhat,
 )
 
 
@@ -232,13 +233,37 @@ def test_split_imported_entry_group_is_authoritative_on_every_run(session: Sessi
     assert row.group_id is None
 
 
-@pytest.mark.skip(reason="scaffold: issue 022")
-def test_who_owes_what() -> None:
-    # TODO(022) — every person account is listed, including one with no
-    #   lines (empty balances, renders as absence rather than zero); a
-    #   settled person (lines cancel) has a UnitBalance with quantity 0
-    #   (design §7.1)
-    raise NotImplementedError
+def test_who_owes_what(session: Session, people_root) -> None:
+    ctx = DbTransactionContext(session)
+    checking = add_account_service(ctx, "Checking", AccountType.asset, "DE1").unwrap().id
+    eating_out = add_account_service(ctx, "Eating out", AccountType.expense).unwrap().id
+    alice = add_account_service(ctx, "Alice", AccountType.asset, None, people_root.id).unwrap().id
+    add_account_service(ctx, "Bob", AccountType.asset, None, people_root.id)
+    eur = add_unit_service(ctx, "EUR", "Euro", UnitKind.currency).unwrap().id
+    entry_id = _imported_dinner(ctx, checking, eating_out, eur)
+    session.commit()
+
+    SplitImportedEntry(session).execute(entry_id, Decimal(32), [PersonShare("Alice", Decimal(48))])
+    # Alice settles in full: her account's lines cancel to a zero balance.
+    ctx2 = DbTransactionContext(session)
+    add_journal_entry_service(
+        ctx2, date(2026, 3, 6), "settle-alice", "Alice pays back",
+        [
+            LineSpec(alice, eur, Decimal(48), Decimal(1), is_debit=False),
+            LineSpec(checking, eur, Decimal(48), Decimal(1), is_debit=True),
+        ],
+    )
+    session.commit()
+
+    result = WhoOwesWhat(session).execute()
+    assert result.is_ok
+    people = {p.person_name: p for p in result.unwrap()}
+
+    assert len(people["Alice"].balances) == 1
+    assert people["Alice"].balances[0].unit_identifier == "EUR"
+    assert people["Alice"].balances[0].quantity == Decimal(0)
+    # Bob was never split against: absence, not a zero UnitBalance.
+    assert people["Bob"].balances == []
 
 
 @pytest.mark.skip(reason="scaffold: issue 023")

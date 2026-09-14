@@ -1015,12 +1015,54 @@ def test_split_line_cli_shares_not_summing_to_the_line(session_factory: sessionm
     assert "72" in result.output
 
 
-@pytest.mark.skip(reason="scaffold: issue 022")
-def test_who_owes_what_cli() -> None:
-    # TODO(022) — who-owes-what on a ledger with no person accounts prints the
-    #   empty message, matching the "No rules" / "No holdings" house style;
-    #   --by-group breaks the view down per group (design §7.2)
-    raise NotImplementedError
+def test_who_owes_what_cli_empty_ledger_prints_the_house_style_message(
+    session_factory: sessionmaker,
+) -> None:
+    runner = CliRunner()
+    runner.invoke(cli, ["add-account", "People", "--type", "asset"], obj=session_factory)
+
+    result = runner.invoke(cli, ["who-owes-what"], obj=session_factory)
+
+    assert result.exit_code == 0
+    assert "No person accounts" in result.output
+
+
+def test_who_owes_what_cli_lists_every_person_and_breaks_down_by_group(
+    session_factory: sessionmaker,
+) -> None:
+    _seed_split_line_ledger(session_factory)
+    entry_id = _seed_imported_dinner(session_factory)
+    runner = CliRunner()
+    # A person never split against still shows up, distinct from a settled one.
+    runner.invoke(
+        cli, ["add-account", "Bob", "--type", "asset", "--parent", "People"], obj=session_factory
+    )
+    runner.invoke(cli, ["add-group", "Italy trip"], obj=session_factory)
+    result = runner.invoke(
+        cli,
+        [
+            "split-line", str(entry_id), "--mine", "32", "--share", "Alice:48",
+            "--group", "Italy trip",
+        ],
+        obj=session_factory,
+    )
+    assert result.exit_code == 0
+
+    global_view = runner.invoke(cli, ["who-owes-what"], obj=session_factory)
+    assert global_view.exit_code == 0
+    assert "Alice" in global_view.output
+    assert "48.00" in global_view.output
+    # Bob has never been split against: no unit/balance for him, not 0.00.
+    bob_row = next(line for line in global_view.output.splitlines() if "Bob" in line)
+    assert "0.00" not in bob_row
+
+    by_group = runner.invoke(cli, ["who-owes-what", "--by-group"], obj=session_factory)
+    assert by_group.exit_code == 0
+    assert "Italy trip" in by_group.output
+    assert "Alice" in by_group.output
+    assert "48.00" in by_group.output
+    assert "from splits" in by_group.output
+    assert "not settlement-adjusted" in by_group.output
 
 
 @pytest.mark.skip(reason="scaffold: issue 023")
