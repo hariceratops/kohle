@@ -396,30 +396,29 @@ class StatementImporterPlugin(ABC):
         pass
 
     @abstractmethod
-    def import_statement(self, statement_path: str) -> Result[pd.DataFrame, ImportError]:
+    def import_statement(self, statement_path: str) -> Result[list[StatementRow], ImportError]:
         pass
 ```
 
-The returned frame carries five columns and describes cash movements only:
+`import_statement` returns one `CashRow` per statement line, in order. All
+fields are required keyword arguments:
 
-| column              | dtype    | meaning                                |
-|---------------------|----------|----------------------------------------|
-| `description`       | string   | free text from the statement           |
-| `amount`            | float    | signed; negative is money leaving      |
-| `date`              | datetime | booking or value date, plugin's choice |
-| `counterparty_name` | string   | who the other side was                 |
-| `counterparty_iban` | string   | the other side's IBAN                  |
+| field               | type          | meaning                                           |
+|---------------------|---------------|---------------------------------------------------|
+| `entry_date`        | `date`        | booking or value date, plugin's choice            |
+| `reference`         | `str`         | unique per row; dedup key, scoped to the account  |
+| `description`       | `str`         | free text from the statement                      |
+| `amount`            | `Decimal`     | signed; negative is money leaving                 |
+| `counterparty_name` | `str \| None` | who the other side was                            |
+| `counterparty_iban` | `str \| None` | the other side's IBAN                             |
 
-`counterparty_iban` is the *other* side's IBAN, not the imported account's.
+`counterparty_iban` is the *other* side's IBAN, not the imported account's. A
+format with no counterparty data passes `None` explicitly, so omitting it is
+a `TypeError` rather than a silent gap.
 
-A format that carries no counterparty at all still declares the column, empty
-(`df.assign(counterparty_iban=pd.Series(pd.NA, index=df.index, dtype="string"))`).
-Missing it is a hard failure naming the column, because a counterparty that
-silently goes missing is what makes a classification rule stop matching with
-nothing saying why. Cast the text columns with `.astype("string")`: `read_csv`
-types a column that is empty on every row as `float64`, which the schema check
-rejects.
+`reference` is the statement's own per-row id. A format that has none (the
+Deutsche Bank CSV) derives it from row content inside the plugin.
 
-Importing a broker statement needs unit and price on each row, which this
-contract cannot yet express — see
-`dev/inbox/importer-plugins-for-assets.md`.
+An unreadable or unparseable file is returned as an `ImportError` subclass
+whose `__str__` says what is wrong (`StatementUnreadable` covers I/O and
+decoding); nothing is written. A plugin holds no state between calls.

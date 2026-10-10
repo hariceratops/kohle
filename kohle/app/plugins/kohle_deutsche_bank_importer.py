@@ -5,9 +5,16 @@ import pandas as pd
 import numpy as np
 from statemachine import StateMachine, State
 from kohle.core.result import Result
-from kohle.plugin.importer_plugin import StatementImporterPlugin, ImportError
+from kohle.plugin.importer_plugin import (
+    CashRow,
+    ImportError,
+    StatementImporterPlugin,
+    StatementRow,
+    StatementUnreadable,
+)
 from pyparsing import Literal, Regex, Suppress, StringEnd, DelimitedList
 from decimal import Decimal
+import hashlib
 import numbers
 
 
@@ -83,6 +90,7 @@ closing_balance_line = (
 
 class MissingFieldError(ImportError):
     def __init__(self, field: str):
+        super().__init__()
         self.field = field
 
     def __str__(self) -> str:
@@ -91,17 +99,29 @@ class MissingFieldError(ImportError):
 
 class MissingSectionError(ImportError):
     def __init__(self, section: str):
+        super().__init__()
         self.section = section
+
+    def __str__(self) -> str:
+        return f"Statement is missing its {self.section}"
 
 
 class InvalidStructureError(ImportError):
     def __init__(self, message: str):
+        super().__init__()
         self.message = message
+
+    def __str__(self) -> str:
+        return f"Invalid statement structure: {self.message}"
 
 
 class CsvError(ImportError):
     def __init__(self, message: str):
+        super().__init__()
         self.message = message
+
+    def __str__(self) -> str:
+        return f"Cannot parse statement table: {self.message}"
 
 
 @dataclass
@@ -298,65 +318,63 @@ class DeustcheBankStatementImporter(StatementImporterPlugin):
     def name(self) -> str:
         return "kohle-deutsche-bank"
 
-    def import_statement(self, statement_path) -> Result[pd.DataFrame, ImportError]:
-        with open(statement_path, "r") as f:
-            parsing_res = StatementParser().parse(f.read())
-            if parsing_res.is_err:
-                return Result.err(parsing_res.unwrap_err())
+    def import_statement(self, statement_path: str) -> Result[list[StatementRow], ImportError]:
+        try:
+            with open(statement_path, "r") as f:
+                text = f.read()
+        except (OSError, UnicodeDecodeError) as e:
+            return Result.err(StatementUnreadable(statement_path, str(e)))
 
-            statement_data = parsing_res.unwrap()
-            df = statement_data.transactions.\
-                    pipe(lambda df: df.rename(columns={
-                       'Beneficiary / Originator': 'counterparty_name',
-                       'Payment Details': 'description',
-                       'Debit': 'debit',
-                       'Credit': 'credit',
-                       'IBAN / Account Number': 'counterparty_iban',
-                       'Booking date': 'booking_date',
-                       'Value date': 'value_date',
-                       'Transaction Type': 'transaction_type',
-                       'BIC': 'bic',
-                       'Customer Reference': 'customer_reference',
-                       'Mandate Reference': 'mandate_reference',
-                       'Creditor ID': 'creditor_id',
-                       'Compensation amount': 'compensation_amount',
-                       'Original Amount': 'original_amount',
-                       'Ultimate creditor': 'ultimate_creditor',
-                       'Number of transactions': 'number_of_transactions',
-                       'Number of cheques': 'number_of_cheques',
-                       'Currency': 'currency'
-                   })) \
-                   .assign(
-                        date=lambda d: np.where(
-                            d["transaction_type"] == "Debit Card Payment",
-                            pd.to_datetime(
-                                d["description"].str.extract(description_date_pattern)[0],
-                                format="%d-%m-%YT%H:%M:%S",
-                                errors="raise",
-                            ),
-                            pd.to_datetime(d["booking_date"]),
-                        )
-                    ) \
-                   .fillna({ 'debit': 0, 'credit': 0 }) \
-                   .pipe(lambda d: d.assign(amount=np.where(d["debit"] != 0, d["debit"], d["credit"]))) \
-                   .pipe(lambda d: d.assign(amount=d["amount"].apply(parse_amount))) \
-                   .drop(columns=[
-                        'transaction_type', 'booking_date',
-                        'bic', 'customer_reference', 'mandate_reference', 'creditor_id',
-                        'compensation_amount', 'original_amount', 'ultimate_creditor',
-                        'number_of_transactions', 'number_of_cheques', "debit", "credit",
-                        "currency",
-                    ])\
-                    .astype({
-                        "amount": float,
-                        # Part of the plugin contract: read_csv types a column
-                        # that is empty on every row as float64, which fails the
-                        # importer's string check for a statement that simply
-                        # has no counterparty data.
-                        "description": "string",
-                        "counterparty_name": "string",
-                        "counterparty_iban": "string",
-                    })
-            
-            return Result.ok(df)
+        parsing_res = StatementParser().parse(text)
+        if parsing_res.is_err:
+            return Result.err(parsing_res.unwrap_err())
 
+        statement_data = parsing_res.unwrap()
+        df = statement_data.transactions.\
+                pipe(lambda df: df.rename(columns={
+                   'Beneficiary / Originator': 'counterparty_name',
+                   'Payment Details': 'description',
+                   'Debit': 'debit',
+                   'Credit': 'credit',
+                   'IBAN / Account Number': 'counterparty_iban',
+                   'Booking date': 'booking_date',
+                   'Transaction Type': 'transaction_type',
+               })) \
+               .assign(
+                    date=lambda d: np.where(
+                        d["transaction_type"] == "Debit Card Payment",
+                        pd.to_datetime(
+                            d["description"].str.extract(description_date_pattern)[0],
+                            format="%d-%m-%YT%H:%M:%S",
+                            errors="raise",
+                        ),
+                        pd.to_datetime(d["booking_date"]),
+                    )
+                ) \
+               .fillna({ 'debit': 0, 'credit': 0 }) \
+               .pipe(lambda d: d.assign(amount=np.where(d["debit"] != 0, d["debit"], d["credit"]))) \
+               .pipe(lambda d: d.assign(amount=d["amount"].apply(parse_amount)))
+
+        return Result.ok([_cash_row(record) for record in df.to_dict("records")])
+
+
+def _optional_cell(value) -> str | None:
+    return None if pd.isna(value) else str(value)
+
+
+def _cash_row(record: dict) -> CashRow:
+    entry_date = pd.Timestamp(record["date"]).date()
+    amount: Decimal = record["amount"]
+    description = str(record["description"])
+    # The CSV has no bank-assigned per-row reference (Customer Reference is
+    # blank on card payments, Mandate Reference repeats per mandate), so the
+    # key is the row's content, as it was before the typed contract.
+    reference = hashlib.sha256(f"{entry_date}|{amount}|{description}".encode()).hexdigest()
+    return CashRow(
+        entry_date=entry_date,
+        reference=reference,
+        description=description,
+        amount=amount,
+        counterparty_name=_optional_cell(record["counterparty_name"]),
+        counterparty_iban=_optional_cell(record["counterparty_iban"]),
+    )

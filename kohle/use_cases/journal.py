@@ -1,26 +1,13 @@
-import hashlib
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from uuid import uuid4
 
-import pandas as pd
-from pandas.api.types import (
-    is_bool_dtype,
-    is_datetime64_any_dtype,
-    is_float_dtype,
-    is_integer_dtype,
-    is_string_dtype,
-)
-
 from kohle.core.result import Result
 from kohle.domain.domain_errors import (
     BalanceError,
     BaseCurrencyAsCrossUnit,
-    DataframeColumnTypeMismatch,
-    DataframeMissingColumn,
-    DataframeValidationError,
     EmptyEntry,
     EndDatePrecedesStartDateError,
     ImportStatementError,
@@ -34,6 +21,7 @@ from kohle.domain.domain_errors import (
 from kohle.domain.models import AccountType, JournalEntry, JournalLine, UnitKind
 from kohle.infrastructure.transaction_context import DbTransactionContext
 from kohle.infrastructure.uow import UnitOfWork
+from kohle.plugin.importer_plugin import StatementRow
 from kohle.services.account_services import (
     account_has_children_service,
     add_account_service,
@@ -61,30 +49,6 @@ PEOPLE_ROOT = "People"
 UNCLASSIFIED_INCOME = "Unclassified Income"
 
 
-def validate_df_schema(df: pd.DataFrame, expected_schema: dict[str, str]) -> DataframeValidationError | None:
-    missing = [col for col in expected_schema if col not in df.columns]
-    if missing:
-        return DataframeMissingColumn(missing)
-
-    mismatches: dict[str, str] = {}
-    for col, expected_type in expected_schema.items():
-        series = df[col]
-        valid = (
-            (expected_type == "int" and is_integer_dtype(series))
-            or (expected_type == "float" and is_float_dtype(series))
-            or (expected_type == "string" and is_string_dtype(series))
-            or (expected_type == "datetime" and is_datetime64_any_dtype(series))
-            or (expected_type == "bool" and is_bool_dtype(series))
-        )
-        if not valid:
-            mismatches[col] = str(series.dtype)
-
-    if mismatches:
-        return DataframeColumnTypeMismatch(mismatches)
-
-    return None
-
-
 def parse_date(input_date: str) -> Result[date, InvalidDateError]:
     try:
         return Result.ok(date.fromisoformat(input_date))
@@ -92,17 +56,12 @@ def parse_date(input_date: str) -> Result[date, InvalidDateError]:
         return Result.err(InvalidDateError(input_date))
 
 
-def _optional_str(value) -> str | None:
-    """A statement cell as either text or nothing.
-
-    `to_dict("records")` hands back `pd.NA` for a missing string cell, which
-    must not reach a `String` column; `''` and `'   '` are the same fact as
-    absent, and a placeholder would be a value a rule could match (design §3.1).
-    """
-    if pd.isna(value):
+def _optional_str(value: str | None) -> str | None:
+    """`''` and `'   '` are the same fact as absent, and a placeholder would be
+    a value a rule could match (design §3.1)."""
+    if value is None:
         return None
-    text = str(value).strip()
-    return text or None
+    return value.strip() or None
 
 
 def _get_or_create_account(
@@ -312,19 +271,8 @@ class ImportStatement(UnitOfWork[int, ImportStatementError]):
     first matching rule names, or to an unclassified bucket when none matches.
     Every row's decision is recorded, matched or not."""
 
-    def execute(self, account_name: str, df: pd.DataFrame) -> Result[int, ImportStatementError]:
+    def execute(self, account_name: str, rows: Sequence[StatementRow]) -> Result[int, ImportStatementError]:
         def use_case(ctx: DbTransactionContext) -> Result[int, ImportStatementError]:
-            schema = {
-                "description": "string",
-                "amount": "float",
-                "date": "datetime",
-                "counterparty_name": "string",
-                "counterparty_iban": "string",
-            }
-            invalid_df = validate_df_schema(df, schema)
-            if invalid_df:
-                return Result.err(invalid_df)
-
             account_res = get_account_by_name_service(ctx, account_name)
             if account_res.is_err:
                 return Result.err(account_res.unwrap_err())
@@ -344,28 +292,17 @@ class ImportStatement(UnitOfWork[int, ImportStatementError]):
             expense_id = expense_res.unwrap().id
             income_id = income_res.unwrap().id
 
-            # The account is part of the reference: the same row on two
-            # different statements is two different facts, and without it the
-            # second import is silently swallowed as a duplicate.
-            rows = (
-                df.pipe(lambda d: d.assign(date=pd.to_datetime(d["date"]).dt.date))
-                  .pipe(lambda d: d.assign(
-                      reference=d[["date", "amount", "description"]].astype(str).agg("|".join, axis=1)
-                  ))
-                  .pipe(lambda d: d.assign(
-                      reference=d["reference"].apply(
-                          lambda x: hashlib.sha256(f"{account.id}|{x}".encode()).hexdigest()
-                      )
-                  ))
-            )
+            # The account scopes the reference: the same row on two different
+            # statements is two different facts.
+            keyed = [(row, f"{account.id}:{row.reference.strip()}") for row in rows]
 
-            existing_res = existing_references_service(ctx, rows["reference"].to_list())
+            existing_res = existing_references_service(ctx, [reference for _, reference in keyed])
             if existing_res.is_err:
                 return Result.err(existing_res.unwrap_err())
             existing = existing_res.unwrap()
 
-            new_rows = rows[~rows["reference"].isin(existing)]
-            if new_rows.empty:
+            new_rows = [(row, reference) for row, reference in keyed if reference not in existing]
+            if not new_rows:
                 return Result.ok(0)
 
             # Loaded and compiled once for the whole statement: a query per row
@@ -376,14 +313,14 @@ class ImportStatement(UnitOfWork[int, ImportStatementError]):
             compiled = compile_rules(rules_res.unwrap())
 
             imported = 0
-            for row in new_rows.to_dict("records"):
-                amount = Decimal(str(row["amount"]))
+            for row, reference in new_rows:
+                amount = row.amount
                 magnitude = abs(amount)
                 counterparty = Counterparty(
-                    _optional_str(row["counterparty_name"]),
-                    _optional_str(row["counterparty_iban"]),
+                    _optional_str(row.counterparty_name),
+                    _optional_str(row.counterparty_iban),
                 )
-                matched = match_rule(compiled, row["description"], counterparty)
+                matched = match_rule(compiled, row.description, counterparty)
                 # A matched rule whose account has since gained a child fails
                 # the import loudly through validate_lines, rather than falling
                 # back to the bucket: a silent fallback would leave the user's
@@ -408,7 +345,7 @@ class ImportStatement(UnitOfWork[int, ImportStatementError]):
                     ),
                 ]
                 entry_res = post_entry(
-                    ctx, row["date"], row["reference"], row["description"], lines, counterparty
+                    ctx, row.entry_date, reference, row.description, lines, counterparty
                 )
                 if entry_res.is_err:
                     return Result.err(entry_res.unwrap_err())

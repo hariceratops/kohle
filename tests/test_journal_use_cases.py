@@ -1,18 +1,17 @@
 from datetime import date
 from decimal import Decimal
 
-import pandas as pd
 from sqlalchemy.orm import Session
 
 from kohle.domain.domain_errors import (
     AccountNotFoundError,
-    DataframeMissingColumn,
     EmptyEntry,
     EndDatePrecedesStartDateError,
     PostingToNonLeafAccount,
     UnbalancedEntry,
 )
 from kohle.domain.models import AccountType, UnitKind
+from kohle.plugin.importer_plugin import CashRow
 from kohle.services.journal_services import LineSpec
 from kohle.use_cases.accounts import AddAccount
 from kohle.use_cases.journal import (
@@ -98,16 +97,25 @@ def test_posting_to_parent_rejected(session: Session) -> None:
     assert isinstance(result.unwrap_err(), PostingToNonLeafAccount)
 
 
-def _statement() -> pd.DataFrame:
-    return pd.DataFrame(
-        {
-            "description": ["Aldi", "Salary"],
-            "amount": [-80.0, 2500.0],
-            "date": pd.to_datetime(["2026-03-05", "2026-03-01"]),
-            "counterparty_name": ["ALDI SUED", "ACME GmbH"],
-            "counterparty_iban": ["DE89370400440532013000", "DE02120300000000202051"],
-        }
-    ).astype({"counterparty_name": "string", "counterparty_iban": "string"})
+def _statement() -> list[CashRow]:
+    return [
+        CashRow(
+            entry_date=date(2026, 3, 5),
+            reference="r1",
+            description="Aldi",
+            amount=Decimal(-80),
+            counterparty_name="ALDI SUED",
+            counterparty_iban="DE89370400440532013000",
+        ),
+        CashRow(
+            entry_date=date(2026, 3, 1),
+            reference="r2",
+            description="Salary",
+            amount=Decimal(2500),
+            counterparty_name="ACME GmbH",
+            counterparty_iban="DE02120300000000202051",
+        ),
+    ]
 
 
 def test_import_statement_creates_balanced_entries(session: Session) -> None:
@@ -168,14 +176,6 @@ def test_import_statement_unknown_account(session: Session) -> None:
     result = ImportStatement(session).execute("Nope", _statement())
     assert result.is_err
     assert isinstance(result.unwrap_err(), AccountNotFoundError)
-
-
-def test_import_statement_missing_column(session: Session) -> None:
-    AddAccount(session).execute("Checking", AccountType.asset, "DE1")
-    df = _statement().drop(columns=["counterparty_iban"])
-    result = ImportStatement(session).execute("Checking", df)
-    assert result.is_err
-    assert isinstance(result.unwrap_err(), DataframeMissingColumn)
 
 
 def test_query_rejects_reversed_period(session: Session) -> None:

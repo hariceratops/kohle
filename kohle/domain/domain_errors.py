@@ -1,4 +1,3 @@
-from dataclasses import dataclass
 from decimal import Decimal
 
 
@@ -280,28 +279,6 @@ class EndDatePrecedesStartDateError(Exception):
         return f"End date {self.end_date} precedes start_date {self.start_date}"
 
 
-@dataclass
-class DataframeMissingColumn:
-    columns: list[str]
-
-    # The plugin contract has no version negotiation, so this message is its
-    # whole enforcement mechanism: it is what a plugin author sees on the first
-    # import after getting the frame wrong.
-    def __str__(self) -> str:
-        return f"Statement is missing required column(s): {', '.join(self.columns)}"
-
-
-@dataclass
-class DataframeColumnTypeMismatch:
-    mismatches: dict[str, str]  # column -> actual dtype
-
-    def __str__(self) -> str:
-        wrong = ", ".join(f"{column} is {dtype}" for column, dtype in self.mismatches.items())
-        return f"Statement column(s) have the wrong type: {wrong}"
-
-
-DataframeValidationError = DataframeMissingColumn | DataframeColumnTypeMismatch
-
 QueryJournalByPeriodError = \
         InvalidDateError | \
         JournalError | \
@@ -312,7 +289,6 @@ ImportStatementError = \
         AccountNotFoundError | \
         JournalError | \
         UnitError | \
-        DataframeValidationError | \
         RuleError | \
         ClassificationError
 

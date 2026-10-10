@@ -224,9 +224,9 @@ def import_statement(make_session, plugin_name: str, account_name: str, csv_file
     if statement_res.is_err:
         raise click.ClickException(str(statement_res.unwrap_err()))
 
-    df = statement_res.unwrap()
+    rows = statement_res.unwrap()
     import_use_case = ImportStatement(make_session())
-    res = import_use_case.execute(account_name, df)
+    res = import_use_case.execute(account_name, rows)
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
     click.echo(f"Import succeded, {res.unwrap()} entries imported")

@@ -25,12 +25,12 @@ from kohle.use_cases.operations import ListOperations
 from kohle.use_cases.splitting import PersonShare, SplitImportedEntry, UnsplitEntry
 
 
-def test_split_an_imported_line_scenario(session: Session, people_root, statement_df, statement_row) -> None:
+def test_split_an_imported_line_scenario(session: Session, people_root, cash_rows, statement_row) -> None:
     AddAccount(session).execute("Checking", AccountType.asset, "DE1")
     AddAccount(session).execute("Eating out", AccountType.expense)
     AddAccount(session).execute("Alice", AccountType.asset, None, "People")
 
-    df = statement_df([statement_row(date(2026, 3, 1), -80.0, "Dinner")])
+    df = cash_rows([statement_row(date(2026, 3, 1), -80.0, "Dinner")])
     imported = ImportStatement(session).execute("Checking", df)
     assert imported.is_ok
 
@@ -59,13 +59,13 @@ def test_split_an_imported_line_scenario(session: Session, people_root, statemen
 
 
 def test_splitting_an_income_line_leaves_the_person_account_negative(
-    session: Session, people_root, statement_df, statement_row
+    session: Session, people_root, cash_rows, statement_row
 ) -> None:
     AddAccount(session).execute("Checking", AccountType.asset, "DE1")
     AddAccount(session).execute("Reimbursements", AccountType.income)
     AddAccount(session).execute("Alice", AccountType.asset, None, "People")
 
-    df = statement_df([statement_row(date(2026, 3, 1), 80.0, "Shared refund")])
+    df = cash_rows([statement_row(date(2026, 3, 1), 80.0, "Shared refund")])
     imported = ImportStatement(session).execute("Checking", df)
     assert imported.is_ok
 
@@ -91,12 +91,12 @@ def test_splitting_an_income_line_leaves_the_person_account_negative(
     assert any(b.quantity == Decimal(-48) for b in alice_balance)
 
 
-def test_undo_and_edit_a_split_scenario(session: Session, people_root, statement_df, statement_row) -> None:
+def test_undo_and_edit_a_split_scenario(session: Session, people_root, cash_rows, statement_row) -> None:
     AddAccount(session).execute("Checking", AccountType.asset, "DE1")
     AddAccount(session).execute("Eating out", AccountType.expense)
     AddAccount(session).execute("Alice", AccountType.asset, None, "People")
 
-    df = statement_df([statement_row(date(2026, 3, 1), -80.0, "Dinner")])
+    df = cash_rows([statement_row(date(2026, 3, 1), -80.0, "Dinner")])
     imported = ImportStatement(session).execute("Checking", df)
     assert imported.is_ok
 
@@ -162,14 +162,14 @@ def test_undo_and_edit_a_split_scenario(session: Session, people_root, statement
 
 
 def test_reclassify_split_interaction_guards(
-    session: Session, people_root, statement_df, statement_row
+    session: Session, people_root, cash_rows, statement_row
 ) -> None:
     AddAccount(session).execute("Checking", AccountType.asset, "DE1")
     AddAccount(session).execute("Eating out", AccountType.expense)
     AddAccount(session).execute("Restaurants", AccountType.expense)
     AddAccount(session).execute("Alice", AccountType.asset, None, "People")
 
-    df = statement_df([statement_row(date(2026, 3, 1), -80.0, "Dinner")])
+    df = cash_rows([statement_row(date(2026, 3, 1), -80.0, "Dinner")])
     imported = ImportStatement(session).execute("Checking", df)
     assert imported.is_ok
 
@@ -195,7 +195,7 @@ def test_reclassify_split_interaction_guards(
 
     # Reclassify first, then split: the shares come out of the corrected
     # account, not the original bucket (design §4.2).
-    df2 = statement_df([statement_row(date(2026, 3, 2), -80.0, "Dinner two")])
+    df2 = cash_rows([statement_row(date(2026, 3, 2), -80.0, "Dinner two", reference="r2")])
     imported2 = ImportStatement(session).execute("Checking", df2)
     assert imported2.is_ok
     unclassified2 = ListUnclassified(session).execute().unwrap()

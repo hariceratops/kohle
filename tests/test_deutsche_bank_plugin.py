@@ -4,29 +4,34 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
+import pandas as pd
+import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from kohle.app.plugins.kohle_deutsche_bank_importer import DeustcheBankStatementImporter
+from kohle.app.plugins.kohle_deutsche_bank_importer import (
+    CsvError,
+    DeustcheBankStatementImporter,
+    InvalidStructureError,
+    MissingFieldError,
+    MissingSectionError,
+    _optional_cell,
+)
 from kohle.domain.models import AccountType, Classification, JournalEntry
+from kohle.plugin.importer_plugin import StatementUnreadable
 from kohle.use_cases.accounts import AddAccount
 from kohle.use_cases.journal import ImportStatement
 from kohle.use_cases.rules import AddRule
 
 FIXTURE = Path(__file__).parent / "fixtures" / "deutsche_bank_statement.csv"
 
-# TODO (not yet written): content-derived reference is deterministic, identical
-# rows collide, differing rows differ; pd.NA/nan normalisation cases moved from
-# test_optional_str_normalises_a_statement_cell; unreadable file gives a named error.
-
-
 def test_deutsche_bank_import_ledger_rows_unchanged(session: Session) -> None:
     AddAccount(session).execute("Checking", AccountType.asset, "DE1")
     AddAccount(session).execute("Groceries", AccountType.expense)
     AddRule(session).execute("ALDI", "Groceries").unwrap()
 
-    df = DeustcheBankStatementImporter().import_statement(str(FIXTURE)).unwrap()
-    assert ImportStatement(session).execute("Checking", df).unwrap() == 4
+    rows = DeustcheBankStatementImporter().import_statement(str(FIXTURE)).unwrap()
+    assert ImportStatement(session).execute("Checking", rows).unwrap() == 4
 
     entries = session.scalars(select(JournalEntry).order_by(JournalEntry.entry_date)).all()
     snapshot = [
@@ -89,3 +94,66 @@ def test_deutsche_bank_import_ledger_rows_unchanged(session: Session) -> None:
         assert proposed == final == counterpart.id
         assert matched == (description.startswith("Card 0001"))
         assert corrected is False
+
+
+def _import(path: Path):
+    return DeustcheBankStatementImporter().import_statement(str(path))
+
+
+def test_references_are_content_derived_and_deterministic() -> None:
+    first = _import(FIXTURE).unwrap()
+    second = _import(FIXTURE).unwrap()
+
+    assert [r.reference for r in first] == [r.reference for r in second]
+    assert len({r.reference for r in first}) == len(first)
+
+
+def test_rows_identical_in_date_amount_and_description_share_a_reference(tmp_path: Path) -> None:
+    lines = FIXTURE.read_text().splitlines()
+    duplicate = lines[:-1] + [lines[-2], lines[-1]]
+    path = tmp_path / "dup.csv"
+    path.write_text("\n".join(duplicate))
+
+    rows = _import(path).unwrap()
+
+    assert rows[-1].reference == rows[-2].reference
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [(pd.NA, None), (float("nan"), None), ("REWE", "REWE")],
+)
+def test_optional_cell_maps_missing_to_none(value, expected) -> None:
+    assert _optional_cell(value) == expected
+
+
+def test_unreadable_path_is_a_named_error(tmp_path: Path) -> None:
+    err = _import(tmp_path / "missing.csv").unwrap_err()
+
+    assert isinstance(err, StatementUnreadable)
+    assert "missing.csv" in str(err)
+
+
+def test_undecodable_file_is_a_named_error(tmp_path: Path) -> None:
+    path = tmp_path / "latin1.csv"
+    path.write_bytes(b"AktivKonto;\xe4\xf6\xfc")
+
+    assert isinstance(_import(path).unwrap_err(), StatementUnreadable)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "nothing useful here",
+        "\n".join(FIXTURE.read_text().splitlines()[:4] + ["Booking date;Value date"]),
+        "\n".join(FIXTURE.read_text().splitlines()[:-1]),
+    ],
+)
+def test_unparseable_statement_is_a_named_error_with_a_message(tmp_path: Path, text: str) -> None:
+    path = tmp_path / "bad.csv"
+    path.write_text(text)
+
+    err = _import(path).unwrap_err()
+
+    assert isinstance(err, (MissingFieldError, MissingSectionError, InvalidStructureError, CsvError))
+    assert str(err)
