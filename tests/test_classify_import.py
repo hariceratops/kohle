@@ -10,12 +10,11 @@ dev/design/expense-classification.md names each one as a trap.
 from datetime import date
 from decimal import Decimal
 
-import pandas as pd
 import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from kohle.domain.domain_errors import DataframeMissingColumn, PostingToNonLeafAccount
+from kohle.domain.domain_errors import PostingToNonLeafAccount
 from kohle.domain.models import (
     AccountType,
     Classification,
@@ -45,9 +44,9 @@ def _entries(session: Session) -> dict:
     return {line.entry.description: line.entry for line in lines}
 
 
-def test_import_stores_the_counterparty(session: Session, statement_df, statement_row) -> None:
+def test_import_stores_the_counterparty(session: Session, cash_rows, statement_row) -> None:
     _ledger(session)
-    df = statement_df([
+    df = cash_rows([
         statement_row(date(2026, 3, 5), -80.0, "Aldi", "ALDI SUED", "DE89370400440532013000"),
         statement_row(date(2026, 3, 1), 2500.0, "Salary", "ACME GmbH", None),
     ])
@@ -82,33 +81,11 @@ def test_hand_entered_entries_have_no_counterparty(session: Session) -> None:
         assert entry.counterparty_iban is None
 
 
-def test_a_plugin_omitting_the_column_fails_before_any_row_is_touched(
-    session: Session, statement_df, statement_row
-) -> None:
-    _ledger(session)
-    df = statement_df([
-        statement_row(date(2026, 3, 5), -80.0, "Aldi", "ALDI SUED", "DE89370400440532013000"),
-    ]).drop(columns=["counterparty_name"])
-
-    result = ImportStatement(session).execute("Checking", df)
-
-    assert result.is_err
-    err = result.unwrap_err()
-    assert isinstance(err, DataframeMissingColumn)
-    # The message is the contract's whole enforcement mechanism, so it names
-    # the column a plugin author has to add.
-    assert "counterparty_name" in str(err)
-    assert _entries(session) == {}
-
-
 def test_statement_with_no_counterparty_data_anywhere_imports(
-    session: Session, statement_df, statement_row
+    session: Session, cash_rows, statement_row
 ) -> None:
-    # REGRESSION: read_csv types a text column that is empty on every row as
-    # float64, so this shape failed the schema check for the old `iban` column
-    # with an error about a column the user never sees (design §3.3).
     _ledger(session)
-    df = statement_df([
+    df = cash_rows([
         statement_row(date(2026, 3, 5), -80.0, "Aldi"),
         statement_row(date(2026, 3, 1), 2500.0, "Salary"),
     ])
@@ -120,17 +97,16 @@ def test_statement_with_no_counterparty_data_anywhere_imports(
     )
 
 
-def test_counterparty_is_not_part_of_the_reference_hash(
-    session: Session, statement_df, statement_row
+def test_enriching_the_counterparty_does_not_reimport(
+    session: Session, cash_rows, statement_row
 ) -> None:
-    # REGRESSION: folding the counterparty into the digest would change every
-    # reference and silently re-import every statement ever imported (§3.6).
+    # REGRESSION: enrichment must not make an already-imported row look new.
     _ledger(session)
-    plain = statement_df([
+    plain = cash_rows([
         statement_row(date(2026, 3, 5), -80.0, "Aldi"),
         statement_row(date(2026, 3, 1), 2500.0, "Salary"),
     ])
-    enriched = statement_df([
+    enriched = cash_rows([
         statement_row(date(2026, 3, 5), -80.0, "Aldi", "ALDI SUED", "DE89370400440532013000"),
         statement_row(date(2026, 3, 1), 2500.0, "Salary", "ACME GmbH", "DE02120300000000202051"),
     ])
@@ -142,8 +118,7 @@ def test_counterparty_is_not_part_of_the_reference_hash(
 @pytest.mark.parametrize(
     ("value", "expected"),
     [
-        (pd.NA, None),
-        (float("nan"), None),
+        (None, None),
         ("", None),
         ("   ", None),
         ("REWE", "REWE"),
@@ -169,18 +144,18 @@ def _classification(session: Session, description: str) -> Classification:
     )
 
 
-def _two_rows(statement_df, statement_row):
-    return statement_df([
+def _two_rows(cash_rows, statement_row):
+    return cash_rows([
         statement_row(date(2026, 3, 5), -80.0, "ALDI SUED 1234", "ALDI SUED", None),
         statement_row(date(2026, 3, 6), -25.0, "Kiosk am Eck"),
     ])
 
 
-def test_a_matched_row_posts_to_its_rule_target(session: Session, statement_df, statement_row) -> None:
+def test_a_matched_row_posts_to_its_rule_target(session: Session, cash_rows, statement_row) -> None:
     _ledger(session)
     rule = AddRule(session).execute("ALDI", "Groceries").unwrap()
 
-    assert ImportStatement(session).execute("Checking", _two_rows(statement_df, statement_row)).unwrap() == 2
+    assert ImportStatement(session).execute("Checking", _two_rows(cash_rows, statement_row)).unwrap() == 2
 
     assert _landing_account(session, "ALDI SUED 1234") == "Groceries"
     classification = _classification(session, "ALDI SUED 1234")
@@ -190,12 +165,12 @@ def test_a_matched_row_posts_to_its_rule_target(session: Session, statement_df, 
 
 
 def test_a_row_matching_nothing_still_lands_in_the_bucket(
-    session: Session, statement_df, statement_row
+    session: Session, cash_rows, statement_row
 ) -> None:
     _ledger(session)
     AddRule(session).execute("ALDI", "Groceries")
 
-    assert ImportStatement(session).execute("Checking", _two_rows(statement_df, statement_row)).unwrap() == 2
+    assert ImportStatement(session).execute("Checking", _two_rows(cash_rows, statement_row)).unwrap() == 2
 
     assert _landing_account(session, "Kiosk am Eck") == "Unclassified Expense"
     # Recorded on the fall-through path too, so there is one place to read
@@ -206,11 +181,11 @@ def test_a_row_matching_nothing_still_lands_in_the_bucket(
 
 
 def test_an_empty_rule_set_imports_exactly_as_before(
-    session: Session, statement_df, statement_row
+    session: Session, cash_rows, statement_row
 ) -> None:
     _ledger(session)
 
-    assert ImportStatement(session).execute("Checking", _two_rows(statement_df, statement_row)).unwrap() == 2
+    assert ImportStatement(session).execute("Checking", _two_rows(cash_rows, statement_row)).unwrap() == 2
 
     assert _landing_account(session, "ALDI SUED 1234") == "Unclassified Expense"
     assert _landing_account(session, "Kiosk am Eck") == "Unclassified Expense"
@@ -218,11 +193,11 @@ def test_an_empty_rule_set_imports_exactly_as_before(
 
 
 def test_importing_the_same_statement_twice_still_imports_nothing(
-    session: Session, statement_df, statement_row
+    session: Session, cash_rows, statement_row
 ) -> None:
     _ledger(session)
     AddRule(session).execute("ALDI", "Groceries")
-    df = _two_rows(statement_df, statement_row)
+    df = _two_rows(cash_rows, statement_row)
 
     assert ImportStatement(session).execute("Checking", df).unwrap() == 2
     assert ImportStatement(session).execute("Checking", df).unwrap() == 0
@@ -231,7 +206,7 @@ def test_importing_the_same_statement_twice_still_imports_nothing(
 
 
 def test_a_rule_target_that_has_gained_a_child_fails_the_import(
-    session: Session, statement_df, statement_row
+    session: Session, cash_rows, statement_row
 ) -> None:
     # Posting still goes through post_entry, so leaf-only posting is enforced
     # by validate_lines rather than reimplemented here. Failing loudly beats
@@ -241,14 +216,14 @@ def test_a_rule_target_that_has_gained_a_child_fails_the_import(
     AddRule(session).execute("ALDI", "Groceries")
     AddAccount(session).execute("Organic", AccountType.expense, parent_name="Groceries")
 
-    result = ImportStatement(session).execute("Checking", _two_rows(statement_df, statement_row))
+    result = ImportStatement(session).execute("Checking", _two_rows(cash_rows, statement_row))
 
     assert result.is_err
     assert isinstance(result.unwrap_err(), PostingToNonLeafAccount)
 
 
 def test_one_import_produces_one_group_holding_every_write(
-    session_factory: sessionmaker, statement_df, statement_row
+    session_factory: sessionmaker, cash_rows, statement_row
 ) -> None:
     # REGRESSION: guards against the classifier being written as a UnitOfWork,
     # which would commit and close the session on the first row and leave the
@@ -261,7 +236,7 @@ def test_one_import_produces_one_group_holding_every_write(
         groups_before = session.scalar(select(func.count()).select_from(OperationGroup))
 
     assert ImportStatement(session_factory()).execute(
-        "Checking", _two_rows(statement_df, statement_row)
+        "Checking", _two_rows(cash_rows, statement_row)
     ).unwrap() == 2
 
     with session_factory() as session:
@@ -278,7 +253,7 @@ def test_one_import_produces_one_group_holding_every_write(
 
 
 def test_a_row_failing_mid_import_leaves_nothing_behind(
-    session_factory: sessionmaker, statement_df, statement_row
+    session_factory: sessionmaker, cash_rows, statement_row
 ) -> None:
     # REGRESSION: atomicity asserted rather than assumed. A partial commit
     # would leave entries with no classification — invisible to
@@ -296,7 +271,7 @@ def test_a_row_failing_mid_import_leaves_nothing_behind(
         groups_before = session.scalar(select(func.count()).select_from(OperationGroup))
 
     assert ImportStatement(session_factory()).execute(
-        "Checking", _two_rows(statement_df, statement_row)
+        "Checking", _two_rows(cash_rows, statement_row)
     ).is_err
 
     with session_factory() as session:

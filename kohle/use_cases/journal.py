@@ -1,39 +1,35 @@
-import hashlib
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
+from typing import assert_never
 from uuid import uuid4
-
-import pandas as pd
-from pandas.api.types import (
-    is_bool_dtype,
-    is_datetime64_any_dtype,
-    is_float_dtype,
-    is_integer_dtype,
-    is_string_dtype,
-)
 
 from kohle.core.result import Result
 from kohle.domain.domain_errors import (
     BalanceError,
     BaseCurrencyAsCrossUnit,
-    DataframeColumnTypeMismatch,
-    DataframeMissingColumn,
-    DataframeValidationError,
+    DuplicateReferenceInStatement,
     EmptyEntry,
     EndDatePrecedesStartDateError,
     ImportStatementError,
     InvalidDateError,
     JournalError,
+    MalformedStatementRow,
+    MissingInstrumentAccount,
+    NotASecurityUnit,
     PostingToNonLeafAccount,
     QueryJournalByPeriodError,
     RecordEntryError,
+    StatementError,
     UnbalancedEntry,
+    UnitNotFoundError,
+    UnknownInstruments,
 )
 from kohle.domain.models import AccountType, JournalEntry, JournalLine, UnitKind
 from kohle.infrastructure.transaction_context import DbTransactionContext
 from kohle.infrastructure.uow import UnitOfWork
+from kohle.plugin.importer_plugin import CashRow, SecurityRow, StatementRow
 from kohle.services.account_services import (
     account_has_children_service,
     add_account_service,
@@ -61,30 +57,6 @@ PEOPLE_ROOT = "People"
 UNCLASSIFIED_INCOME = "Unclassified Income"
 
 
-def validate_df_schema(df: pd.DataFrame, expected_schema: dict[str, str]) -> DataframeValidationError | None:
-    missing = [col for col in expected_schema if col not in df.columns]
-    if missing:
-        return DataframeMissingColumn(missing)
-
-    mismatches: dict[str, str] = {}
-    for col, expected_type in expected_schema.items():
-        series = df[col]
-        valid = (
-            (expected_type == "int" and is_integer_dtype(series))
-            or (expected_type == "float" and is_float_dtype(series))
-            or (expected_type == "string" and is_string_dtype(series))
-            or (expected_type == "datetime" and is_datetime64_any_dtype(series))
-            or (expected_type == "bool" and is_bool_dtype(series))
-        )
-        if not valid:
-            mismatches[col] = str(series.dtype)
-
-    if mismatches:
-        return DataframeColumnTypeMismatch(mismatches)
-
-    return None
-
-
 def parse_date(input_date: str) -> Result[date, InvalidDateError]:
     try:
         return Result.ok(date.fromisoformat(input_date))
@@ -92,17 +64,12 @@ def parse_date(input_date: str) -> Result[date, InvalidDateError]:
         return Result.err(InvalidDateError(input_date))
 
 
-def _optional_str(value) -> str | None:
-    """A statement cell as either text or nothing.
-
-    `to_dict("records")` hands back `pd.NA` for a missing string cell, which
-    must not reach a `String` column; `''` and `'   '` are the same fact as
-    absent, and a placeholder would be a value a rule could match (design §3.1).
-    """
-    if pd.isna(value):
+def _optional_str(value: str | None) -> str | None:
+    """`''` and `'   '` are the same fact as absent, and a placeholder would be
+    a value a rule could match (design §3.1)."""
+    if value is None:
         return None
-    text = str(value).strip()
-    return text or None
+    return value.strip() or None
 
 
 def _get_or_create_account(
@@ -179,6 +146,24 @@ class CrossUnitLine:
     is_debit: bool
 
 
+def _cross_unit_lines(
+    *,
+    holding_account_id: int,
+    holding_unit_id: int,
+    quantity: Decimal,
+    unit_price: Decimal,
+    cash_account_id: int,
+    cash_unit_id: int,
+    into_holding: bool,
+) -> list[LineSpec]:
+    """Shared by `record` and imported trades so the cost fold sees one
+    definition of a trade."""
+    return [
+        LineSpec(holding_account_id, holding_unit_id, quantity, unit_price, is_debit=into_holding),
+        LineSpec(cash_account_id, cash_unit_id, quantity * unit_price, Decimal(1), is_debit=not into_holding),
+    ]
+
+
 class RecordSimpleEntry(UnitOfWork[JournalEntry, RecordEntryError]):
     """The `record` CLI command's use case: a two-line entry, base-currency
     or cross-unit.
@@ -230,12 +215,15 @@ class RecordSimpleEntry(UnitOfWork[JournalEntry, RecordEntryError]):
                 cross_account = to_account_obj if cross.is_debit else from_account_obj
                 base_account = from_account_obj if cross.is_debit else to_account_obj
 
-                lines = [
-                    LineSpec(cross_account.id, cross_unit_id, quantity, cross.price, is_debit=cross.is_debit),
-                    LineSpec(
-                        base_account.id, base_unit_id, quantity * cross.price, Decimal(1), is_debit=not cross.is_debit
-                    ),
-                ]
+                lines = _cross_unit_lines(
+                    holding_account_id=cross_account.id,
+                    holding_unit_id=cross_unit_id,
+                    quantity=quantity,
+                    unit_price=cross.price,
+                    cash_account_id=base_account.id,
+                    cash_unit_id=base_unit_id,
+                    into_holding=cross.is_debit,
+                )
 
             entry_res = post_entry(ctx, entry_date, uuid4().hex, description, lines)
             if entry_res.is_err:
@@ -307,29 +295,109 @@ class RecordSplitEntry(UnitOfWork[JournalEntry, RecordEntryError]):
         return self._run(use_case)
 
 
+def validate_statement(rows: Sequence[StatementRow]) -> StatementError | None:
+    first_seen: dict[str, int] = {}
+    for number, row in enumerate(rows, start=1):
+        reference = (row.reference or "").strip()
+        if not reference:
+            return MalformedStatementRow(number, "reference", "is empty")
+        if reference in first_seen:
+            return DuplicateReferenceInStatement(reference, first_seen[reference], number)
+        first_seen[reference] = number
+        match row:
+            case CashRow():
+                pass
+            case SecurityRow():
+                problem = _security_row_problem(row)
+                if problem is not None:
+                    return MalformedStatementRow(number, *problem)
+            case _:
+                assert_never(row)
+    return None
+
+
+def _security_row_problem(row: SecurityRow) -> tuple[str, str] | None:
+    # The type is a promise a plugin can break (an empty cell becomes None or
+    # NaN), and each of these would otherwise post a wrong cost basis or fail
+    # far from the cause.
+    if not (row.instrument_identifier or "").strip():
+        return "instrument_identifier", "is empty"
+    if row.unit_price is None or not row.unit_price.is_finite() or row.unit_price <= 0:
+        return "unit_price", f"must be a positive number, got {row.unit_price}"
+    if row.quantity is None or not row.quantity.is_finite() or row.quantity == 0:
+        return "quantity", f"must be a non-zero number, got {row.quantity}"
+    return None
+
+
 class ImportStatement(UnitOfWork[int, ImportStatementError]):
     """Statement rows become balanced entries, each posted to the account its
     first matching rule names, or to an unclassified bucket when none matches.
     Every row's decision is recorded, matched or not."""
 
-    def execute(self, account_name: str, df: pd.DataFrame) -> Result[int, ImportStatementError]:
+    def execute(
+        self,
+        cash_account_name: str,
+        rows: Sequence[StatementRow],
+        instrument_account_name: str | None = None,
+    ) -> Result[int, ImportStatementError]:
         def use_case(ctx: DbTransactionContext) -> Result[int, ImportStatementError]:
-            schema = {
-                "description": "string",
-                "amount": "float",
-                "date": "datetime",
-                "counterparty_name": "string",
-                "counterparty_iban": "string",
-            }
-            invalid_df = validate_df_schema(df, schema)
-            if invalid_df:
-                return Result.err(invalid_df)
+            statement_error = validate_statement(rows)
+            if statement_error is not None:
+                return Result.err(statement_error)
 
-            account_res = get_account_by_name_service(ctx, account_name)
+            # Decided by the statement's shape, not by what is already
+            # imported, so the same input always has the same requirement.
+            if instrument_account_name is None and any(isinstance(row, SecurityRow) for row in rows):
+                return Result.err(MissingInstrumentAccount())
+
+            account_res = get_account_by_name_service(ctx, cash_account_name)
             if account_res.is_err:
                 return Result.err(account_res.unwrap_err())
             account = account_res.unwrap()
 
+            instrument_account = None
+            if instrument_account_name is not None:
+                instrument_res = get_account_by_name_service(ctx, instrument_account_name)
+                if instrument_res.is_err:
+                    return Result.err(instrument_res.unwrap_err())
+                instrument_account = instrument_res.unwrap()
+
+            # The cash account scopes every row's reference, trades included:
+            # it is the one account all rows touch, so re-importing a broker
+            # file under another instrument account is still a no-op.
+            keyed = [(row, f"{account.id}:{row.reference.strip()}") for row in rows]
+
+            existing_res = existing_references_service(ctx, [reference for _, reference in keyed])
+            if existing_res.is_err:
+                return Result.err(existing_res.unwrap_err())
+            existing = existing_res.unwrap()
+
+            new_rows = [(row, reference) for row, reference in keyed if reference not in existing]
+            if not new_rows:
+                return Result.ok(0)
+
+            units: dict[str, int] = {}
+            missing: list[str] = []
+            identifiers = dict.fromkeys(
+                row.instrument_identifier for row, _ in new_rows if isinstance(row, SecurityRow)
+            )
+            for identifier in identifiers:
+                instrument_unit_res = get_unit_by_identifier_service(ctx, identifier)
+                if instrument_unit_res.is_err:
+                    unit_error = instrument_unit_res.unwrap_err()
+                    if isinstance(unit_error, UnitNotFoundError):
+                        missing.append(identifier)
+                        continue
+                    return Result.err(unit_error)
+                instrument_unit = instrument_unit_res.unwrap()
+                if instrument_unit.kind != UnitKind.security:
+                    return Result.err(NotASecurityUnit(identifier, instrument_unit.kind.value))
+                units[identifier] = instrument_unit.id
+            if missing:
+                return Result.err(UnknownInstruments(sorted(missing)))
+
+            # After the early return: a re-import must make no write call, or
+            # it would leave an OperationGroup behind.
             unit_res = get_or_create_unit(ctx, BASE_CURRENCY, "Euro", UnitKind.currency)
             if unit_res.is_err:
                 return Result.err(unit_res.unwrap_err())
@@ -344,30 +412,6 @@ class ImportStatement(UnitOfWork[int, ImportStatementError]):
             expense_id = expense_res.unwrap().id
             income_id = income_res.unwrap().id
 
-            # The account is part of the reference: the same row on two
-            # different statements is two different facts, and without it the
-            # second import is silently swallowed as a duplicate.
-            rows = (
-                df.pipe(lambda d: d.assign(date=pd.to_datetime(d["date"]).dt.date))
-                  .pipe(lambda d: d.assign(
-                      reference=d[["date", "amount", "description"]].astype(str).agg("|".join, axis=1)
-                  ))
-                  .pipe(lambda d: d.assign(
-                      reference=d["reference"].apply(
-                          lambda x: hashlib.sha256(f"{account.id}|{x}".encode()).hexdigest()
-                      )
-                  ))
-            )
-
-            existing_res = existing_references_service(ctx, rows["reference"].to_list())
-            if existing_res.is_err:
-                return Result.err(existing_res.unwrap_err())
-            existing = existing_res.unwrap()
-
-            new_rows = rows[~rows["reference"].isin(existing)]
-            if new_rows.empty:
-                return Result.ok(0)
-
             # Loaded and compiled once for the whole statement: a query per row
             # is N x M, and re.compile per row recompiles a fixed rule set.
             rules_res = list_rules_service(ctx)
@@ -376,56 +420,76 @@ class ImportStatement(UnitOfWork[int, ImportStatementError]):
             compiled = compile_rules(rules_res.unwrap())
 
             imported = 0
-            for row in new_rows.to_dict("records"):
-                amount = Decimal(str(row["amount"]))
-                magnitude = abs(amount)
-                counterparty = Counterparty(
-                    _optional_str(row["counterparty_name"]),
-                    _optional_str(row["counterparty_iban"]),
-                )
-                matched = match_rule(compiled, row["description"], counterparty)
-                # A matched rule whose account has since gained a child fails
-                # the import loudly through validate_lines, rather than falling
-                # back to the bucket: a silent fallback would leave the user's
-                # rules quietly disabled with nothing saying why.
-                counterpart_id = matched.account_id if matched else (
-                    expense_id if amount < 0 else income_id
-                )
-                lines = [
-                    LineSpec(
-                        account_id=account.id,
-                        unit_id=unit_id,
-                        quantity=magnitude,
-                        unit_price=Decimal(1),
-                        is_debit=amount > 0,
-                    ),
-                    LineSpec(
-                        account_id=counterpart_id,
-                        unit_id=unit_id,
-                        quantity=magnitude,
-                        unit_price=Decimal(1),
-                        is_debit=amount < 0,
-                    ),
-                ]
-                entry_res = post_entry(
-                    ctx, row["date"], row["reference"], row["description"], lines, counterparty
-                )
-                if entry_res.is_err:
-                    return Result.err(entry_res.unwrap_err())
+            for row, reference in new_rows:
+                match row:
+                    case CashRow():
+                        amount = row.amount
+                        magnitude = abs(amount)
+                        counterparty = Counterparty(
+                            _optional_str(row.counterparty_name),
+                            _optional_str(row.counterparty_iban),
+                        )
+                        matched = match_rule(compiled, row.description, counterparty)
+                        # A matched rule whose account has since gained a child fails
+                        # the import loudly through validate_lines, rather than falling
+                        # back to the bucket: a silent fallback would leave the user's
+                        # rules quietly disabled with nothing saying why.
+                        counterpart_id = matched.account_id if matched else (
+                            expense_id if amount < 0 else income_id
+                        )
+                        lines = [
+                            LineSpec(
+                                account_id=account.id,
+                                unit_id=unit_id,
+                                quantity=magnitude,
+                                unit_price=Decimal(1),
+                                is_debit=amount > 0,
+                            ),
+                            LineSpec(
+                                account_id=counterpart_id,
+                                unit_id=unit_id,
+                                quantity=magnitude,
+                                unit_price=Decimal(1),
+                                is_debit=amount < 0,
+                            ),
+                        ]
+                        entry_res = post_entry(
+                            ctx, row.entry_date, reference, row.description, lines, counterparty
+                        )
+                        if entry_res.is_err:
+                            return Result.err(entry_res.unwrap_err())
 
-                # Written on both paths, so what the engine decided has one
-                # place to be read from whether or not a rule fired. The two
-                # account columns hold the same value here and diverge only
-                # when a human corrects the line.
-                classification_res = add_classification_service(
-                    ctx,
-                    journal_entry_id=entry_res.unwrap().id,
-                    proposed_account_id=counterpart_id,
-                    matched_rule_id=matched.rule_id if matched else None,
-                    final_account_id=counterpart_id,
-                )
-                if classification_res.is_err:
-                    return Result.err(classification_res.unwrap_err())
+                        # Written on both paths, so what the engine decided has one
+                        # place to be read from whether or not a rule fired. The two
+                        # account columns hold the same value here and diverge only
+                        # when a human corrects the line.
+                        classification_res = add_classification_service(
+                            ctx,
+                            journal_entry_id=entry_res.unwrap().id,
+                            proposed_account_id=counterpart_id,
+                            matched_rule_id=matched.rule_id if matched else None,
+                            final_account_id=counterpart_id,
+                        )
+                        if classification_res.is_err:
+                            return Result.err(classification_res.unwrap_err())
+                    case SecurityRow():
+                        # Both accounts are named on the command line, so there
+                        # is nothing for a rule to decide and no classification.
+                        assert instrument_account is not None
+                        trade_lines = _cross_unit_lines(
+                            holding_account_id=instrument_account.id,
+                            holding_unit_id=units[row.instrument_identifier],
+                            quantity=abs(row.quantity),
+                            unit_price=row.unit_price,
+                            cash_account_id=account.id,
+                            cash_unit_id=unit_id,
+                            into_holding=row.quantity > 0,
+                        )
+                        trade_res = post_entry(ctx, row.entry_date, reference, row.description, trade_lines)
+                        if trade_res.is_err:
+                            return Result.err(trade_res.unwrap_err())
+                    case _:
+                        assert_never(row)
                 imported += 1
 
             return Result.ok(imported)

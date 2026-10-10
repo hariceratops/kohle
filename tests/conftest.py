@@ -1,6 +1,6 @@
 from datetime import date as date_type
+from decimal import Decimal
 
-import pandas as pd
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -8,6 +8,7 @@ from sqlalchemy.pool import StaticPool
 
 from kohle.db.connection import base
 from kohle.domain.models import AccountType
+from kohle.plugin.importer_plugin import CashRow
 from kohle.use_cases.accounts import AddAccount
 from kohle.use_cases.journal import PEOPLE_ROOT
 
@@ -59,25 +60,25 @@ def people_root(session: Session):
 
 
 @pytest.fixture
-def statement_df():
+def cash_rows():
     """Build what a conformant importer plugin returns.
 
-    The explicit `string` dtypes are the point. `read_csv` types a text column
-    that is empty on every row as float64, so a statement with no counterparty
-    data anywhere fails the schema check unless the plugin declares the dtype —
-    see dev/design/expense-classification.md §3.3. Building the frame by hand
-    in each test is where that trap hides.
+    References are numbered by position ("r1", "r2", ...) unless a row names
+    one, so two builds of the same list dedup against each other.
     """
 
-    def build(rows: list[dict]) -> pd.DataFrame:
-        columns = ["date", "amount", "description", "counterparty_name", "counterparty_iban"]
-        df = pd.DataFrame(rows, columns=columns)
-        return df.astype({
-            "amount": "float",
-            "description": "string",
-            "counterparty_name": "string",
-            "counterparty_iban": "string",
-        }).assign(date=lambda d: pd.to_datetime(d["date"]))
+    def build(rows: list[dict]) -> list[CashRow]:
+        return [
+            CashRow(
+                entry_date=row["date"],
+                reference=row.get("reference", f"r{position}"),
+                description=row["description"],
+                amount=Decimal(str(row["amount"])),
+                counterparty_name=row["counterparty_name"],
+                counterparty_iban=row["counterparty_iban"],
+            )
+            for position, row in enumerate(rows, start=1)
+        ]
 
     return build
 
@@ -92,13 +93,17 @@ def statement_row():
         description: str,
         counterparty_name: str | None = None,
         counterparty_iban: str | None = None,
+        reference: str | None = None,
     ) -> dict:
-        return {
+        row = {
             "date": day,
             "amount": amount,
             "description": description,
             "counterparty_name": counterparty_name,
             "counterparty_iban": counterparty_iban,
         }
+        if reference is not None:
+            row["reference"] = reference
+        return row
 
     return build

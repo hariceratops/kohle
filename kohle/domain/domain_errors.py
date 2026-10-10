@@ -1,4 +1,3 @@
-from dataclasses import dataclass
 from decimal import Decimal
 
 
@@ -58,6 +57,27 @@ class UnitNotFoundError(UnitError):
 
     def __str__(self) -> str:
         return f"Unit {self.identifier} not found"
+
+
+class UnknownInstruments(UnitError):
+    def __init__(self, identifiers: list[str]) -> None:
+        super().__init__()
+        self.identifiers = identifiers
+
+    def __str__(self) -> str:
+        names = ", ".join(repr(i) for i in self.identifiers)
+        hints = "; ".join(f"kohle-cli add-unit {i} <name>" for i in self.identifiers)
+        return f"Unknown instruments: {names}. Add them first, e.g. {hints}"
+
+
+class NotASecurityUnit(UnitError):
+    def __init__(self, identifier: str, kind: str) -> None:
+        super().__init__()
+        self.identifier = identifier
+        self.kind = kind
+
+    def __str__(self) -> str:
+        return f"Unit {self.identifier!r} is a {self.kind}, not a security, and cannot be a traded instrument"
 
 
 class DuplicateUnit(UnitError):
@@ -178,7 +198,7 @@ class NoClassificationForEntry(ClassificationError):
     def __str__(self) -> str:
         return (
             f"Journal entry id {self.entry_id} has no classification record; "
-            "only imported lines can be reclassified or split"
+            "only imported cash lines can be reclassified or split"
         )
 
 
@@ -280,39 +300,49 @@ class EndDatePrecedesStartDateError(Exception):
         return f"End date {self.end_date} precedes start_date {self.start_date}"
 
 
-@dataclass
-class DataframeMissingColumn:
-    columns: list[str]
-
-    # The plugin contract has no version negotiation, so this message is its
-    # whole enforcement mechanism: it is what a plugin author sees on the first
-    # import after getting the frame wrong.
-    def __str__(self) -> str:
-        return f"Statement is missing required column(s): {', '.join(self.columns)}"
-
-
-@dataclass
-class DataframeColumnTypeMismatch:
-    mismatches: dict[str, str]  # column -> actual dtype
-
-    def __str__(self) -> str:
-        wrong = ", ".join(f"{column} is {dtype}" for column, dtype in self.mismatches.items())
-        return f"Statement column(s) have the wrong type: {wrong}"
-
-
-DataframeValidationError = DataframeMissingColumn | DataframeColumnTypeMismatch
-
 QueryJournalByPeriodError = \
         InvalidDateError | \
         JournalError | \
         EndDatePrecedesStartDateError | \
         AccountNotFoundError
 
+class MalformedStatementRow(Exception):
+    def __init__(self, row_number: int, field: str, problem: str) -> None:
+        super().__init__()
+        self.row_number = row_number
+        self.field = field
+        self.problem = problem
+
+    def __str__(self) -> str:
+        return f"Statement row {self.row_number}: {self.field} {self.problem}"
+
+
+class DuplicateReferenceInStatement(Exception):
+    def __init__(self, reference: str, first_row_number: int, row_number: int) -> None:
+        super().__init__()
+        self.reference = reference
+        self.first_row_number = first_row_number
+        self.row_number = row_number
+
+    def __str__(self) -> str:
+        return (
+            f"Statement rows {self.first_row_number} and {self.row_number} "
+            f"share the reference {self.reference!r}"
+        )
+
+
+class MissingInstrumentAccount(Exception):
+    def __str__(self) -> str:
+        return "The statement contains trades; name the instrument account they post to"
+
+
+StatementError = MalformedStatementRow | DuplicateReferenceInStatement | MissingInstrumentAccount
+
 ImportStatementError = \
+        StatementError | \
         AccountNotFoundError | \
         JournalError | \
         UnitError | \
-        DataframeValidationError | \
         RuleError | \
         ClassificationError
 

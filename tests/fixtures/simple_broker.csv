@@ -1,0 +1,4 @@
+date,reference,type,isin,quantity,price,amount
+2026-03-02,T-1001,buy,DE0005190003,10,95.50,
+2026-03-20,T-1002,sell,DE0005190003,4,101.25,
+2026-04-15,D-2001,dividend,DE0005190003,,,12.40

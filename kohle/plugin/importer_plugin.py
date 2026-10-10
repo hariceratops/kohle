@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
-
-import pandas as pd
+from dataclasses import dataclass
+from datetime import date
+from decimal import Decimal
 
 from kohle.core.result import Result
 
@@ -9,34 +10,61 @@ class ImportError(Exception):
     pass
 
 
+class StatementUnreadable(ImportError):
+    def __init__(self, path: str, reason: str) -> None:
+        super().__init__()
+        self.path = path
+        self.reason = reason
+
+    def __str__(self) -> str:
+        return f"Cannot read statement {self.path}: {self.reason}"
+
+
+# Counterparty is two plain fields rather than services' `Counterparty`: this
+# module must stay a leaf, or every plugin would depend on the services layer.
+# No defaults, so a plugin with no counterparty data says so explicitly.
+@dataclass(frozen=True, slots=True, kw_only=True)
+class CashRow:
+    """A cash movement: quantity in the base currency at price 1.
+
+    `amount` is signed; negative is money leaving the imported account.
+    `reference` identifies the row within its statement and must be unique;
+    a format with no native one derives it from row content inside the plugin.
+    """
+
+    entry_date: date
+    reference: str
+    description: str
+    amount: Decimal
+    counterparty_name: str | None
+    counterparty_iban: str | None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class SecurityRow:
+    """A trade: `quantity` of an instrument at `unit_price` base currency each.
+
+    `quantity` is signed like `CashRow.amount`, from the instrument account's
+    side: positive is a buy, negative a sell. The cash leg is derived as
+    |quantity| * unit_price, so an unbalanced trade is not expressible.
+    """
+
+    entry_date: date
+    reference: str
+    description: str
+    instrument_identifier: str
+    quantity: Decimal
+    unit_price: Decimal
+
+
+StatementRow = CashRow | SecurityRow
+
+
 class StatementImporterPlugin(ABC):
-    """A statement file becomes one row per cash movement.
+    """A statement file becomes one typed row per statement line, in order.
 
-    `import_statement` returns a frame carrying exactly these columns:
-
-    | column              | dtype    | meaning                                  |
-    |---------------------|----------|------------------------------------------|
-    | `description`       | string   | free text from the statement             |
-    | `amount`            | float    | signed; negative is money leaving        |
-    | `date`              | datetime | booking or value date, plugin's choice   |
-    | `counterparty_name` | string   | who the other side was                   |
-    | `counterparty_iban` | string   | the other side's IBAN                    |
-
-    A plugin whose format carries no counterparty at all still declares the
-    column, empty:
-
-        df.assign(counterparty_iban=pd.Series(pd.NA, index=df.index, dtype="string"))
-
-    Absence per row is normal — an ATM withdrawal has no beneficiary — and is
-    stored as NULL. Absence of the *column* is a hard failure, named by
-    `DataframeMissingColumn` before a single row is touched: a counterparty
-    that silently goes missing is what makes a classification rule stop
-    matching with nothing anywhere saying why.
-
-    The `string` dtypes are part of the contract, not a formality: `read_csv`
-    types a text column that is empty on every row as `float64`, so a statement
-    with no counterparty data anywhere fails the schema check unless the plugin
-    casts. `.astype("string")` is stable under all-NA.
+    `import_statement` holds no state between calls. An unreadable or
+    unparseable file is returned as an `ImportError`, never raised.
     """
 
     @property
@@ -45,5 +73,5 @@ class StatementImporterPlugin(ABC):
         pass
 
     @abstractmethod
-    def import_statement(self, statement_path: str) -> Result[pd.DataFrame, ImportError]:
+    def import_statement(self, statement_path: str) -> Result[list[StatementRow], ImportError]:
         pass

@@ -20,7 +20,7 @@ from kohle.use_cases.journal import ImportStatement, QueryAccountBalance
 from kohle.use_cases.rules import AddRule
 
 
-def test_classification_scenario(session: Session, statement_df, statement_row) -> None:
+def test_classification_scenario(session: Session, cash_rows, statement_row) -> None:
     AddAccount(session).execute("Checking", AccountType.asset, "DE1")
     AddAccount(session).execute("Groceries", AccountType.expense)
     AddAccount(session).execute("Books", AccountType.expense)
@@ -32,7 +32,7 @@ def test_classification_scenario(session: Session, statement_df, statement_row) 
     groups_before_import = session.scalar(select(func.count()).select_from(OperationGroup))
 
     # Step 2: a statement with counterparty data, one row matching no rule.
-    df = statement_df([
+    df = cash_rows([
         statement_row(date(2026, 3, 1), -42.0, "REWE SAGT DANKE", "REWE Markt GmbH", "DE89370400440532013000"),
         statement_row(date(2026, 3, 3), -18.0, "AMZN MKTP DE", "Amazon EU", "DE11500105170648489890"),
         statement_row(date(2026, 3, 5), -9.5, "Ticket Nr. 4471", "S-Bahn Berlin", None),

@@ -396,30 +396,75 @@ class StatementImporterPlugin(ABC):
         pass
 
     @abstractmethod
-    def import_statement(self, statement_path: str) -> Result[pd.DataFrame, ImportError]:
+    def import_statement(self, statement_path: str) -> Result[list[StatementRow], ImportError]:
         pass
 ```
 
-The returned frame carries five columns and describes cash movements only:
+`import_statement` returns one row per statement line, in order: a `CashRow` for
+a cash movement, a `SecurityRow` for a trade. All fields are required keyword
+arguments. A `CashRow` has:
 
-| column              | dtype    | meaning                                |
-|---------------------|----------|----------------------------------------|
-| `description`       | string   | free text from the statement           |
-| `amount`            | float    | signed; negative is money leaving      |
-| `date`              | datetime | booking or value date, plugin's choice |
-| `counterparty_name` | string   | who the other side was                 |
-| `counterparty_iban` | string   | the other side's IBAN                  |
+| field               | type          | meaning                                           |
+|---------------------|---------------|---------------------------------------------------|
+| `entry_date`        | `date`        | booking or value date, plugin's choice            |
+| `reference`         | `str`         | unique per row; dedup key, scoped to the account  |
+| `description`       | `str`         | free text from the statement                      |
+| `amount`            | `Decimal`     | signed; negative is money leaving                 |
+| `counterparty_name` | `str \| None` | who the other side was                            |
+| `counterparty_iban` | `str \| None` | the other side's IBAN                             |
 
-`counterparty_iban` is the *other* side's IBAN, not the imported account's.
+`counterparty_iban` is the *other* side's IBAN, not the imported account's. A
+format with no counterparty data passes `None` explicitly, so omitting it is
+a `TypeError` rather than a silent gap.
 
-A format that carries no counterparty at all still declares the column, empty
-(`df.assign(counterparty_iban=pd.Series(pd.NA, index=df.index, dtype="string"))`).
-Missing it is a hard failure naming the column, because a counterparty that
-silently goes missing is what makes a classification rule stop matching with
-nothing saying why. Cast the text columns with `.astype("string")`: `read_csv`
-types a column that is empty on every row as `float64`, which the schema check
-rejects.
+A `SecurityRow` has `entry_date`, `reference` and `description` as above, plus:
 
-Importing a broker statement needs unit and price on each row, which this
-contract cannot yet express — see
-`dev/inbox/importer-plugins-for-assets.md`.
+| field                   | type      | meaning                                           |
+|-------------------------|-----------|---------------------------------------------------|
+| `instrument_identifier` | `str`     | the `Unit.identifier` of a `security` unit        |
+| `quantity`              | `Decimal` | signed; positive is a buy, negative a sell        |
+| `unit_price`            | `Decimal` | base currency per unit, finite and above zero     |
+
+There is no cash amount on a trade: the cash leg is `abs(quantity) *
+unit_price`. A trade posts one balanced entry between the cash account and the
+instrument account (a buy debits the instrument and credits cash; a sell the
+reverse), runs no classification rules and records no classification, so it
+cannot be reclassified or split. A row with a missing, zero, negative or NaN
+price, a zero quantity or an empty identifier rejects the whole import before
+anything is written.
+
+`reference` is the statement's own per-row id. A format that has none (the
+Deutsche Bank CSV) derives it from row content inside the plugin.
+
+An unreadable or unparseable file is returned as an `ImportError` subclass
+whose `__str__` says what is wrong (`StatementUnreadable` covers I/O and
+decoding); nothing is written. A plugin holds no state between calls.
+
+Statements are imported with:
+
+```
+kohle-cli import-statement PLUGIN CASH_ACCOUNT [INSTRUMENT_ACCOUNT] STATEMENT_FILE
+```
+
+`INSTRUMENT_ACCOUNT` is required when the statement contains trades and
+optional otherwise. Every instrument identifier must already exist as a
+`security` unit (`kohle-cli add-unit <identifier> <name>`); unknown ones are
+all named in a single error and nothing is imported. A reference is scoped to
+the cash account, so re-importing a file posts nothing.
+
+#### Bundled plugins
+- `kohle-deutsche-bank`: Deutsche Bank CSV, cash rows only.
+- `kohle-simple-broker`: a simple broker CSV that exercises the contract
+  until a real broker format is chosen. UTF-8, header exactly
+  `date,reference,type,isin,quantity,price,amount`. `type` is `buy`, `sell` or
+  `dividend`. Buys and sells (`isin`, unsigned `quantity > 0`, `price > 0`, no
+  `amount`) become `SecurityRow`s; a dividend (`amount` in EUR, `isin`
+  optional, no quantity or price) becomes a `CashRow` described `Dividend
+  <isin>`, so a rule such as `add-rule '^Dividend' Dividends` routes it.
+  Parse errors name the file line; an unknown `type` or a filled column that
+  must be empty writes nothing.
+
+```
+kohle-cli add-unit DE0005190003 BMW
+kohle-cli import-statement kohle-simple-broker "Broker Cash" Depot statement.csv
+```
