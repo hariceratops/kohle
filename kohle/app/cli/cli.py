@@ -211,22 +211,28 @@ def list_importer_plugins():
 
 @cli.command()
 @click.argument("plugin_name", required=True)
-@click.argument('account_name')
-@click.argument('csv_file', type=click.Path(exists=True))
+@click.argument("cash_account")
+@click.argument("instrument_account", nargs=-1, metavar="[INSTRUMENT_ACCOUNT]")
+@click.argument("statement_file", type=click.Path(exists=True))
 @click.pass_obj
-def import_statement(make_session, plugin_name: str, account_name: str, csv_file):
+def import_statement(
+    make_session, plugin_name: str, cash_account: str, instrument_account: tuple[str, ...], statement_file
+):
+    if len(instrument_account) > 1:
+        raise click.BadParameter("at most one INSTRUMENT_ACCOUNT may be given", param_hint="INSTRUMENT_ACCOUNT")
+
     plugins = load_plugins()
     if plugin_name not in plugins:
         raise click.ClickException("Plugin not found")
 
     plugin = plugins[plugin_name]
-    statement_res = plugin.import_statement(csv_file)
+    statement_res = plugin.import_statement(statement_file)
     if statement_res.is_err:
         raise click.ClickException(str(statement_res.unwrap_err()))
 
     rows = statement_res.unwrap()
     import_use_case = ImportStatement(make_session())
-    res = import_use_case.execute(account_name, rows)
+    res = import_use_case.execute(cash_account, rows, instrument_account[0] if instrument_account else None)
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
     click.echo(f"Import succeded, {res.unwrap()} entries imported")

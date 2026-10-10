@@ -59,6 +59,27 @@ class UnitNotFoundError(UnitError):
         return f"Unit {self.identifier} not found"
 
 
+class UnknownInstruments(UnitError):
+    def __init__(self, identifiers: list[str]) -> None:
+        super().__init__()
+        self.identifiers = identifiers
+
+    def __str__(self) -> str:
+        names = ", ".join(repr(i) for i in self.identifiers)
+        hints = "; ".join(f"kohle-cli add-unit {i} <name>" for i in self.identifiers)
+        return f"Unknown instruments: {names}. Add them first, e.g. {hints}"
+
+
+class NotASecurityUnit(UnitError):
+    def __init__(self, identifier: str, kind: str) -> None:
+        super().__init__()
+        self.identifier = identifier
+        self.kind = kind
+
+    def __str__(self) -> str:
+        return f"Unit {self.identifier!r} is a {self.kind}, not a security, and cannot be a traded instrument"
+
+
 class DuplicateUnit(UnitError):
     def __init__(self, identifier: str) -> None:
         super().__init__()
@@ -177,7 +198,7 @@ class NoClassificationForEntry(ClassificationError):
     def __str__(self) -> str:
         return (
             f"Journal entry id {self.entry_id} has no classification record; "
-            "only imported lines can be reclassified or split"
+            "only imported cash lines can be reclassified or split"
         )
 
 
@@ -310,7 +331,12 @@ class DuplicateReferenceInStatement(Exception):
         )
 
 
-StatementError = MalformedStatementRow | DuplicateReferenceInStatement
+class MissingInstrumentAccount(Exception):
+    def __str__(self) -> str:
+        return "The statement contains trades; name the instrument account they post to"
+
+
+StatementError = MalformedStatementRow | DuplicateReferenceInStatement | MissingInstrumentAccount
 
 ImportStatementError = \
         StatementError | \

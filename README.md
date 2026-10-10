@@ -400,8 +400,9 @@ class StatementImporterPlugin(ABC):
         pass
 ```
 
-`import_statement` returns one `CashRow` per statement line, in order. All
-fields are required keyword arguments:
+`import_statement` returns one row per statement line, in order: a `CashRow` for
+a cash movement, a `SecurityRow` for a trade. All fields are required keyword
+arguments. A `CashRow` has:
 
 | field               | type          | meaning                                           |
 |---------------------|---------------|---------------------------------------------------|
@@ -416,9 +417,37 @@ fields are required keyword arguments:
 format with no counterparty data passes `None` explicitly, so omitting it is
 a `TypeError` rather than a silent gap.
 
+A `SecurityRow` has `entry_date`, `reference` and `description` as above, plus:
+
+| field                   | type      | meaning                                           |
+|-------------------------|-----------|---------------------------------------------------|
+| `instrument_identifier` | `str`     | the `Unit.identifier` of a `security` unit        |
+| `quantity`              | `Decimal` | signed; positive is a buy, negative a sell        |
+| `unit_price`            | `Decimal` | base currency per unit, finite and above zero     |
+
+There is no cash amount on a trade: the cash leg is `abs(quantity) *
+unit_price`. A trade posts one balanced entry between the cash account and the
+instrument account (a buy debits the instrument and credits cash; a sell the
+reverse), runs no classification rules and records no classification, so it
+cannot be reclassified or split. A row with a missing, zero, negative or NaN
+price, a zero quantity or an empty identifier rejects the whole import before
+anything is written.
+
 `reference` is the statement's own per-row id. A format that has none (the
 Deutsche Bank CSV) derives it from row content inside the plugin.
 
 An unreadable or unparseable file is returned as an `ImportError` subclass
 whose `__str__` says what is wrong (`StatementUnreadable` covers I/O and
 decoding); nothing is written. A plugin holds no state between calls.
+
+Statements are imported with:
+
+```
+kohle-cli import-statement PLUGIN CASH_ACCOUNT [INSTRUMENT_ACCOUNT] STATEMENT_FILE
+```
+
+`INSTRUMENT_ACCOUNT` is required when the statement contains trades and
+optional otherwise. Every instrument identifier must already exist as a
+`security` unit (`kohle-cli add-unit <identifier> <name>`); unknown ones are
+all named in a single error and nothing is imported. A reference is scoped to
+the cash account, so re-importing a file posts nothing.

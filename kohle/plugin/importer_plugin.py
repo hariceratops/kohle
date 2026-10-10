@@ -40,7 +40,24 @@ class CashRow:
     counterparty_iban: str | None
 
 
-StatementRow = CashRow
+@dataclass(frozen=True, slots=True, kw_only=True)
+class SecurityRow:
+    """A trade: `quantity` of an instrument at `unit_price` base currency each.
+
+    `quantity` is signed like `CashRow.amount`, from the instrument account's
+    side: positive is a buy, negative a sell. The cash leg is derived as
+    |quantity| * unit_price, so an unbalanced trade is not expressible.
+    """
+
+    entry_date: date
+    reference: str
+    description: str
+    instrument_identifier: str
+    quantity: Decimal
+    unit_price: Decimal
+
+
+StatementRow = CashRow | SecurityRow
 
 
 class StatementImporterPlugin(ABC):

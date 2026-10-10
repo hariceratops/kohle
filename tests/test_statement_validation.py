@@ -1,5 +1,6 @@
 """validate_statement, pure, no database (issues 026, 027)."""
 
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 
@@ -9,7 +10,7 @@ from kohle.domain.domain_errors import (
     DuplicateReferenceInStatement,
     MalformedStatementRow,
 )
-from kohle.plugin.importer_plugin import CashRow
+from kohle.plugin.importer_plugin import CashRow, SecurityRow
 from kohle.use_cases.journal import validate_statement
 
 
@@ -48,6 +49,61 @@ def test_a_clean_list_returns_none() -> None:
     assert validate_statement([]) is None
 
 
-def test_validate_statement_rejects_malformed_security_rows() -> None:
-    # TODO(027): duplicate across cash+security; unit_price None/0/-1/NaN; quantity 0; empty instrument_identifier; clean mixed list returns None; SecurityRow without unit_price raises TypeError.
-    pytest.skip("security rows land with issue 027")
+def _trade(reference: str = "t", **overrides) -> SecurityRow:
+    return replace(
+        SecurityRow(
+            entry_date=date(2026, 3, 1),
+            reference=reference,
+            description="Buy",
+            instrument_identifier="X1",
+            quantity=Decimal(1),
+            unit_price=Decimal(10),
+        ),
+        **overrides,
+    )
+
+
+def test_a_reference_repeated_across_cash_and_security_rows_is_rejected() -> None:
+    error = validate_statement([_cash("a"), _trade("a")])
+
+    assert isinstance(error, DuplicateReferenceInStatement)
+    assert (error.first_row_number, error.row_number) == (1, 2)
+
+
+@pytest.mark.parametrize("price", [None, Decimal(0), Decimal(-1), Decimal("NaN"), Decimal("Infinity")])
+def test_a_bad_unit_price_is_malformed(price) -> None:
+    error = validate_statement([_cash("a"), _trade(unit_price=price)])
+
+    assert isinstance(error, MalformedStatementRow)
+    assert (error.row_number, error.field) == (2, "unit_price")
+
+
+@pytest.mark.parametrize("quantity", [None, Decimal(0), Decimal("NaN")])
+def test_a_bad_quantity_is_malformed(quantity) -> None:
+    error = validate_statement([_trade(quantity=quantity)])
+
+    assert isinstance(error, MalformedStatementRow)
+    assert (error.row_number, error.field) == (1, "quantity")
+
+
+@pytest.mark.parametrize("identifier", ["", "  ", None])
+def test_an_empty_instrument_identifier_is_malformed(identifier) -> None:
+    error = validate_statement([_trade(instrument_identifier=identifier)])
+
+    assert isinstance(error, MalformedStatementRow)
+    assert error.field == "instrument_identifier"
+
+
+def test_a_clean_mixed_list_returns_none() -> None:
+    assert validate_statement([_cash("a"), _trade("b"), _trade("c", quantity=Decimal(-2))]) is None
+
+
+def test_a_security_row_without_a_price_does_not_construct() -> None:
+    with pytest.raises(TypeError):
+        SecurityRow(  # type: ignore[call-arg]
+            entry_date=date(2026, 3, 1),
+            reference="t",
+            description="x",
+            instrument_identifier="X1",
+            quantity=Decimal(1),
+        )
