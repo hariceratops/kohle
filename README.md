@@ -454,7 +454,7 @@ the cash account, so re-importing a file posts nothing.
 
 #### Bundled plugins
 - `kohle-deutsche-bank`: Deutsche Bank CSV, cash rows only.
-- `kohle-synthetic-broker`: a synthetic broker CSV that exercises the contract
+- `kohle-simple-broker`: a simple broker CSV that exercises the contract
   until a real broker format is chosen. UTF-8, header exactly
   `date,reference,type,isin,quantity,price,amount`. `type` is `buy`, `sell` or
   `dividend`. Buys and sells (`isin`, unsigned `quantity > 0`, `price > 0`, no
@@ -466,5 +466,5 @@ the cash account, so re-importing a file posts nothing.
 
 ```
 kohle-cli add-unit DE0005190003 BMW
-kohle-cli import-statement kohle-synthetic-broker "Broker Cash" Depot statement.csv
+kohle-cli import-statement kohle-simple-broker "Broker Cash" Depot statement.csv
 ```

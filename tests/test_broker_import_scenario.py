@@ -6,8 +6,8 @@ from pathlib import Path
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from kohle.app.plugins.kohle_synthetic_broker_importer import (
-    SyntheticBrokerStatementImporter,
+from kohle.app.plugins.kohle_simple_broker_importer import (
+    SimpleBrokerStatementImporter,
 )
 from kohle.domain.models import (
     AccountType,
@@ -21,11 +21,11 @@ from kohle.use_cases.journal import ImportStatement, QueryAccountBalance
 from kohle.use_cases.rules import AddRule
 from kohle.use_cases.units import AddUnit
 
-FIXTURE = Path(__file__).parent / "fixtures" / "synthetic_broker.csv"
+FIXTURE = Path(__file__).parent / "fixtures" / "simple_broker.csv"
 
 
 def _import(session: Session, cash: str, instrument: str) -> int:
-    rows = SyntheticBrokerStatementImporter().import_statement(str(FIXTURE)).unwrap()
+    rows = SimpleBrokerStatementImporter().import_statement(str(FIXTURE)).unwrap()
     return ImportStatement(session).execute(cash, rows, instrument).unwrap()
 
 

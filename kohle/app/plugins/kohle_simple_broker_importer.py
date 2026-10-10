@@ -135,10 +135,10 @@ def _parse_row(line: int, fields: dict[str, str]) -> Result[StatementRow, Import
     )
 
 
-class SyntheticBrokerStatementImporter(StatementImporterPlugin):
+class SimpleBrokerStatementImporter(StatementImporterPlugin):
     @property
     def name(self) -> str:
-        return "kohle-synthetic-broker"
+        return "kohle-simple-broker"
 
     def import_statement(self, statement_path: str) -> Result[list[StatementRow], ImportError]:
         try:

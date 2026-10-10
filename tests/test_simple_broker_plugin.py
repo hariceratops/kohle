@@ -1,4 +1,4 @@
-"""Synthetic broker CSV parser (issue 028)."""
+"""Simple broker CSV parser (issue 028)."""
 
 from datetime import date
 from decimal import Decimal
@@ -6,17 +6,17 @@ from pathlib import Path
 
 import pytest
 
-from kohle.app.plugins.kohle_synthetic_broker_importer import (
+from kohle.app.plugins.kohle_simple_broker_importer import (
     HEADER,
     MalformedField,
-    SyntheticBrokerStatementImporter,
+    SimpleBrokerStatementImporter,
     UnexpectedHeader,
     UnknownRowType,
 )
 from kohle.plugin.importer_plugin import CashRow, SecurityRow, StatementUnreadable
 from kohle.plugin.plugin_manager import load_plugins
 
-FIXTURE = Path(__file__).parent / "fixtures" / "synthetic_broker.csv"
+FIXTURE = Path(__file__).parent / "fixtures" / "simple_broker.csv"
 ISIN = "DE0005190003"
 
 
@@ -27,7 +27,7 @@ def _statement(tmp_path: Path, *lines: str, header: str = ",".join(HEADER)) -> s
 
 
 def test_parses_buy_sell_and_dividend_rows() -> None:
-    rows = SyntheticBrokerStatementImporter().import_statement(str(FIXTURE)).unwrap()
+    rows = SimpleBrokerStatementImporter().import_statement(str(FIXTURE)).unwrap()
 
     assert rows == [
         SecurityRow(
@@ -60,7 +60,7 @@ def test_parses_buy_sell_and_dividend_rows() -> None:
 def test_dividend_without_isin_has_a_bare_description(tmp_path: Path) -> None:
     path = _statement(tmp_path, "2026-04-15,D-1,dividend,,,,5.00")
 
-    (row,) = SyntheticBrokerStatementImporter().import_statement(path).unwrap()
+    (row,) = SimpleBrokerStatementImporter().import_statement(path).unwrap()
 
     assert row.description == "Dividend"
 
@@ -68,13 +68,13 @@ def test_dividend_without_isin_has_a_bare_description(tmp_path: Path) -> None:
 def test_blank_lines_are_skipped(tmp_path: Path) -> None:
     path = _statement(tmp_path, "", f"2026-03-02,T-1,buy,{ISIN},1,10,", "")
 
-    assert len(SyntheticBrokerStatementImporter().import_statement(path).unwrap()) == 1
+    assert len(SimpleBrokerStatementImporter().import_statement(path).unwrap()) == 1
 
 
 def test_wrong_header(tmp_path: Path) -> None:
     path = _statement(tmp_path, header="date,reference,type")
 
-    error = SyntheticBrokerStatementImporter().import_statement(path).unwrap_err()
+    error = SimpleBrokerStatementImporter().import_statement(path).unwrap_err()
 
     assert isinstance(error, UnexpectedHeader)
     assert error.found == ["date", "reference", "type"]
@@ -83,7 +83,7 @@ def test_wrong_header(tmp_path: Path) -> None:
 def test_unknown_type_is_a_named_error_with_its_line(tmp_path: Path) -> None:
     path = _statement(tmp_path, f"2026-03-02,T-1,buy,{ISIN},1,10,", f"2026-03-03,T-2,split,{ISIN},1,10,")
 
-    error = SyntheticBrokerStatementImporter().import_statement(path).unwrap_err()
+    error = SimpleBrokerStatementImporter().import_statement(path).unwrap_err()
 
     assert isinstance(error, UnknownRowType)
     assert (error.line, error.value) == (3, "split")
@@ -115,7 +115,7 @@ def test_unknown_type_is_a_named_error_with_its_line(tmp_path: Path) -> None:
 def test_malformed_fields_name_the_column_and_line(tmp_path: Path, line: str, column: str) -> None:
     path = _statement(tmp_path, f"2026-03-01,T-0,buy,{ISIN},1,10,", line)
 
-    error = SyntheticBrokerStatementImporter().import_statement(path).unwrap_err()
+    error = SimpleBrokerStatementImporter().import_statement(path).unwrap_err()
 
     assert isinstance(error, MalformedField)
     assert (error.line, error.column) == (3, column)
@@ -123,7 +123,7 @@ def test_malformed_fields_name_the_column_and_line(tmp_path: Path, line: str, co
 
 
 def test_unreadable_path(tmp_path: Path) -> None:
-    error = SyntheticBrokerStatementImporter().import_statement(str(tmp_path / "missing.csv")).unwrap_err()
+    error = SimpleBrokerStatementImporter().import_statement(str(tmp_path / "missing.csv")).unwrap_err()
 
     assert isinstance(error, StatementUnreadable)
 
@@ -132,11 +132,11 @@ def test_undecodable_file(tmp_path: Path) -> None:
     path = tmp_path / "latin1.csv"
     path.write_bytes(",".join(HEADER).encode() + b"\n2026-03-02,T\xe4,buy,X,1,1,\n")
 
-    error = SyntheticBrokerStatementImporter().import_statement(str(path)).unwrap_err()
+    error = SimpleBrokerStatementImporter().import_statement(str(path)).unwrap_err()
 
     assert isinstance(error, StatementUnreadable)
 
 
 def test_discovered_through_the_entry_point_group() -> None:
     # A failure here on a stale install means run `uv sync`, not a bug.
-    assert isinstance(load_plugins()["kohle-synthetic-broker"], SyntheticBrokerStatementImporter)
+    assert isinstance(load_plugins()["kohle-simple-broker"], SimpleBrokerStatementImporter)

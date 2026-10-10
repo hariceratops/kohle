@@ -10,8 +10,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from kohle.app.cli.cli import cli
-from kohle.app.plugins.kohle_synthetic_broker_importer import (
-    SyntheticBrokerStatementImporter,
+from kohle.app.plugins.kohle_simple_broker_importer import (
+    SimpleBrokerStatementImporter,
 )
 from kohle.domain.domain_errors import (
     DuplicateReferenceInStatement,
@@ -168,11 +168,11 @@ def test_a_failing_plugin_writes_nothing(
     statement.write_text("date,reference,type,isin,quantity,price,amount\n2026-03-02,T-1,split,X,1,1,\n")
     monkeypatch.setattr(
         "kohle.app.cli.cli.load_plugins",
-        lambda: {"kohle-synthetic-broker": SyntheticBrokerStatementImporter()},
+        lambda: {"kohle-simple-broker": SimpleBrokerStatementImporter()},
     )
 
     result = CliRunner().invoke(
-        cli, ["import-statement", "kohle-synthetic-broker", "Checking", str(statement)], obj=session_factory
+        cli, ["import-statement", "kohle-simple-broker", "Checking", str(statement)], obj=session_factory
     )
 
     assert result.exit_code != 0
