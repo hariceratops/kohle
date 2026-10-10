@@ -137,6 +137,15 @@ def test_undecodable_file(tmp_path: Path) -> None:
     assert isinstance(error, StatementUnreadable)
 
 
+def test_field_over_the_csv_limit_is_an_error_not_an_exception(tmp_path: Path) -> None:
+    path = tmp_path / "huge.csv"
+    path.write_text(",".join(HEADER) + "\n2026-03-02," + "x" * 200_000 + ",dividend,,,,1.00\n")
+
+    error = SimpleBrokerStatementImporter().import_statement(str(path)).unwrap_err()
+
+    assert isinstance(error, StatementUnreadable)
+
+
 def test_discovered_through_the_entry_point_group() -> None:
     # A failure here on a stale install means run `uv sync`, not a bug.
     assert isinstance(load_plugins()["kohle-simple-broker"], SimpleBrokerStatementImporter)

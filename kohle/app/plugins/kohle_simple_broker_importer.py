@@ -144,7 +144,7 @@ class SimpleBrokerStatementImporter(StatementImporterPlugin):
         try:
             with open(statement_path, encoding="utf-8", newline="") as statement:
                 return self._parse(csv.reader(statement))
-        except (OSError, UnicodeDecodeError) as e:
+        except (OSError, UnicodeDecodeError, csv.Error) as e:
             return Result.err(StatementUnreadable(statement_path, str(e)))
 
     def _parse(self, reader) -> Result[list[StatementRow], ImportError]:
