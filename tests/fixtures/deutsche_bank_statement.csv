@@ -1,0 +1,10 @@
+AktivKonto;123 456 78;DE89370400440532013000;EUR
+03/01/2026 - 03/31/2026
+Old balance;;;;1000.00;EUR
+Transactions pending are not included in this report.
+Booking date;Value date;Transaction Type;Beneficiary / Originator;Payment Details;IBAN / Account Number;BIC;Customer Reference;Mandate Reference;Creditor ID;Compensation amount;Original Amount;Ultimate creditor;Number of transactions;Number of cheques;Debit;Credit;Currency
+03/16/2026;03/16/2026;SEPA Transfer;Max Mustermann;Rent March;DE02120300000000202051;BYLADEM1001;;;;;;;;;-950.00;;EUR
+03/18/2026;03/17/2026;Debit Card Payment;ALDI SUED;Card 0001 ALDI SUED 17-03-2026T18:45:12 purchase;;;;;;;;;;;-42.30;;EUR
+03/25/2026;03/25/2026;Credit Transfer;ACME GmbH;Salary March;DE75512108001245126199;COBADEFFXXX;;;;;;;;;;2500.00;EUR
+03/27/2026;03/27/2026;Fee;;Account fee;;;;;;;;;;;-5.90;;EUR
+Account balance;03/31/2026;;;2501.80;EUR
