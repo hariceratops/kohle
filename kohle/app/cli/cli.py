@@ -14,6 +14,7 @@ from kohle.use_cases.journal import (
     CrossUnitLine,
     ImportStatement,
     LineInput,
+    NetWorth,
     QueryAccountBalance,
     QueryJournalByPeriod,
     RecordSimpleEntry,
@@ -21,6 +22,15 @@ from kohle.use_cases.journal import (
 )
 from kohle.use_cases.operations import ListOperations
 from kohle.use_cases.rules import AddRule, ListRules, RemoveRule
+from kohle.use_cases.splitting import (
+    AddSplitGroup,
+    PersonShare,
+    SettleUp,
+    SplitImportedEntry,
+    UnsplitEntry,
+    WhoOwesWhat,
+    WhoOwesWhatByGroup,
+)
 from kohle.use_cases.units import AddUnit, ListUnits
 
 
@@ -61,6 +71,21 @@ def _parse_line(raw: str) -> LineInput:
 
 def _parse_lines(ctx, param, values: tuple[str, ...]) -> list[LineInput]:
     return [_parse_line(value) for value in values]
+
+
+def _parse_share(raw: str) -> PersonShare:
+    name, _, quantity_str = raw.rpartition(":")
+    if not name:
+        raise click.BadParameter(f"{raw!r} does not split into NAME:QUANTITY")
+    try:
+        quantity = Decimal(quantity_str)
+    except InvalidOperation:
+        raise click.BadParameter(f"{raw!r}: {quantity_str!r} is not a valid decimal quantity") from None
+    return PersonShare(name, quantity)
+
+
+def _parse_shares(ctx, param, values: tuple[str, ...]) -> list[PersonShare]:
+    return [_parse_share(value) for value in values]
 
 
 def _account_tree_rows(accounts: list, root_name: str | None = None) -> list[dict]:
@@ -292,6 +317,11 @@ def entries_in_period(make_session, account_name, start, end):
         raise click.ClickException(str(res.unwrap_err()))
     rows = [
         {
+            # First column, matching list-unclassified: it is split-line's
+            # handle onto the line, and entries-in-period is otherwise the
+            # only place a classified-away line's id can be read at all
+            # (design §4.1).
+            "entry_id": line.entry.id,
             "date": line.entry.entry_date,
             "description": line.entry.description,
             "counterparty": line.entry.counterparty_name or "-",
@@ -451,6 +481,182 @@ def reclassify_cmd(make_session, entry_id: int, account: str):
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
     click.echo(f"Reclassified entry {entry_id} to {account}")
+
+
+@cli.command()
+@click.argument("name")
+@click.pass_obj
+def add_group_cmd(make_session, name: str):
+    add_group = AddSplitGroup(make_session())
+    res = add_group.execute(name)
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    click.echo(f"Added split group {name} with id {res.unwrap().id}")
+
+
+@cli.command()
+@click.argument("entry_id", type=int)
+@click.option("--mine", "own_share", type=DECIMAL, required=True, help="Your own share of the line")
+@click.option(
+    "--share",
+    "shares",
+    multiple=True,
+    required=True,
+    callback=_parse_shares,
+    help="PERSON:QUANTITY, repeatable, one per person account",
+)
+@click.option(
+    "--group", "group_name", default=None,
+    help="Trip/label to tag the split under; absent clears it, present sets or moves it",
+)
+@click.pass_obj
+def split_line_cmd(
+    make_session, entry_id: int, own_share: Decimal, shares: list[PersonShare], group_name: str | None
+):
+    split = SplitImportedEntry(make_session())
+    res = split.execute(entry_id, own_share, shares, group_name)
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    click.echo(f"Split entry {entry_id}: {own_share} own, " + ", ".join(f"{s.person_name} {s.quantity}" for s in shares))
+
+
+@cli.command()
+@click.argument("entry_id", type=int)
+@click.pass_obj
+def unsplit_line_cmd(make_session, entry_id: int):
+    unsplit = UnsplitEntry(make_session())
+    res = unsplit.execute(entry_id)
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    click.echo(f"Undid the split of entry {entry_id}")
+
+
+@cli.command()
+@click.option("--by-group", is_flag=True, default=False, help="Break the view down per group instead")
+@click.pass_obj
+def who_owes_what_cmd(make_session, by_group: bool):
+    if by_group:
+        _print_who_owes_what_by_group(make_session)
+        return
+
+    res = WhoOwesWhat(make_session()).execute()
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    people = res.unwrap()
+    if not people:
+        click.echo("No person accounts")
+        return
+    # A person with no balances at all (never split against) renders "-",
+    # distinct from a settled person's UnitBalance(quantity=0) rendering
+    # "0.00" — the distinction issue 022's last criterion asks for (design
+    # §7.1).
+    rows = [
+        row
+        for person in people
+        for row in (
+            [{"person": person.person_name, "unit": "-", "balance": "-"}]
+            if not person.balances
+            else [
+                {"person": person.person_name, "unit": b.unit_identifier, "balance": b.quantity}
+                for b in person.balances
+            ]
+        )
+    ]
+    click.echo(tabulate(rows, headers="keys", floatfmt=".2f"))
+
+
+def _print_who_owes_what_by_group(make_session):
+    res = WhoOwesWhatByGroup(make_session()).execute()
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    groups = res.unwrap()
+    if not groups:
+        click.echo("No split groups")
+        return
+    for group in groups:
+        click.echo(f"\n{group.group_name}")
+        if not group.allocations:
+            click.echo("  No splits in this group")
+            continue
+        rows = [
+            {"person": person.person_name, "unit": b.unit_identifier, "from splits": b.quantity}
+            for person in group.allocations
+            for b in person.balances
+        ]
+        click.echo(tabulate(rows, headers="keys", floatfmt=".2f"))
+    # These figures are a historical allocation, not a live balance: they
+    # do not fall as debts get settled, unlike who-owes-what's own totals
+    # (design §2.3, §7.2).
+    click.echo("\nNote: group figures are historical allocations, not settlement-adjusted balances.")
+
+
+def _net_worth_rows(section: str, balances: list) -> list[dict]:
+    return [
+        {
+            "section": section,
+            "unit": b.unit_identifier,
+            "quantity": b.quantity,
+            "at cost": b.quantity * b.average_cost if b.average_cost is not None else Decimal(0),
+        }
+        for b in balances
+    ]
+
+
+@cli.command()
+@click.pass_obj
+def net_worth_cmd(make_session):
+    res = NetWorth(make_session()).execute()
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    report = res.unwrap()
+    rows = _net_worth_rows("Own accounts", report.own) + _net_worth_rows(
+        "Receivables (People)", report.receivables
+    )
+    click.echo(tabulate(rows, headers="keys", floatfmt=".2f"))
+    # The total folds receivables in rather than reporting them separately
+    # (design §2.4) — the breakdown above is what makes that checkable
+    # rather than a bare number the user has to trust.
+    click.echo(f"\nNet worth (at cost): {report.net_worth_at_cost:.2f}")
+
+
+@cli.command()
+@click.option(
+    "--group", "group_name", default=None,
+    help="Restrict to one group's participants, keeping their full balances (design §8.2)",
+)
+@click.pass_obj
+def settle_up_cmd(make_session, group_name: str | None):
+    res = SettleUp(make_session()).execute(group_name)
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    transfers = res.unwrap()
+    if not transfers:
+        click.echo("No transfers needed")
+        return
+
+    rows = [
+        {
+            "payer": transfer.payer or "you",
+            "payee": transfer.payee or "you",
+            "unit": transfer.unit_identifier,
+            "quantity": transfer.quantity,
+        }
+        for transfer in transfers
+    ]
+    click.echo(tabulate(rows, headers="keys", floatfmt=".2f"))
+
+    # The command has no way to know which cash account either side of a
+    # transfer touching "you" should use, and a "default cash account"
+    # setting would be a configuration mechanism this codebase does not
+    # have — the user supplies their own account and fills in the date and
+    # description (design §8.3).
+    for transfer in transfers:
+        payer = transfer.payer or "<your account>"
+        payee = transfer.payee or "<your account>"
+        click.echo(
+            f'Settle with: kohle-cli record <date> "<description>" {transfer.quantity:.2f} '
+            f"--from {payer} --to {payee}"
+        )
 
 
 if __name__ == "__main__":

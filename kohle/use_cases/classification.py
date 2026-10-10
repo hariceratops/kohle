@@ -6,7 +6,9 @@ from uuid import uuid4
 from kohle.core.result import Result
 from kohle.domain.domain_errors import (
     AccountNotFoundError,
+    EntryAlreadySplit,
     ListUnclassifiedError,
+    NoSplitForEntry,
     ReclassifyError,
 )
 from kohle.domain.models import Classification, JournalEntry
@@ -19,14 +21,18 @@ from kohle.services.classification_services import (
     unclassified_classifications_service,
 )
 from kohle.services.journal_services import LineSpec
+from kohle.services.split_services import split_by_entry_service
 from kohle.use_cases.journal import (
     UNCLASSIFIED_EXPENSE,
     UNCLASSIFIED_INCOME,
     post_entry,
 )
 
-# classification.py may import from journal.py (post_entry, the bucket names);
-# journal.py must never import from here — the import loop calls
+# classification.py may import from journal.py (post_entry, the bucket names)
+# and reaches split_by_entry_service in the services layer directly, never
+# through splitting.py — splitting.py already imports this module's sibling
+# services, and importing splitting.py here would close that cycle (design
+# §1). journal.py must never import from here — the import loop calls
 # add_classification_service directly in the services layer instead of
 # routing through a use case in this module (design §1).
 
@@ -106,6 +112,15 @@ class Reclassify(UnitOfWork[JournalEntry, ReclassifyError]):
 
     def execute(self, entry_id: int, account_name: str) -> Result[JournalEntry, ReclassifyError]:
         def use_case(ctx: DbTransactionContext) -> Result[JournalEntry, ReclassifyError]:
+            # A split entry no longer holds its full quantity on
+            # final_account_id, so reclassifying it would silently post a
+            # wrong balance rather than a correction (design §5.4).
+            split_res = split_by_entry_service(ctx, entry_id)
+            if split_res.is_ok:
+                return Result.err(EntryAlreadySplit(entry_id))
+            if not isinstance(split_res.unwrap_err(), NoSplitForEntry):
+                return Result.err(split_res.unwrap_err())
+
             classification_res = classification_by_entry_service(ctx, entry_id)
             if classification_res.is_err:
                 return Result.err(classification_res.unwrap_err())

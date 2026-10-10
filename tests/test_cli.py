@@ -507,6 +507,48 @@ def test_list_accounts_puts_parentless_accounts_at_top_level(session_factory: se
     assert any(line.startswith("Cash") for line in lines)
 
 
+def test_list_accounts_shows_a_new_root_as_a_distinct_top_level_branch(
+    session_factory: sessionmaker,
+) -> None:
+    # Generic "a new root shows up" case (issue 018's last criterion): any
+    # account with no parent is its own top-level branch, sibling to the
+    # others, which is exactly what the People root needs and nothing more.
+    runner = CliRunner()
+    runner.invoke(cli, ["add-account", "Checking", "--type", "asset"], obj=session_factory)
+    runner.invoke(cli, ["add-account", "People", "--type", "asset"], obj=session_factory)
+
+    result = runner.invoke(cli, ["list-accounts"], obj=session_factory)
+
+    lines = result.output.splitlines()
+    assert any(line.startswith("Checking") for line in lines)
+    people_line = next(line for line in lines if line.startswith("People"))
+    assert not people_line.startswith("|")
+
+
+def test_person_account_created_under_people_can_be_posted_to(
+    session_factory: sessionmaker,
+) -> None:
+    runner = CliRunner()
+    runner.invoke(cli, ["add-account", "People", "--type", "asset"], obj=session_factory)
+    runner.invoke(cli, ["add-account", "Checking", "--type", "asset"], obj=session_factory)
+    runner.invoke(
+        cli, ["add-account", "Alice", "--type", "asset", "--parent", "People"], obj=session_factory
+    )
+
+    result = runner.invoke(
+        cli,
+        ["record", "2026-03-01", "Dinner split", "48", "--from", "Checking", "--to", "Alice"],
+        obj=session_factory,
+    )
+
+    assert result.exit_code == 0
+    assert "credited Checking" in result.output
+    assert "debited Alice" in result.output
+
+    balance_result = runner.invoke(cli, ["balance", "Alice"], obj=session_factory)
+    assert "48" in balance_result.output
+
+
 def test_list_accounts_renders_three_level_nesting(session_factory: sessionmaker) -> None:
     runner = CliRunner()
     runner.invoke(cli, ["add-account", "Cash", "--type", "asset"], obj=session_factory)
@@ -721,7 +763,9 @@ def test_entries_in_period_renders_a_missing_counterparty_as_dash(
 
     assert result.exit_code == 0
     entry_row = next(line for line in result.output.splitlines() if "Aldi" in line)
-    assert entry_row.split() == ["2026-03-01", "Aldi", "-", "cr", "80.00", "EUR", "80.00"]
+    # entry_id leads, matching list-unclassified — split-line's handle onto
+    # the line (design §4.1).
+    assert entry_row.split()[1:] == ["2026-03-01", "Aldi", "-", "cr", "80.00", "EUR", "80.00"]
 
 
 def test_add_rule_reports_a_malformed_pattern_without_a_traceback(
@@ -877,3 +921,197 @@ def test_list_unclassified_shows_the_fallen_through_line(session_factory: sessio
     assert row.split() == [
         "1", "2026-03-05", "Unknown", "shop", "SOME", "SHOP", "80.00", "Unclassified", "Expense",
     ]
+
+
+def _seed_imported_dinner(session_factory: sessionmaker) -> int:
+    """A classified imported line to split, seeded through the ORM: only an
+    import produces a classification, and that needs a plugin (same trick
+    test_list_unclassified_shows_the_fallen_through_line uses)."""
+    session = session_factory()
+    try:
+        eur = AddUnit(session).execute("EUR", "Euro", UnitKind.currency).unwrap()
+        checking = session.query(Account).filter_by(name="Checking").one()
+        eating_out = session.query(Account).filter_by(name="Eating out").one()
+        entry = JournalEntry(
+            entry_date=date(2026, 3, 5), reference="ref-dinner", description="Dinner",
+        )
+        entry.lines = [
+            JournalLine(account_id=eating_out.id, unit_id=eur.id, quantity=Decimal(80),
+                        unit_price=Decimal(1), is_debit=True),
+            JournalLine(account_id=checking.id, unit_id=eur.id, quantity=Decimal(80),
+                        unit_price=Decimal(1), is_debit=False),
+        ]
+        session.add(entry)
+        session.flush()
+        session.add(Classification(
+            journal_entry_id=entry.id,
+            proposed_account_id=eating_out.id,
+            matched_rule_id=None,
+            final_account_id=eating_out.id,
+        ))
+        session.commit()
+        return entry.id
+    finally:
+        session.close()
+
+
+def _seed_split_line_ledger(session_factory: sessionmaker) -> None:
+    runner = CliRunner()
+    runner.invoke(cli, ["add-account", "Checking", "--type", "asset"], obj=session_factory)
+    runner.invoke(cli, ["add-account", "Eating out", "--type", "expense"], obj=session_factory)
+    runner.invoke(cli, ["add-account", "People", "--type", "asset"], obj=session_factory)
+    runner.invoke(
+        cli, ["add-account", "Alice", "--type", "asset", "--parent", "People"], obj=session_factory
+    )
+
+
+def test_split_line_cli_divides_an_imported_line(session_factory: sessionmaker) -> None:
+    _seed_split_line_ledger(session_factory)
+    entry_id = _seed_imported_dinner(session_factory)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        ["split-line", str(entry_id), "--mine", "32", "--share", "Alice:48"],
+        obj=session_factory,
+    )
+
+    assert result.exit_code == 0
+
+    balance = runner.invoke(cli, ["balance", "Eating out"], obj=session_factory)
+    assert "32.00" in balance.output
+    alice_balance = runner.invoke(cli, ["balance", "Alice"], obj=session_factory)
+    assert "48.00" in alice_balance.output
+
+
+def test_split_line_cli_malformed_share_names_the_offending_string(session_factory: sessionmaker) -> None:
+    _seed_split_line_ledger(session_factory)
+    entry_id = _seed_imported_dinner(session_factory)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        ["split-line", str(entry_id), "--mine", "32", "--share", "NoColonHere"],
+        obj=session_factory,
+    )
+
+    assert result.exit_code != 0
+    assert "NoColonHere" in result.output
+
+
+def test_split_line_cli_shares_not_summing_to_the_line(session_factory: sessionmaker) -> None:
+    _seed_split_line_ledger(session_factory)
+    entry_id = _seed_imported_dinner(session_factory)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        ["split-line", str(entry_id), "--mine", "32", "--share", "Alice:40"],
+        obj=session_factory,
+    )
+
+    assert result.exit_code != 0
+    assert "80" in result.output
+    assert "72" in result.output
+
+
+def test_who_owes_what_cli_empty_ledger_prints_the_house_style_message(
+    session_factory: sessionmaker,
+) -> None:
+    runner = CliRunner()
+    runner.invoke(cli, ["add-account", "People", "--type", "asset"], obj=session_factory)
+
+    result = runner.invoke(cli, ["who-owes-what"], obj=session_factory)
+
+    assert result.exit_code == 0
+    assert "No person accounts" in result.output
+
+
+def test_who_owes_what_cli_lists_every_person_and_breaks_down_by_group(
+    session_factory: sessionmaker,
+) -> None:
+    _seed_split_line_ledger(session_factory)
+    entry_id = _seed_imported_dinner(session_factory)
+    runner = CliRunner()
+    # A person never split against still shows up, distinct from a settled one.
+    runner.invoke(
+        cli, ["add-account", "Bob", "--type", "asset", "--parent", "People"], obj=session_factory
+    )
+    runner.invoke(cli, ["add-group", "Italy trip"], obj=session_factory)
+    result = runner.invoke(
+        cli,
+        [
+            "split-line", str(entry_id), "--mine", "32", "--share", "Alice:48",
+            "--group", "Italy trip",
+        ],
+        obj=session_factory,
+    )
+    assert result.exit_code == 0
+
+    global_view = runner.invoke(cli, ["who-owes-what"], obj=session_factory)
+    assert global_view.exit_code == 0
+    assert "Alice" in global_view.output
+    assert "48.00" in global_view.output
+    # Bob has never been split against: no unit/balance for him, not 0.00.
+    bob_row = next(line for line in global_view.output.splitlines() if "Bob" in line)
+    assert "0.00" not in bob_row
+
+    by_group = runner.invoke(cli, ["who-owes-what", "--by-group"], obj=session_factory)
+    assert by_group.exit_code == 0
+    assert "Italy trip" in by_group.output
+    assert "Alice" in by_group.output
+    assert "48.00" in by_group.output
+    assert "from splits" in by_group.output
+    assert "not settlement-adjusted" in by_group.output
+
+
+def test_settle_up_cli_nothing_outstanding(session_factory: sessionmaker) -> None:
+    _seed_split_line_ledger(session_factory)
+    runner = CliRunner()
+    result = runner.invoke(cli, ["settle-up"], obj=session_factory)
+    assert result.exit_code == 0
+    assert "No transfers needed" in result.output
+
+
+def test_settle_up_cli_one_intermediary_renders_one_transfer(session_factory: sessionmaker) -> None:
+    _seed_split_line_ledger(session_factory)
+    entry_id = _seed_imported_dinner(session_factory)
+    runner = CliRunner()
+    split_result = runner.invoke(
+        cli,
+        ["split-line", str(entry_id), "--mine", "32", "--share", "Alice:48"],
+        obj=session_factory,
+    )
+    assert split_result.exit_code == 0
+
+    result = runner.invoke(cli, ["settle-up"], obj=session_factory)
+    assert result.exit_code == 0
+    row = next(line for line in result.output.splitlines() if "Alice" in line)
+    assert "you" in row
+    assert "48.00" in row
+    assert (
+        'Settle with: kohle-cli record <date> "<description>" 48.00 '
+        "--from Alice --to <your account>" in result.output
+    )
+
+
+def test_net_worth_cli_renders_receivables_and_the_total_visibly(
+    session_factory: sessionmaker,
+) -> None:
+    _seed_split_line_ledger(session_factory)
+    entry_id = _seed_imported_dinner(session_factory)
+    runner = CliRunner()
+    split_result = runner.invoke(
+        cli,
+        ["split-line", str(entry_id), "--mine", "32", "--share", "Alice:48"],
+        obj=session_factory,
+    )
+    assert split_result.exit_code == 0
+
+    result = runner.invoke(cli, ["net-worth"], obj=session_factory)
+    assert result.exit_code == 0
+    assert "Receivables (People)" in result.output
+    assert "at cost" in result.output
+    # Checking is credited 80 for the dinner (own account), Alice owes 48
+    # (receivable) — net worth is the two combined, not either alone.
+    assert "Net worth (at cost): -32.00" in result.output

@@ -269,6 +269,68 @@ class Classification(base, Archivable):
         )
 
 
+class SplitGroup(base, Archivable):
+    """A trip/label a split can optionally be tagged under (design §2.2, §6).
+
+    Deliberately thin: no date range, no member list, no owner — a trip's
+    date range is derivable from its splits' entries and nothing in the
+    spec asks for it. Created explicitly (`add-group`) and looked up
+    strictly, the same rule that stops a typo in `--from` from becoming a
+    new account.
+    """
+
+    __tablename__ = "split_groups"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("name", name="uq_split_group_name"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<SplitGroup(id={self.id}, name={self.name!r})>"
+
+
+class Split(base, Archivable):
+    """The split of one imported line: where it links back to and what
+    currently effects it.
+
+    `adjusting_entry_id` is the *current* effecting entry, nullable because
+    undo (issue 020) sets it to NULL — the split then has a history but no
+    current allocation. UniqueConstraint(journal_entry_id) is what makes "the
+    split of this line" a phrase with a single referent, so a second split of
+    the same entry is an update, not a second row (design §4.4).
+
+    `group_id` is nullable: a split created without `--group` behaves exactly
+    as before (design §6). It names the trip the split belongs to, not the
+    entry that currently effects it — it survives corrections to the split's
+    allocation (design §2.2).
+    """
+
+    __tablename__ = "splits"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    journal_entry_id: Mapped[int] = mapped_column(ForeignKey("journal_entries.id"), nullable=False)
+    adjusting_entry_id: Mapped[int | None] = mapped_column(ForeignKey("journal_entries.id"), nullable=True)
+    group_id: Mapped[int | None] = mapped_column(ForeignKey("split_groups.id"), nullable=True)
+
+    # Both relationships point at journal_entries, so SQLAlchemy needs the
+    # join spelled out with foreign_keys= on each.
+    entry: Mapped["JournalEntry"] = relationship("JournalEntry", foreign_keys=[journal_entry_id])
+    adjusting_entry: Mapped["JournalEntry | None"] = relationship(
+        "JournalEntry", foreign_keys=[adjusting_entry_id]
+    )
+    group: Mapped["SplitGroup | None"] = relationship("SplitGroup")
+
+    __table_args__ = (
+        UniqueConstraint("journal_entry_id", name="uq_split_journal_entry"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<Split(id={self.id}, entry_id={self.journal_entry_id}, adjusting_entry_id={self.adjusting_entry_id})>"
+
+
 class Price(base):
     """Fetched valuation for a unit on a date. Written by price plugins, read
     only by reporting — never by transaction recording."""

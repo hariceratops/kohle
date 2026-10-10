@@ -191,6 +191,187 @@ disturbing the first.
 An unknown entry id, an unknown target account, or a non-leaf target all fail
 with a clear error rather than a traceback.
 
+### Splitting an imported line with someone else
+
+People are ordinary accounts, created under the seeded `People` root with
+the account command every other account uses:
+
+```bash
+kohle-cli add-account Alice --type asset --parent People
+```
+
+An already-imported line can then be divided between your own share and one
+or more people, after the fact:
+
+```bash
+kohle-cli split-line 42 --mine 32 --share Alice:48
+```
+
+`42` is the journal entry id, printed by `entries-in-period`'s first column.
+`--mine` is required and states your own share; every `--share PERSON:AMOUNT`
+adds a person's share, repeatable for more than one person. The three must
+sum to the original line's amount exactly — `--mine 32 --share Alice:40` on
+an 80 EUR line fails naming both figures, rather than silently posting a
+line that no longer balances against what was imported.
+
+The split posts a reversing-and-re-posting adjusting entry through the same
+mechanism `reclassify` uses: the original line is never edited, voided or
+deleted. An €80 dinner split `--mine 32 --share Alice:48` leaves the expense
+account holding 32 and `Alice` holding a 48 receivable. Splitting a line that
+was reclassified first takes the shares out of the corrected account, not
+the original bucket; splitting first and then reclassifying is refused,
+since the account reclassify would reverse out of no longer holds the full
+amount.
+
+Only imported lines can be split — a hand-entered `record`/`record-split`
+line has no classification to split against, and fails the same way
+`reclassify` does on one. An unknown entry id, an unknown or non-`People`
+target account, and shares that don't sum to the line's amount all fail with
+a clear error rather than a traceback.
+
+### Undoing or editing a split
+
+A split can be undone entirely:
+
+```bash
+kohle-cli unsplit-line 42
+```
+
+`unsplit-line` posts a mirror of the split's current adjusting entry — same
+accounts, units, quantities and prices, every side flipped — which restores
+the expense account and person account balances to exactly what they were
+before the split, with no arithmetic of its own. The original entry and the
+first split's adjusting entry are both left exactly as they were; the undo is
+a further entry, not an edit. An unknown entry id, or one with no current
+split to undo, fails with a clear error rather than a traceback.
+
+A split can also be corrected to different shares by re-running `split-line`
+on the same entry:
+
+```bash
+kohle-cli split-line 42 --mine 40 --share Alice:40
+```
+
+Re-splitting an already-split entry replaces the allocation rather than
+refusing: it mirrors the existing adjusting entry (exactly what
+`unsplit-line` posts) and then posts the new split, both in one transaction,
+so a failure anywhere leaves the previous split intact. Nothing needs to be
+undone first. The full history — the original import, the first split, and
+the correction pair — stays readable through `entries-in-period` and
+`list-operations`; only the `splits` row's current pointer moves.
+
+### Grouping splits under a trip label
+
+A split can optionally be tagged with a group — a trip label that ties
+several splits together. Groups are created explicitly and looked up
+strictly, the same rule that stops a typo in `--from` from becoming a new
+account:
+
+```bash
+kohle-cli add-group "Italy trip"
+kohle-cli split-line 42 --mine 32 --share Alice:48 --group "Italy trip"
+```
+
+`--group` is authoritative on every run of `split-line`: omitting it clears
+the split's group, and naming a different one moves it. Splitting a line
+without `--group` works exactly as before — grouping is additive. An unknown
+group name fails with a clear error rather than silently creating a second
+group with a similar spelling.
+
+### Reporting who owes what
+
+`who-owes-what` lists the net balance of every account under `People` — the
+same figure `balance Alice` would give, for everyone at once:
+
+```bash
+kohle-cli who-owes-what
+```
+
+Every person account is listed, including one that has never been split
+against — it renders as `-`, distinct from a settled person's `0.00`, whose
+lines exist and happen to cancel out.
+
+```bash
+kohle-cli who-owes-what --by-group
+```
+
+`--by-group` breaks the view down into one block per group, including a group
+with no splits yet, so this doubles as the group listing. Splits with no
+group appear in neither block, and the global view is unaffected either way.
+The per-group column is labelled `from splits`, not `balance`: it sums the
+current adjusting entries in that group only, so it is a historical
+allocation — what a trip cost each person — not a live, settlement-adjusted
+balance. If Alice has since paid you back, `who-owes-what` shows it and the
+group total still doesn't, which is why the two are never labelled the same
+thing.
+
+### Suggesting settling transfers
+
+`settle-up` suggests the minimum set of transfers that zeroes out every
+current person balance — three people who cancel through one intermediary
+need one transfer, not three:
+
+```bash
+kohle-cli settle-up
+```
+
+```
+payer   payee   unit   quantity
+------  ------  -----  --------
+Alice   Bob     EUR       50.00
+
+Settle with: kohle-cli record <date> "<description>" 50.00 --from Alice --to Bob
+```
+
+`you` stands in for your own side of a transfer. The command has no way to
+know which of your accounts should stand in for "you" in a `record`
+invocation — a "default cash account" setting would be a configuration
+mechanism this codebase does not have — so `<your account>` is left for you
+to fill in, along with the date and description.
+
+```bash
+kohle-cli settle-up --group "Italy trip"
+```
+
+`--group` restricts the suggestion to a group's participants while keeping
+each of their full, current balances — not the group's historical
+allocation total — and recomputes your own position as the negation of just
+that subset. Netting runs once per unit: euros and shares are never combined
+into one suggestion. Nothing is written; this is a pure read over current
+balances, computed fresh on every call, and `No transfers needed` prints when
+every balance is already zero.
+
+### Net worth
+
+`net-worth` totals your own accounts plus what's owed to you (the `People`
+branch, per-person balances are `balance <person>` or `who-owes-what`):
+
+```bash
+kohle-cli net-worth
+```
+
+```
+section                   unit    quantity    at cost
+------------------------  ------  ---------  --------
+Own accounts              EUR      4796.00    4796.00
+Receivables (People)      EUR        16.00      16.00
+
+Net worth (at cost): 4812.00
+```
+
+The total folds receivables in rather than reporting them next to net worth,
+but the breakdown above is what makes that checkable instead of a bare number
+you have to trust. Income and expense accounts are excluded — every entry
+balances, so including them would always report exactly 0. A person account
+with a negative balance (you owe them) lowers the total; a positive one
+(they owe you) raises it.
+
+Every figure is reported **at recorded cost**, not current market value —
+"at cost" is in the output label because a holding bought at 100 and now
+worth 140 is still reported at 100. Market valuation needs a price feed,
+which this codebase doesn't have yet; that's the separate, deferred
+`portfolio-and-profit-reporting` work.
+
 ### Writing importer plugins
 A new plugin can be rolled out by defining an entry point to kohle plugins
 ```toml

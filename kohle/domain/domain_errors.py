@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from decimal import Decimal
 
 
 class AccountError(Exception):
@@ -166,16 +167,98 @@ class ClassificationError(Exception):
 
 
 class NoClassificationForEntry(ClassificationError):
-    """Raised by `reclassify` for an unknown entry id or one that was never
-    classified — hand-entered `record`/`record-split` entries have no
-    classification row to correct."""
+    """Raised by `reclassify` and `split-line` for an unknown entry id or one
+    that was never classified — hand-entered `record`/`record-split` entries
+    have no classification row to correct or split."""
 
     def __init__(self, entry_id: int) -> None:
         super().__init__()
         self.entry_id = entry_id
 
     def __str__(self) -> str:
-        return f"Journal entry id {self.entry_id} has no classification to correct"
+        return (
+            f"Journal entry id {self.entry_id} has no classification record; "
+            "only imported lines can be reclassified or split"
+        )
+
+
+class SplitError(Exception):
+    pass
+
+
+class NotAPersonAccount(SplitError):
+    """`split-line`'s target must be a leaf under the People branch, not any
+    account that happens to resolve by name."""
+
+    def __init__(self, name: str) -> None:
+        super().__init__()
+        self.name = name
+
+    def __str__(self) -> str:
+        return f"Account {self.name!r} is not under the People branch"
+
+
+class SplitDoesNotSumToLine(SplitError):
+    """--mine plus every --share must equal the original line's quantity
+    exactly — the arithmetic check `--mine` exists to make falsifiable
+    (design §4.1)."""
+
+    def __init__(self, line_quantity: Decimal, given: Decimal) -> None:
+        super().__init__()
+        self.line_quantity = line_quantity
+        self.given = given
+
+    def __str__(self) -> str:
+        return f"Split shares sum to {self.given}, not the line's {self.line_quantity}"
+
+
+class EmptySplitGroupName(SplitError):
+    def __str__(self) -> str:
+        return "Split group name cannot be empty"
+
+
+class DuplicateSplitGroup(SplitError):
+    def __init__(self, name: str) -> None:
+        super().__init__()
+        self.name = name
+
+    def __str__(self) -> str:
+        return f"Split group {self.name} already exists"
+
+
+class SplitGroupNotFound(SplitError):
+    def __init__(self, name: str) -> None:
+        super().__init__()
+        self.name = name
+
+    def __str__(self) -> str:
+        return f"Split group {self.name!r} not found"
+
+
+class NoSplitForEntry(SplitError):
+    def __init__(self, entry_id: int) -> None:
+        super().__init__()
+        self.entry_id = entry_id
+
+    def __str__(self) -> str:
+        return f"Journal entry id {self.entry_id} has no current split"
+
+
+class EntryAlreadySplit(SplitError):
+    """`reclassify` reverses the original line's full quantity out of
+    final_account_id; on a split line that account only holds the own
+    share, so reclassifying would silently corrupt the balance (design
+    §5.4). Refused rather than made split-aware."""
+
+    def __init__(self, entry_id: int) -> None:
+        super().__init__()
+        self.entry_id = entry_id
+
+    def __str__(self) -> str:
+        return (
+            f"Journal entry id {self.entry_id} is split; undo the split with "
+            f"`unsplit-line {self.entry_id}`, reclassify, then split again"
+        )
 
 
 class InvalidDateError(Exception):
@@ -250,5 +333,12 @@ ListUnclassifiedError = AccountError | ClassificationError
 
 # JournalError surfaces PostingToNonLeafAccount from validate_lines inside
 # post_entry, unchanged and not re-implemented for the adjusting entry
-# (design §7.4).
-ReclassifyError = AccountError | JournalError | ClassificationError
+# (design §7.4). SplitError surfaces EntryAlreadySplit, the guard added so
+# reclassify refuses a split line rather than silently corrupting it
+# (design §5.4).
+ReclassifyError = AccountError | JournalError | ClassificationError | SplitError
+
+# JournalError surfaces PostingToNonLeafAccount from validate_lines inside
+# post_entry for the adjusting entry, and DuplicateLineInEntry for two
+# persons named twice in one invocation (design §4.3).
+SplitImportedEntryError = AccountError | JournalError | ClassificationError | SplitError

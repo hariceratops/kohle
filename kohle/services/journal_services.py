@@ -137,7 +137,7 @@ def account_lines_service(
             .options(joinedload(JournalLine.entry), joinedload(JournalLine.unit))
             .join(JournalEntry, JournalLine.entry_id == JournalEntry.id)
             .filter(JournalLine.account_id.in_(list(account_ids)))
-            # Load-bearing, not cosmetic: _aggregate_by_unit's moving-average
+            # Load-bearing, not cosmetic: aggregate_by_unit's moving-average
             # cost fold is order-dependent and consumes this ordering as-is
             # (design §6.4). Changing it silently changes reported averages.
             .order_by(JournalEntry.entry_date.asc(), JournalLine.id.asc())
