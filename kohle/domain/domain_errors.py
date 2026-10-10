@@ -285,7 +285,35 @@ QueryJournalByPeriodError = \
         EndDatePrecedesStartDateError | \
         AccountNotFoundError
 
+class MalformedStatementRow(Exception):
+    def __init__(self, row_number: int, field: str, problem: str) -> None:
+        super().__init__()
+        self.row_number = row_number
+        self.field = field
+        self.problem = problem
+
+    def __str__(self) -> str:
+        return f"Statement row {self.row_number}: {self.field} {self.problem}"
+
+
+class DuplicateReferenceInStatement(Exception):
+    def __init__(self, reference: str, first_row_number: int, row_number: int) -> None:
+        super().__init__()
+        self.reference = reference
+        self.first_row_number = first_row_number
+        self.row_number = row_number
+
+    def __str__(self) -> str:
+        return (
+            f"Statement rows {self.first_row_number} and {self.row_number} "
+            f"share the reference {self.reference!r}"
+        )
+
+
+StatementError = MalformedStatementRow | DuplicateReferenceInStatement
+
 ImportStatementError = \
+        StatementError | \
         AccountNotFoundError | \
         JournalError | \
         UnitError | \

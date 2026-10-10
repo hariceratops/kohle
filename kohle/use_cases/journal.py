@@ -8,14 +8,17 @@ from kohle.core.result import Result
 from kohle.domain.domain_errors import (
     BalanceError,
     BaseCurrencyAsCrossUnit,
+    DuplicateReferenceInStatement,
     EmptyEntry,
     EndDatePrecedesStartDateError,
     ImportStatementError,
     InvalidDateError,
     JournalError,
+    MalformedStatementRow,
     PostingToNonLeafAccount,
     QueryJournalByPeriodError,
     RecordEntryError,
+    StatementError,
     UnbalancedEntry,
 )
 from kohle.domain.models import AccountType, JournalEntry, JournalLine, UnitKind
@@ -266,6 +269,18 @@ class RecordSplitEntry(UnitOfWork[JournalEntry, RecordEntryError]):
         return self._run(use_case)
 
 
+def validate_statement(rows: Sequence[StatementRow]) -> StatementError | None:
+    first_seen: dict[str, int] = {}
+    for number, row in enumerate(rows, start=1):
+        reference = (row.reference or "").strip()
+        if not reference:
+            return MalformedStatementRow(number, "reference", "is empty")
+        if reference in first_seen:
+            return DuplicateReferenceInStatement(reference, first_seen[reference], number)
+        first_seen[reference] = number
+    return None
+
+
 class ImportStatement(UnitOfWork[int, ImportStatementError]):
     """Statement rows become balanced entries, each posted to the account its
     first matching rule names, or to an unclassified bucket when none matches.
@@ -273,24 +288,14 @@ class ImportStatement(UnitOfWork[int, ImportStatementError]):
 
     def execute(self, account_name: str, rows: Sequence[StatementRow]) -> Result[int, ImportStatementError]:
         def use_case(ctx: DbTransactionContext) -> Result[int, ImportStatementError]:
+            statement_error = validate_statement(rows)
+            if statement_error is not None:
+                return Result.err(statement_error)
+
             account_res = get_account_by_name_service(ctx, account_name)
             if account_res.is_err:
                 return Result.err(account_res.unwrap_err())
             account = account_res.unwrap()
-
-            unit_res = get_or_create_unit(ctx, BASE_CURRENCY, "Euro", UnitKind.currency)
-            if unit_res.is_err:
-                return Result.err(unit_res.unwrap_err())
-            unit_id = unit_res.unwrap().id
-
-            expense_res = _get_or_create_account(ctx, UNCLASSIFIED_EXPENSE, AccountType.expense)
-            if expense_res.is_err:
-                return Result.err(expense_res.unwrap_err())
-            income_res = _get_or_create_account(ctx, UNCLASSIFIED_INCOME, AccountType.income)
-            if income_res.is_err:
-                return Result.err(income_res.unwrap_err())
-            expense_id = expense_res.unwrap().id
-            income_id = income_res.unwrap().id
 
             # The account scopes the reference: the same row on two different
             # statements is two different facts.
@@ -304,6 +309,22 @@ class ImportStatement(UnitOfWork[int, ImportStatementError]):
             new_rows = [(row, reference) for row, reference in keyed if reference not in existing]
             if not new_rows:
                 return Result.ok(0)
+
+            # After the early return: a re-import must make no write call, or
+            # it would leave an OperationGroup behind.
+            unit_res = get_or_create_unit(ctx, BASE_CURRENCY, "Euro", UnitKind.currency)
+            if unit_res.is_err:
+                return Result.err(unit_res.unwrap_err())
+            unit_id = unit_res.unwrap().id
+
+            expense_res = _get_or_create_account(ctx, UNCLASSIFIED_EXPENSE, AccountType.expense)
+            if expense_res.is_err:
+                return Result.err(expense_res.unwrap_err())
+            income_res = _get_or_create_account(ctx, UNCLASSIFIED_INCOME, AccountType.income)
+            if income_res.is_err:
+                return Result.err(income_res.unwrap_err())
+            expense_id = expense_res.unwrap().id
+            income_id = income_res.unwrap().id
 
             # Loaded and compiled once for the whole statement: a query per row
             # is N x M, and re.compile per row recompiles a fixed rule set.
