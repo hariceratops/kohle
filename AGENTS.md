@@ -4,9 +4,11 @@
 
 Kohle is a personal money manager for the command line, written in Python
 3.12 and installed as a `uv` project. It keeps a double-entry ledger in
-SQLite through SQLAlchemy 2.0, with Alembic managing the schema. Bank
-statements arrive through importer plugins discovered from the
-`kohle.plugins` entry-point group. `kohle-cli` is the primary frontend;
+SQLite through SQLAlchemy 2.0, with Alembic managing the schema. Statements
+(bank cash movements and broker trades) arrive through importer plugins
+discovered from the `kohle.plugins` entry-point group, which return typed
+`CashRow` / `SecurityRow` values; rows are deduplicated by their native
+reference, scoped to the cash account. `kohle-cli` is the primary frontend;
 `kohle-tui` is a Textual application intended as a second frontend over the
 same use cases, and is currently unwired.
 

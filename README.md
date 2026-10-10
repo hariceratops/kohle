@@ -451,3 +451,20 @@ optional otherwise. Every instrument identifier must already exist as a
 `security` unit (`kohle-cli add-unit <identifier> <name>`); unknown ones are
 all named in a single error and nothing is imported. A reference is scoped to
 the cash account, so re-importing a file posts nothing.
+
+#### Bundled plugins
+- `kohle-deutsche-bank`: Deutsche Bank CSV, cash rows only.
+- `kohle-synthetic-broker`: a synthetic broker CSV that exercises the contract
+  until a real broker format is chosen. UTF-8, header exactly
+  `date,reference,type,isin,quantity,price,amount`. `type` is `buy`, `sell` or
+  `dividend`. Buys and sells (`isin`, unsigned `quantity > 0`, `price > 0`, no
+  `amount`) become `SecurityRow`s; a dividend (`amount` in EUR, `isin`
+  optional, no quantity or price) becomes a `CashRow` described `Dividend
+  <isin>`, so a rule such as `add-rule '^Dividend' Dividends` routes it.
+  Parse errors name the file line; an unknown `type` or a filled column that
+  must be empty writes nothing.
+
+```
+kohle-cli add-unit DE0005190003 BMW
+kohle-cli import-statement kohle-synthetic-broker "Broker Cash" Depot statement.csv
+```

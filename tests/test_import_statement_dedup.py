@@ -2,11 +2,17 @@
 
 from dataclasses import replace
 from datetime import date
+from pathlib import Path
 
 import pytest
+from click.testing import CliRunner
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
+from kohle.app.cli.cli import cli
+from kohle.app.plugins.kohle_synthetic_broker_importer import (
+    SyntheticBrokerStatementImporter,
+)
 from kohle.domain.domain_errors import (
     DuplicateReferenceInStatement,
     MalformedStatementRow,
@@ -152,6 +158,24 @@ def test_a_row_that_fails_mid_loop_rolls_back_the_earlier_rows(
     assert _snapshot(session) == before
 
 
-def test_a_failing_plugin_writes_nothing() -> None:
-    # TODO(028): CLI-level; needs the synthetic plugin and the monkeypatched load_plugins.
-    pytest.skip("covered with the CLI tests in issue 028")
+def test_a_failing_plugin_writes_nothing(
+    session_factory: sessionmaker, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    with session_factory() as setup:
+        _accounts(setup, "Checking")
+        before = _snapshot(setup)
+    statement = tmp_path / "bad.csv"
+    statement.write_text("date,reference,type,isin,quantity,price,amount\n2026-03-02,T-1,split,X,1,1,\n")
+    monkeypatch.setattr(
+        "kohle.app.cli.cli.load_plugins",
+        lambda: {"kohle-synthetic-broker": SyntheticBrokerStatementImporter()},
+    )
+
+    result = CliRunner().invoke(
+        cli, ["import-statement", "kohle-synthetic-broker", "Checking", str(statement)], obj=session_factory
+    )
+
+    assert result.exit_code != 0
+    assert "split" in result.output
+    with session_factory() as after:
+        assert _snapshot(after) == before
