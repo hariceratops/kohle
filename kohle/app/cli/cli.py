@@ -5,9 +5,10 @@ from tabulate import tabulate
 
 from kohle.db.connection import session_local
 from kohle.domain.domain_errors import AccountNotFoundError
-from kohle.domain.models import AccountType, UnitKind
+from kohle.domain.models import DEFAULT_RULE_PRIORITY, AccountType, UnitKind
 from kohle.plugin.plugin_manager import load_plugins
 from kohle.use_cases.accounts import AddAccount, ListAccount, ListChildAccounts
+from kohle.use_cases.classification import ListUnclassified, Reclassify
 from kohle.use_cases.journal import (
     BASE_CURRENCY,
     CrossUnitLine,
@@ -19,6 +20,7 @@ from kohle.use_cases.journal import (
     RecordSplitEntry,
 )
 from kohle.use_cases.operations import ListOperations
+from kohle.use_cases.rules import AddRule, ListRules, RemoveRule
 from kohle.use_cases.units import AddUnit, ListUnits
 
 
@@ -292,6 +294,7 @@ def entries_in_period(make_session, account_name, start, end):
         {
             "date": line.entry.entry_date,
             "description": line.entry.description,
+            "counterparty": line.entry.counterparty_name or "-",
             "side": "dr" if line.is_debit else "cr",
             "quantity": line.quantity,
             "unit": line.unit.identifier,
@@ -338,9 +341,6 @@ def balance_cmd(make_session, account_name: str):
 @cli.command()
 @click.pass_obj
 def list_operations_cmd(make_session):
-    # Every read-only command leaves an empty OperationGroup behind
-    # (DbTransactionContext creates and flushes one unconditionally), so
-    # gaps in the `group` column are expected until issue 011 lands.
     list_operations = ListOperations(make_session())
     res = list_operations.execute()
     if res.is_err:
@@ -358,6 +358,99 @@ def list_operations_cmd(make_session):
         click.echo("No operations")
         return
     click.echo(tabulate(rows, headers="keys"))
+
+
+@cli.command()
+@click.argument("pattern")
+@click.argument("account")
+@click.option(
+    "--priority",
+    type=int,
+    default=DEFAULT_RULE_PRIORITY,
+    help="Lower numbers are evaluated first; ties break on rule id",
+)
+@click.pass_obj
+def add_rule_cmd(make_session, pattern: str, account: str, priority: int):
+    add_rule = AddRule(make_session())
+    res = add_rule.execute(pattern, account, priority)
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    click.echo(f"Added rule {res.unwrap().id}: {pattern} -> {account} (priority {priority})")
+
+
+@cli.command()
+@click.pass_obj
+def list_rules_cmd(make_session):
+    list_rules = ListRules(make_session())
+    res = list_rules.execute()
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    rules = res.unwrap()
+    if not rules:
+        click.echo("No rules")
+        return
+    # Rendered in evaluation order, with the id remove-rule takes: the order
+    # rules fire in is only useful if it is the order they are printed in.
+    rows = [
+        {
+            "id": rule.id,
+            "priority": rule.priority,
+            "pattern": rule.pattern,
+            "account": rule.account.name,
+        }
+        for rule in rules
+    ]
+    click.echo(tabulate(rows, headers="keys"))
+
+
+@cli.command()
+@click.argument("rule_id", type=int)
+@click.pass_obj
+def remove_rule_cmd(make_session, rule_id: int):
+    remove_rule = RemoveRule(make_session())
+    res = remove_rule.execute(rule_id)
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    click.echo(f"Removed rule {rule_id}")
+
+
+@cli.command()
+@click.pass_obj
+def list_unclassified_cmd(make_session):
+    list_unclassified = ListUnclassified(make_session())
+    res = list_unclassified.execute()
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    lines = res.unwrap()
+    if not lines:
+        click.echo("No unclassified lines")
+        return
+    # entry_id first, matching list-rules printing the id remove-rule takes:
+    # it is reclassify's handle onto the line (design §2.4).
+    rows = [
+        {
+            "entry_id": line.entry_id,
+            "date": line.entry_date,
+            "description": line.description,
+            "counterparty": line.counterparty_name or "-",
+            "amount": line.amount,
+            "account": line.account_name,
+        }
+        for line in lines
+    ]
+    click.echo(tabulate(rows, headers="keys", floatfmt=".2f"))
+
+
+@cli.command()
+@click.argument("entry_id", type=int)
+@click.argument("account")
+@click.pass_obj
+def reclassify_cmd(make_session, entry_id: int, account: str):
+    reclassify = Reclassify(make_session())
+    res = reclassify.execute(entry_id, account)
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    click.echo(f"Reclassified entry {entry_id} to {account}")
 
 
 if __name__ == "__main__":

@@ -29,7 +29,10 @@ Code is layered `app` → `use_cases` → `services` → `infrastructure` /
 `domain`. Use cases validate and compose; services own persistence and are
 the only layer that touches a `Session`. A use case runs inside a
 `UnitOfWork` that wraps one database transaction and records an audit trail
-of `Operation` rows through the `crud_create` decorator. Functions return
+of `Operation` rows through the `crud_create` decorator. The `OperationGroup`
+holding them is created on the first recorded write, so a use case that only
+reads leaves no trace and group ids run consecutively across writes.
+Functions return
 `Result[T, E]` rather than raising; domain errors are `Exception` subclasses
 used as error values and are not thrown.
 

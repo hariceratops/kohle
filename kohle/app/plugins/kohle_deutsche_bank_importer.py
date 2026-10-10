@@ -307,11 +307,11 @@ class DeustcheBankStatementImporter(StatementImporterPlugin):
             statement_data = parsing_res.unwrap()
             df = statement_data.transactions.\
                     pipe(lambda df: df.rename(columns={
-                       'Beneficiary / Originator': 'beneficiary',
+                       'Beneficiary / Originator': 'counterparty_name',
                        'Payment Details': 'description',
                        'Debit': 'debit',
                        'Credit': 'credit',
-                       'IBAN / Account Number': 'iban',
+                       'IBAN / Account Number': 'counterparty_iban',
                        'Booking date': 'booking_date',
                        'Value date': 'value_date',
                        'Transaction Type': 'transaction_type',
@@ -341,13 +341,22 @@ class DeustcheBankStatementImporter(StatementImporterPlugin):
                    .pipe(lambda d: d.assign(amount=np.where(d["debit"] != 0, d["debit"], d["credit"]))) \
                    .pipe(lambda d: d.assign(amount=d["amount"].apply(parse_amount))) \
                    .drop(columns=[
-                        'beneficiary', 'transaction_type', 'booking_date',
+                        'transaction_type', 'booking_date',
                         'bic', 'customer_reference', 'mandate_reference', 'creditor_id',
                         'compensation_amount', 'original_amount', 'ultimate_creditor',
                         'number_of_transactions', 'number_of_cheques', "debit", "credit",
                         "currency",
                     ])\
-                    .astype({"amount": float})
+                    .astype({
+                        "amount": float,
+                        # Part of the plugin contract: read_csv types a column
+                        # that is empty on every row as float64, which fails the
+                        # importer's string check for a statement that simply
+                        # has no counterparty data.
+                        "description": "string",
+                        "counterparty_name": "string",
+                        "counterparty_iban": "string",
+                    })
             
             return Result.ok(df)
 

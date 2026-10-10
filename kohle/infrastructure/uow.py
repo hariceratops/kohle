@@ -1,10 +1,12 @@
 # kohle/infrastructure/uow.py
-from typing import Callable, TypeVar, Generic
-from sqlalchemy.orm import Session, sessionmaker
-from kohle.core.result import Result
-from kohle.infrastructure.transaction_context import DbTransactionContext
-from kohle.db.connection import session_local
+from collections.abc import Callable
+from typing import Generic, TypeVar
 
+from sqlalchemy.orm import Session
+
+from kohle.core.result import Result
+from kohle.db.connection import session_local
+from kohle.infrastructure.transaction_context import DbTransactionContext
 
 T = TypeVar("T")
 E = TypeVar("E")
@@ -20,7 +22,6 @@ class DbTransaction(Generic[T, E]):
         try:
             result = use_case(self.ctx)
             if result.is_ok:
-                self.session.add(self.ctx.transaction_group)
                 for op in self.ctx.transaction_steps:
                     self.session.add(op)
                 self.session.commit()

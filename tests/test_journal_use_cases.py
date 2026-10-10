@@ -104,9 +104,10 @@ def _statement() -> pd.DataFrame:
             "description": ["Aldi", "Salary"],
             "amount": [-80.0, 2500.0],
             "date": pd.to_datetime(["2026-03-05", "2026-03-01"]),
-            "iban": ["DE1", "DE1"],
+            "counterparty_name": ["ALDI SUED", "ACME GmbH"],
+            "counterparty_iban": ["DE89370400440532013000", "DE02120300000000202051"],
         }
-    )
+    ).astype({"counterparty_name": "string", "counterparty_iban": "string"})
 
 
 def test_import_statement_creates_balanced_entries(session: Session) -> None:
@@ -171,7 +172,7 @@ def test_import_statement_unknown_account(session: Session) -> None:
 
 def test_import_statement_missing_column(session: Session) -> None:
     AddAccount(session).execute("Checking", AccountType.asset, "DE1")
-    df = _statement().drop(columns=["iban"])
+    df = _statement().drop(columns=["counterparty_iban"])
     result = ImportStatement(session).execute("Checking", df)
     assert result.is_err
     assert isinstance(result.unwrap_err(), DataframeMissingColumn)

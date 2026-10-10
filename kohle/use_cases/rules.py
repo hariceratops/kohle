@@ -1,0 +1,124 @@
+import re
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
+
+from kohle.core.result import Result
+from kohle.domain.domain_errors import (
+    AddRuleError,
+    EmptyRulePattern,
+    InvalidRulePattern,
+    PostingToNonLeafAccount,
+    RuleError,
+)
+from kohle.domain.models import DEFAULT_RULE_PRIORITY, Rule
+from kohle.infrastructure.transaction_context import DbTransactionContext
+from kohle.infrastructure.uow import UnitOfWork
+from kohle.services.account_services import (
+    account_has_children_service,
+    get_account_by_name_service,
+)
+from kohle.services.journal_services import Counterparty
+from kohle.services.rule_services import (
+    add_rule_service,
+    list_rules_service,
+    remove_rule_service,
+)
+
+# Matching is case-insensitive because bank exports are inconsistently cased —
+# REWE SAGT DANKE and Rewe Markt GmbH are the same payee and a user writing
+# 'rewe' means both. (?-i:...) restores case sensitivity within a pattern.
+PATTERN_FLAGS = re.IGNORECASE
+
+
+@dataclass(frozen=True, slots=True)
+class CompiledRule:
+    """A rule with its pattern already compiled, carrying the two ids the
+    classification record needs. An ORM Rule cannot hold a re.Pattern, and the
+    compilation has to happen once per import rather than once per row."""
+
+    rule_id: int
+    account_id: int
+    pattern: re.Pattern[str]
+
+
+def compile_rules(rules: Iterable[Rule]) -> list[CompiledRule]:
+    """Compile a rule set in the order the caller supplies it.
+
+    Order-dependent and must not sort: `list_rules_service`'s
+    `(priority, id)` ordering is the evaluation contract, and `match_rule`
+    takes the first hit (design §2.3).
+
+    Returns a plain list rather than a Result: every pattern here compiled
+    when its rule was created, so a failure means the database was edited by
+    hand, and `re.error` propagating into the transaction boundary rolls the
+    import back with the message intact.
+    """
+    return [CompiledRule(rule.id, rule.account_id, re.compile(rule.pattern, PATTERN_FLAGS)) for rule in rules]
+
+
+def match_rule(
+    compiled: Sequence[CompiledRule], description: str, counterparty: Counterparty
+) -> CompiledRule | None:
+    """The first rule whose pattern hits the description or either counterparty
+    field, matched per field so that an anchored pattern means "this exact
+    IBAN" rather than "start and end of a blob".
+
+    Pure and session-free: making this a unit of work would open a second
+    transaction inside the import loop (design §5.2).
+    """
+    fields = (description, counterparty.name, counterparty.iban)
+    for rule in compiled:
+        if any(rule.pattern.search(field) for field in fields if field is not None):
+            return rule
+    return None
+
+
+class AddRule(UnitOfWork[Rule, AddRuleError]):
+    def execute(
+        self, pattern: str, account_name: str, priority: int = DEFAULT_RULE_PRIORITY
+    ) -> Result[Rule, AddRuleError]:
+        def use_case(ctx: DbTransactionContext) -> Result[Rule, AddRuleError]:
+            text = pattern.strip()
+            if not text:
+                return Result.err(EmptyRulePattern())
+
+            try:
+                # Compiled to reject a malformed pattern here rather than at the
+                # import it would otherwise break. The compiled object is
+                # discarded: the matcher compiles the rule set of the day.
+                re.compile(text, PATTERN_FLAGS)
+            except re.error as err:
+                return Result.err(InvalidRulePattern(text, str(err)))
+
+            return (
+                get_account_by_name_service(ctx, account_name)
+                .and_then(lambda account:
+                    account_has_children_service(ctx, account.id)
+                    .and_then(lambda has_children:
+                        # A rule aimed at a parent can only ever produce entries
+                        # validate_lines refuses, so refusing the rule turns a
+                        # broken import into a refused rule.
+                        Result.err(PostingToNonLeafAccount(account.id))
+                        if has_children
+                        else add_rule_service(ctx, text, account.id, priority)
+                    )
+                )
+            )
+
+        return self._run(use_case)
+
+
+class ListRules(UnitOfWork[list[Rule], RuleError]):
+    def execute(self) -> Result[list[Rule], RuleError]:
+        def use_case(ctx: DbTransactionContext) -> Result[list[Rule], RuleError]:
+            return list_rules_service(ctx)
+
+        return self._run(use_case)
+
+
+class RemoveRule(UnitOfWork[Rule, RuleError]):
+    def execute(self, rule_id: int) -> Result[Rule, RuleError]:
+        def use_case(ctx: DbTransactionContext) -> Result[Rule, RuleError]:
+            return remove_rule_service(ctx, rule_id)
+
+        return self._run(use_case)

@@ -133,6 +133,12 @@ class JournalEntry(base, Archivable):
     entry_date: Mapped[date] = mapped_column(Date, nullable=False)
     reference: Mapped[str] = mapped_column(String, nullable=False)
     description: Mapped[str] = mapped_column(String, nullable=False, default="")
+    # What the bank said about the other side of an imported movement. NULL for
+    # hand-entered rows, which have no counterparty concept — a placeholder like
+    # '' or 'unknown' would be a value a classification rule could match by
+    # accident, and NULL cannot be.
+    counterparty_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    counterparty_iban: Mapped[str | None] = mapped_column(String, nullable=True)
     lines: Mapped[list["JournalLine"]] = relationship(
         "JournalLine", back_populates="entry", cascade="all, delete-orphan"
     )
@@ -189,6 +195,78 @@ class JournalLine(base, Archivable):
     def __repr__(self) -> str:
         side = "dr" if self.is_debit else "cr"
         return f"<JournalLine(id={self.id}, entry_id={self.entry_id}, account_id={self.account_id}, {side} {self.quantity}@{self.unit_price})>"
+
+
+DEFAULT_RULE_PRIORITY = 100
+
+
+class Rule(base, Archivable):
+    """Sends an imported line to an account when its pattern matches the line's
+    description or either counterparty field."""
+
+    __tablename__ = "rules"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    pattern: Mapped[str] = mapped_column(String, nullable=False)
+    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"), nullable=False)
+    # Sparse default, so a rule can be inserted either side of an existing one
+    # without renumbering the set.
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=DEFAULT_RULE_PRIORITY)
+
+    account: Mapped["Account"] = relationship("Account")
+
+    # Deliberately unconstrained: retired rules stay in the table, so a unique
+    # pattern would stop a retired rule from being recreated, and a duplicate
+    # rule is dead weight rather than a conflict — first match wins.
+
+    def __repr__(self) -> str:
+        return f"<Rule(id={self.id}, pattern={self.pattern!r}, priority={self.priority}, account_id={self.account_id})>"
+
+
+class Classification(base, Archivable):
+    """What the classifier proposed for an imported line and where it ended up.
+
+    The labelled record a later ML phase trains on, which is why it is written
+    from the first line ever classified: it cannot be reconstructed from the
+    ledger afterwards. At import both account columns hold the same value on
+    both paths — they diverge only when a human corrects the line, and that
+    divergence is the entire record, so they must not be collapsed into one.
+    """
+
+    __tablename__ = "classifications"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    journal_entry_id: Mapped[int] = mapped_column(ForeignKey("journal_entries.id"), nullable=False)
+    proposed_account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"), nullable=False)
+    # NULL means no rule matched and the line fell through to a bucket — a
+    # meaningful value rather than a tombstone, which is why a removed rule is
+    # retired rather than deleted.
+    matched_rule_id: Mapped[int | None] = mapped_column(ForeignKey("rules.id"), nullable=True)
+    final_account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"), nullable=False)
+    # Not derivable from proposed != final: correcting a line back onto the
+    # account it started on leaves them equal on a row a human did touch.
+    corrected: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    entry: Mapped["JournalEntry"] = relationship("JournalEntry")
+    matched_rule: Mapped["Rule | None"] = relationship("Rule")
+    # Only the final account gets a relationship; the proposed one is never
+    # displayed, and an unused relationship is a lazy load waiting to fire
+    # after the session has closed. Both sides need foreign_keys= because they
+    # point at the same table.
+    final_account: Mapped["Account"] = relationship("Account", foreign_keys=[final_account_id])
+
+    # One classification per entry, so "the classification of this line" has a
+    # single referent: correcting one is an update rather than an append, and a
+    # read needs no max-per-entry subquery.
+    __table_args__ = (
+        UniqueConstraint("journal_entry_id", name="uq_classification_journal_entry"),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<Classification(id={self.id}, entry_id={self.journal_entry_id}, "
+            f"rule_id={self.matched_rule_id}, final_account_id={self.final_account_id})>"
+        )
 
 
 class Price(base):

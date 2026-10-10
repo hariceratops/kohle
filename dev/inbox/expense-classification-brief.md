@@ -1,4 +1,9 @@
-# Automatic expense classification
+# Automatic expense classification — original brief
+
+> Superseded by `expense-classification.md`, the PRD written from it. Kept
+> for the record: its considerations and open questions are what the
+> interview was run against. Not pipeline input — do not re-run `grill_me`
+> on this file.
 
 ## Goal
 

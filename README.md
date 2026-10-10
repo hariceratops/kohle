@@ -107,8 +107,89 @@ kohle-cli list-operations                             # the audit trail
 an account's whole subtree. There is no market valuation: without a price
 feed the only value information available is what was paid.
 
+`entries-in-period` shows the counterparty an imported line came from, or `-`
+for entries made by hand, which have none.
+
 A failing command exits non-zero and writes to stderr, so `kohle-cli ... ||
 handle-failure` works and a redirect captures results rather than errors.
+
+### Classification rules
+
+An imported line that matches no rule lands in `Unclassified Expense` or
+`Unclassified Income`. A rule sends it somewhere better:
+
+```bash
+kohle-cli add-rule 'REWE|ALDI|LIDL' Groceries
+kohle-cli add-rule '^DE89370400440532013000$' Rent --priority 10
+kohle-cli list-rules
+kohle-cli remove-rule 3
+```
+
+The pattern is a Python regular expression, matched case-insensitively against
+the description, the counterparty name and the counterparty IBAN, each on its
+own — which is what makes `^DE89...$` mean "this exact counterparty IBAN".
+`(?-i:REWE)` restores case sensitivity inside a pattern. A malformed pattern is
+refused when the rule is created, naming the position:
+
+```
+$ kohle-cli add-rule 'REWE[' Groceries
+Error: Invalid rule pattern 'REWE[': unterminated character set at position 4
+```
+
+Rules are evaluated lowest `priority` first, ties broken by id, and the first
+match wins — which is the order `list-rules` prints them in. `--priority`
+defaults to 100, leaving room to slot a rule either side of an existing one
+without renumbering.
+
+The target must be a leaf account, since only leaves can be posted to.
+`remove-rule` retires a rule rather than erasing it: past classifications keep
+naming the pattern that made them.
+
+Rules are applied while a statement is imported: each row takes the account its
+first matching rule names, and a row matching nothing lands in its unclassified
+bucket exactly as it did before any rule existed. If a rule's target has since
+gained a child account the import fails naming it, rather than quietly falling
+back to the bucket and leaving the rule silently disabled.
+
+Every imported row is recorded either way — what was proposed, which rule
+matched (none, for a fall-through), where it landed, and whether a human has
+corrected it. That record is what a later classifier would learn from, which is
+why it is written from the first line classified rather than added afterwards.
+
+```bash
+kohle-cli list-unclassified
+```
+
+Lists every imported line still sitting in `Unclassified Expense` or
+`Unclassified Income` — the queue of lines that need a new rule or a manual
+correction. Each row carries enough to write a rule from it: the entry id,
+date, description, counterparty, amount and the account it landed on. Nothing
+imported yet, or everything already classified, both print `No unclassified
+lines` rather than an error; the command is read-only and creates no accounts
+and no operation group of its own.
+
+```bash
+kohle-cli reclassify 42 Groceries
+```
+
+Moves a classified line onto a different account — whether it was matched by a
+wrong rule or fell through to an unclassified bucket — by posting a reversing
+pair through `post_entry`: the wrong account is credited and the right one
+debited, for the original amount, dated the same day as the original entry.
+The original entry is never edited, voided or deleted; the ledger stays
+append-only. `42` is the journal entry id, exactly what `list-unclassified`
+prints in its first column.
+
+The classification record moves with it: `final_account_id` becomes the new
+account and `corrected` is set, while the proposed account and the rule that
+matched are left exactly as they were — they are the record of what the
+engine got wrong, not something a correction should erase. Reclassifying an
+already-corrected line reverses out of its current account, not its original
+proposal, so a second correction lands the amount on the new target without
+disturbing the first.
+
+An unknown entry id, an unknown target account, or a non-leaf target all fail
+with a clear error rather than a traceback.
 
 ### Writing importer plugins
 A new plugin can be rolled out by defining an entry point to kohle plugins
@@ -138,7 +219,26 @@ class StatementImporterPlugin(ABC):
         pass
 ```
 
-The returned frame carries `description`, `amount`, `date` and `iban`, and
-describes cash movements only. Importing a broker statement needs unit and
-price on each row, which this contract cannot yet express — see
+The returned frame carries five columns and describes cash movements only:
+
+| column              | dtype    | meaning                                |
+|---------------------|----------|----------------------------------------|
+| `description`       | string   | free text from the statement           |
+| `amount`            | float    | signed; negative is money leaving      |
+| `date`              | datetime | booking or value date, plugin's choice |
+| `counterparty_name` | string   | who the other side was                 |
+| `counterparty_iban` | string   | the other side's IBAN                  |
+
+`counterparty_iban` is the *other* side's IBAN, not the imported account's.
+
+A format that carries no counterparty at all still declares the column, empty
+(`df.assign(counterparty_iban=pd.Series(pd.NA, index=df.index, dtype="string"))`).
+Missing it is a hard failure naming the column, because a counterparty that
+silently goes missing is what makes a classification rule stop matching with
+nothing saying why. Cast the text columns with `.astype("string")`: `read_csv`
+types a column that is empty on every row as `float64`, which the schema check
+rejects.
+
+Importing a broker statement needs unit and price on each row, which this
+contract cannot yet express — see
 `dev/inbox/importer-plugins-for-assets.md`.

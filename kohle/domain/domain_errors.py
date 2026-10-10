@@ -130,6 +130,54 @@ class DuplicateLineInEntry(JournalError):
         return "Two lines on the same account, unit and side; combine them"
 
 
+class RuleError(Exception):
+    pass
+
+
+class EmptyRulePattern(RuleError):
+    """An empty pattern compiles fine and matches every line, which is the one
+    catch-all nobody writes on purpose."""
+
+    def __str__(self) -> str:
+        return "Rule pattern cannot be empty"
+
+
+class InvalidRulePattern(RuleError):
+    def __init__(self, pattern: str, reason: str) -> None:
+        super().__init__()
+        self.pattern = pattern
+        self.reason = reason
+
+    def __str__(self) -> str:
+        return f"Invalid rule pattern {self.pattern!r}: {self.reason}"
+
+
+class RuleNotFoundError(RuleError):
+    def __init__(self, rule_id: int) -> None:
+        super().__init__()
+        self.rule_id = rule_id
+
+    def __str__(self) -> str:
+        return f"Rule id {self.rule_id} not found"
+
+
+class ClassificationError(Exception):
+    pass
+
+
+class NoClassificationForEntry(ClassificationError):
+    """Raised by `reclassify` for an unknown entry id or one that was never
+    classified — hand-entered `record`/`record-split` entries have no
+    classification row to correct."""
+
+    def __init__(self, entry_id: int) -> None:
+        super().__init__()
+        self.entry_id = entry_id
+
+    def __str__(self) -> str:
+        return f"Journal entry id {self.entry_id} has no classification to correct"
+
+
 class InvalidDateError(Exception):
     def __init__(self, date_str: str) -> None:
         super().__init__()
@@ -153,10 +201,20 @@ class EndDatePrecedesStartDateError(Exception):
 class DataframeMissingColumn:
     columns: list[str]
 
+    # The plugin contract has no version negotiation, so this message is its
+    # whole enforcement mechanism: it is what a plugin author sees on the first
+    # import after getting the frame wrong.
+    def __str__(self) -> str:
+        return f"Statement is missing required column(s): {', '.join(self.columns)}"
+
 
 @dataclass
 class DataframeColumnTypeMismatch:
     mismatches: dict[str, str]  # column -> actual dtype
+
+    def __str__(self) -> str:
+        wrong = ", ".join(f"{column} is {dtype}" for column, dtype in self.mismatches.items())
+        return f"Statement column(s) have the wrong type: {wrong}"
 
 
 DataframeValidationError = DataframeMissingColumn | DataframeColumnTypeMismatch
@@ -171,8 +229,26 @@ ImportStatementError = \
         AccountNotFoundError | \
         JournalError | \
         UnitError | \
-        DataframeValidationError
+        DataframeValidationError | \
+        RuleError | \
+        ClassificationError
 
 RecordEntryError = AccountError | UnitError | JournalError | BaseCurrencyAsCrossUnit
 
+# JournalError because a rule pointing at a parent account is refused with the
+# ledger's own PostingToNonLeafAccount, checked at rule creation rather than at
+# the import it would otherwise break.
+AddRuleError = AccountError | RuleError | JournalError
+
 BalanceError = AccountError | JournalError
+
+# AccountError survives an infrastructure failure resolving a bucket; the one
+# AccountError case the use case actually handles — AccountNotFoundError,
+# meaning nothing has ever been imported — is swallowed into an empty list
+# rather than reaching here (design §6.2).
+ListUnclassifiedError = AccountError | ClassificationError
+
+# JournalError surfaces PostingToNonLeafAccount from validate_lines inside
+# post_entry, unchanged and not re-implemented for the adjusting entry
+# (design §7.4).
+ReclassifyError = AccountError | JournalError | ClassificationError
