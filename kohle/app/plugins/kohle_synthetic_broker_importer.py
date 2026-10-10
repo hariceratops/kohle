@@ -148,7 +148,7 @@ class SyntheticBrokerStatementImporter(StatementImporterPlugin):
             return Result.err(StatementUnreadable(statement_path, str(e)))
 
     def _parse(self, reader) -> Result[list[StatementRow], ImportError]:
-        header = next(reader, [])
+        header: list[str] = next(reader, [])
         if header != HEADER:
             return Result.err(UnexpectedHeader(header))
 

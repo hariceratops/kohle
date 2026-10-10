@@ -156,9 +156,8 @@ def _cross_unit_lines(
     cash_unit_id: int,
     into_holding: bool,
 ) -> list[LineSpec]:
-    """The shape of a trade: the non-base leg at its price, the base leg at
-    quantity * price and price 1. Shared by `record` and imported trades so
-    the cost fold sees one definition of a trade."""
+    """Shared by `record` and imported trades so the cost fold sees one
+    definition of a trade."""
     return [
         LineSpec(holding_account_id, holding_unit_id, quantity, unit_price, is_debit=into_holding),
         LineSpec(cash_account_id, cash_unit_id, quantity * unit_price, Decimal(1), is_debit=not into_holding),
