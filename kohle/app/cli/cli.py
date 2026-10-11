@@ -16,7 +16,6 @@ from kohle.use_cases.journal import (
     CrossUnitLine,
     ImportStatement,
     LineInput,
-    NetWorth,
     QueryAccountBalance,
     QueryJournalByPeriod,
     RecordSimpleEntry,
@@ -27,13 +26,17 @@ from kohle.use_cases.prices import (
     AlreadyStored,
     AppendPrices,
     FetchOutcome,
+    Fresh,
     ListPriceTargets,
+    NoClose,
     Priced,
     SetPriceSource,
+    Stale,
     Unbound,
     Unpriced,
     call_price_plugins,
 )
+from kohle.use_cases.reporting import ValuedBalance, ValuedNetWorth
 from kohle.use_cases.rules import AddRule, ListRules, RemoveRule
 from kohle.use_cases.splitting import (
     AddSplitGroup,
@@ -609,33 +612,59 @@ def _print_who_owes_what_by_group(make_session):
     click.echo("\nNote: group figures are historical allocations, not settlement-adjusted balances.")
 
 
-def _net_worth_rows(section: str, balances: list) -> list[dict]:
+def _market_columns(row: ValuedBalance) -> dict[str, object]:
+    price: Decimal | None
+    price_date: date | None
+    status: str | None
+    match row.close:
+        case Fresh(c):
+            price, price_date, status = c.price, c.price_date, "fresh"
+        case Stale(c):
+            price, price_date, status = c.price, c.price_date, f"stale ({c.price_date.isoformat()})"
+        case NoClose():
+            price, price_date, status = None, None, "no price (at cost)"
+        case None:
+            price, price_date, status = None, None, None
+        case _:
+            assert_never(row.close)
+    return {
+        "price": price,
+        "price date": price_date,
+        "market value": row.market_value,
+        "status": status,
+    }
+
+
+def _net_worth_rows(section: str, rows: list[ValuedBalance]) -> list[dict]:
     return [
         {
             "section": section,
-            "unit": b.unit_identifier,
-            "quantity": b.quantity,
-            "at cost": b.quantity * b.average_cost if b.average_cost is not None else Decimal(0),
+            "unit": r.balance.unit_identifier,
+            "quantity": r.balance.quantity,
+            **_market_columns(r),
+            "at cost": r.balance.at_cost,
         }
-        for b in balances
+        for r in rows
     ]
 
 
 @cli.command()
 @click.pass_obj
 def net_worth_cmd(make_session):
-    res = NetWorth(make_session()).execute()
+    # The threshold flag arrives with issue 037; until then the default is fixed here.
+    res = ValuedNetWorth(make_session()).execute(date.today(), 7)  # noqa: DTZ011 - the user's local date, by design
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
     report = res.unwrap()
     rows = _net_worth_rows("Own accounts", report.own) + _net_worth_rows(
         "Receivables (People)", report.receivables
     )
-    click.echo(tabulate(rows, headers="keys", floatfmt=".2f"))
+    click.echo(tabulate(rows, headers="keys", floatfmt=".2f", missingval="-"))
     # The total folds receivables in rather than reporting them separately
     # (design §2.4) — the breakdown above is what makes that checkable
     # rather than a bare number the user has to trust.
-    click.echo(f"\nNet worth (at cost): {report.net_worth_at_cost:.2f}")
+    click.echo(f"\nNet worth (at cost): {report.at_cost.net_worth_at_cost:.2f}")
+    click.echo(f"Net worth (at market): {report.net_worth_at_market:.2f}")
 
 
 @cli.command()

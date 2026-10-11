@@ -449,3 +449,5 @@ class UnrequestedSymbol(Exception):
 PriceRejection = MissingCloseResult | NonPositivePrice | FutureCloseDate | NonBaseCurrency
 
 ListPriceTargetsError = BalanceError | PriceError
+
+ValuationError = BalanceError | PriceError
