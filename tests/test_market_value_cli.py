@@ -119,13 +119,72 @@ def test_net_worth_summary_on_a_mixed_ledger(session_factory: sessionmaker, mixe
     ]
 
 
-@pytest.mark.skip(reason="scaffold: issue 037")
-def test_net_worth_max_age_days() -> None:
-    # TODO(037) — one test per site:
-    #   - -1 and x exit 2 with an obj= factory that fails the test if called (forbidden_session_local pattern)
-    #   - boundary pair via the monkeypatched kohle.app.cli.cli.date
-    #   - a mid-range check seeded relative to real date.today() with ages well away from N
-    raise NotImplementedError
+@pytest.mark.parametrize("value", ["-1", "x"])
+def test_net_worth_rejects_an_invalid_max_age_days(value: str) -> None:
+    def forbidden_factory():
+        raise AssertionError("no session may be opened for an invalid --max-age-days")
+
+    result = CliRunner().invoke(cli, ["net-worth", "--max-age-days", value], obj=forbidden_factory)
+    assert result.exit_code == 2
+    assert "--max-age-days" in result.output
+
+
+@pytest.mark.parametrize("max_age", [7, 3, 0])
+def test_net_worth_max_age_days_boundary(
+    session_factory: sessionmaker, monkeypatch: pytest.MonkeyPatch, max_age: int
+) -> None:
+    today = date(2026, 6, 15)
+
+    class PinnedDate(date):
+        @classmethod
+        def today(cls) -> "PinnedDate":
+            return cls(today.year, today.month, today.day)
+
+    monkeypatch.setattr("kohle.app.cli.cli.date", PinnedDate)
+    with session_factory() as session:
+        ctx = DbTransactionContext(session)
+        AddAccount(session).execute(PEOPLE_ROOT, AccountType.asset).unwrap()
+        depot = add_account_service(ctx, "Depot", AccountType.asset, "DE2").unwrap()
+        cash = add_account_service(ctx, "Cash", AccountType.income).unwrap()
+        eur = add_unit_service(ctx, "EUR", "Euro", UnitKind.currency).unwrap()
+        units = {
+            name: add_unit_service(ctx, name, name, UnitKind.security).unwrap() for name in ("EDGE", "PAST")
+        }
+        for name, unit in units.items():
+            add_journal_entry_service(
+                ctx, date(2026, 3, 2), f"buy-{name}", f"buy {name}",
+                [
+                    LineSpec(depot.id, unit.id, Decimal(1), Decimal(10), is_debit=True),
+                    LineSpec(cash.id, eur.id, Decimal(10), EUR, is_debit=False),
+                ],
+            ).unwrap()
+        session.add(Price(unit_id=units["EDGE"].id, price_date=today - timedelta(days=max_age), price=Decimal(12), source="file"))
+        session.add(Price(unit_id=units["PAST"].id, price_date=today - timedelta(days=max_age + 1), price=Decimal(12), source="file"))
+        session.commit()
+
+    args = ["net-worth", "--max-age-days", str(max_age)]
+    result = CliRunner().invoke(cli, args, obj=session_factory)
+    assert result.exit_code == 0, result.output
+    edge_row = next(r for r in result.output.splitlines() if " EDGE " in r)
+    past_row = next(r for r in result.output.splitlines() if " PAST " in r)
+    assert "fresh" in edge_row
+    assert "stale" in past_row
+
+
+def test_net_worth_max_age_days_midrange(session_factory: sessionmaker, mixed_ledger: None) -> None:
+    # FRESH is 1 day old and STALE 30: N=10 keeps the first fresh, N=0 makes it stale,
+    # N=60 makes the second fresh. None sits within a day of N.
+    def statuses(max_age: int) -> tuple[str, str]:
+        result = CliRunner().invoke(cli, ["net-worth", "--max-age-days", str(max_age)], obj=session_factory)
+        assert result.exit_code == 0, result.output
+        rows = result.output.splitlines()
+        fresh = next(r for r in rows if " FRESH " in r)
+        stale = next(r for r in rows if " STALE " in r)
+        return ("fresh" in fresh, "fresh" in stale)  # type: ignore[return-value]
+
+    assert statuses(10) == (True, False)
+    assert statuses(60) == (True, True)
+    assert statuses(0) == (False, False)
 
 
 @pytest.mark.skip(reason="scaffold: issue 038")

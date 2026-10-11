@@ -377,7 +377,8 @@ average) and **at market** (quantity times the latest stored close). The close
 comes from the `prices` table that `fetch-prices` fills; reports never fetch.
 The `status` column says where a market value came from:
 
-- `fresh`: the latest close is at most 7 days old.
+- `fresh`: the latest close is at most 7 days old (`--max-age-days N` changes
+  the 7; `0` means only today's close is fresh).
 - `stale (YYYY-MM-DD)`: the latest close is older; it is still used, and its
   date is shown.
 - `no price (at cost)`: no close is stored (never fetched, no price source

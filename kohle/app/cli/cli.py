@@ -62,6 +62,11 @@ class DecimalParamType(click.ParamType):
 
 DECIMAL = DecimalParamType()
 
+MAX_AGE_DAYS = click.option(
+    "--max-age-days", type=click.IntRange(min=0), default=7, show_default=True,
+    help="Days a close stays fresh; older closes are marked stale",
+)
+
 
 def _parse_line(raw: str) -> LineInput:
     fields = raw.split(":")
@@ -658,10 +663,10 @@ def _estimates_line(summary: EstimateSummary) -> str:
 
 
 @cli.command()
+@MAX_AGE_DAYS
 @click.pass_obj
-def net_worth_cmd(make_session):
-    # The threshold flag arrives with issue 037; until then the default is fixed here.
-    res = ValuedNetWorth(make_session()).execute(date.today(), 7)  # noqa: DTZ011 - the user's local date, by design
+def net_worth_cmd(make_session, max_age_days: int):
+    res = ValuedNetWorth(make_session()).execute(date.today(), max_age_days)  # noqa: DTZ011 - the user's local date, by design
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
     report = res.unwrap()
