@@ -77,9 +77,7 @@ def oldest_close_first(stored: Mapping[str, Sequence[date | None]]) -> list[str]
 
 @dataclass(frozen=True, slots=True)
 class PriceTargets:
-    # plugin name -> symbol -> the held units bound to that (plugin, symbol)
     by_plugin: dict[str, dict[str, list[Unit]]]
-    # plugin name -> its symbols in the order to request them
     request_order: dict[str, list[str]]
     unbound: list[Unit]
 

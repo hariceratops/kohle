@@ -42,22 +42,13 @@ def _create_price_binding_service(
 def _update_price_binding_service(
     ctx: DbTransactionContext, binding_id: int, plugin_name: str, symbol: str
 ) -> Result[PriceBinding, PriceError]:
-    def op(session: Session) -> PriceBinding | None:
-        binding = session.get(PriceBinding, binding_id)
-        if binding is not None:
-            binding.plugin_name = plugin_name
-            binding.symbol = symbol
+    def op(session: Session) -> PriceBinding:
+        binding = session.get_one(PriceBinding, binding_id)
+        binding.plugin_name = plugin_name
+        binding.symbol = symbol
         return binding
 
-    return (
-        ctx.run(op)
-        .map_err(lambda err: PriceError(str(err)))
-        .and_then(lambda binding:
-            Result.ok(binding)
-            if binding is not None
-            else Result.err(PriceError(f"Price binding id {binding_id} not found"))
-        )
-    )
+    return ctx.run(op).map_err(lambda err: PriceError(str(err)))
 
 
 def set_price_binding_service(
