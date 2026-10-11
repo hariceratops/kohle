@@ -217,3 +217,21 @@ def test_third_plugin_binds_and_fetches_without_core_changes(
     with factory() as session:
         (stored,) = session.scalars(select(Price))
         assert (stored.price, stored.price_date, stored.source) == (Decimal("42.5"), date(2026, 3, 2), "third")
+
+
+@pytest.mark.skip(reason="scaffold: issue 039")
+def test_reports_leave_prices_and_operations_untouched() -> None:
+    # TODO(039) — one test per site:
+    #   - running balance and net-worth leaves the prices row count unchanged
+    #   - and writes no Operation row
+    raise NotImplementedError
+
+
+@pytest.mark.skip(reason="scaffold: issue 039")
+def test_report_code_never_references_price_writers() -> None:
+    # TODO(039) — exact identifiers, as in the guard above, not substrings:
+    #   - the balance and net-worth CLI callbacks (inspect.getsource)
+    #   - and the source of kohle/use_cases/reporting.py
+    #   - none of load_price_plugins, PriceFetcherPlugin, call_price_plugins,
+    #     AppendPrices, add_price_service
+    raise NotImplementedError
