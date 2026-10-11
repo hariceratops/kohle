@@ -29,6 +29,8 @@ BEFORE_CLASSIFICATIONS = "c5b8e2f47a13"
 BEFORE_PEOPLE_ROOT = "3e7b91c0af52"
 BEFORE_SPLITS = "TODO"
 BEFORE_SPLIT_GROUPS = "TODO"
+BEFORE_PRICE_BINDINGS = "a1cebfe54f33"
+BEFORE_PRICES_UNIQUE_PER_DAY = "b3f9d2a41c70"
 
 
 @pytest.fixture
@@ -338,3 +340,57 @@ def test_upgrade_refuses_on_a_pre_existing_people_account(tmp_path: Path) -> Non
     with pytest.raises(RuntimeError) as exc_info:
         command.upgrade(config, "head")
     assert "People" in str(exc_info.value)
+
+
+def test_price_bindings_round_trips_when_empty(migrated_db) -> None:
+    config, db = migrated_db
+    assert "price_bindings" in _tables(db)
+
+    command.downgrade(config, BEFORE_PRICE_BINDINGS)
+    assert "price_bindings" not in _tables(db)
+
+    command.upgrade(config, "head")
+    assert "price_bindings" in _tables(db)
+
+
+def test_downgrade_refuses_rather_than_dropping_a_price_binding(migrated_db) -> None:
+    config, db = migrated_db
+    _exec(
+        db,
+        "INSERT INTO units (id, kind, identifier, name, created_at) "
+        "VALUES (900, 'security', 'X1', 'X', '2026-01-01')",
+        "INSERT INTO price_bindings (unit_id, plugin_name, symbol) VALUES (900, 'file', 'XYZ')",
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        command.downgrade(config, BEFORE_PRICE_BINDINGS)
+    assert "1 price binding" in str(exc_info.value)
+    assert "price_bindings" in _tables(db), "refusal must leave the schema untouched"
+
+
+def _insert_price(db: Path, day: str, source: str) -> None:
+    _exec(
+        db,
+        f"INSERT INTO prices (unit_id, price_date, price, source) VALUES (901, '{day}', 10, '{source}')",
+    )
+
+
+def test_prices_are_unique_per_unit_and_day_whatever_the_source(migrated_db) -> None:
+    config, db = migrated_db
+    _exec(
+        db,
+        "INSERT INTO units (id, kind, identifier, name, created_at) "
+        "VALUES (901, 'security', 'X2', 'X', '2026-01-01')",
+    )
+    _insert_price(db, "2026-03-02", "file")
+
+    with pytest.raises(sqlite3.IntegrityError, match="UNIQUE constraint failed"):
+        _insert_price(db, "2026-03-02", "alphavantage")
+
+    command.downgrade(config, BEFORE_PRICES_UNIQUE_PER_DAY)
+    _insert_price(db, "2026-03-02", "alphavantage")
+
+    _exec(db, "DELETE FROM prices WHERE source = 'alphavantage'")
+    command.upgrade(config, "head")
+    with pytest.raises(sqlite3.IntegrityError, match="UNIQUE constraint failed"):
+        _insert_price(db, "2026-03-02", "alphavantage")

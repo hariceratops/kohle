@@ -1,4 +1,6 @@
+from datetime import date
 from decimal import Decimal, InvalidOperation
+from typing import assert_never
 
 import click
 from tabulate import tabulate
@@ -6,7 +8,7 @@ from tabulate import tabulate
 from kohle.db.connection import session_local
 from kohle.domain.domain_errors import AccountNotFoundError
 from kohle.domain.models import DEFAULT_RULE_PRIORITY, AccountType, UnitKind
-from kohle.plugin.plugin_manager import load_plugins
+from kohle.plugin.plugin_manager import load_plugins, load_price_plugins
 from kohle.use_cases.accounts import AddAccount, ListAccount, ListChildAccounts
 from kohle.use_cases.classification import ListUnclassified, Reclassify
 from kohle.use_cases.journal import (
@@ -21,6 +23,17 @@ from kohle.use_cases.journal import (
     RecordSplitEntry,
 )
 from kohle.use_cases.operations import ListOperations
+from kohle.use_cases.prices import (
+    AlreadyStored,
+    AppendPrices,
+    FetchOutcome,
+    ListPriceTargets,
+    Priced,
+    SetPriceSource,
+    Unbound,
+    Unpriced,
+    call_price_plugins,
+)
 from kohle.use_cases.rules import AddRule, ListRules, RemoveRule
 from kohle.use_cases.splitting import (
     AddSplitGroup,
@@ -663,6 +676,90 @@ def settle_up_cmd(make_session, group_name: str | None):
             f'Settle with: kohle-cli record <date> "<description>" {transfer.quantity:.2f} '
             f"--from {payer} --to {payee}"
         )
+
+
+@cli.command()
+@click.argument("unit")
+@click.argument("plugin")
+@click.argument("symbol")
+@click.pass_obj
+def set_price_source_cmd(make_session, unit: str, plugin: str, symbol: str):
+    res = SetPriceSource(make_session()).execute(unit, plugin, symbol, sorted(load_price_plugins()))
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    binding = res.unwrap()
+    click.echo(f"Price source for {unit}: {binding.plugin_name} {binding.symbol}")
+
+
+def _fetch_row(outcome: FetchOutcome) -> dict[str, str]:
+    match outcome:
+        case Priced():
+            previous = outcome.previous
+            detail = f"previous {previous.price} on {previous.price_date}" if previous else "previous none"
+            return {
+                "unit": outcome.unit.identifier,
+                "source": f"{outcome.plugin_name}:{outcome.symbol}",
+                "outcome": "priced",
+                "date": str(outcome.close.price_date),
+                "close": str(outcome.close.price),
+                "detail": detail,
+            }
+        case AlreadyStored():
+            return {
+                "unit": outcome.unit.identifier,
+                "source": f"{outcome.plugin_name}:{outcome.symbol}",
+                "outcome": "already stored",
+                "date": str(outcome.price_date),
+                "close": "-",
+                "detail": "-",
+            }
+        case Unpriced():
+            return {
+                "unit": outcome.unit.identifier,
+                "source": f"{outcome.plugin_name}:{outcome.symbol}",
+                "outcome": "unpriced",
+                "date": "-",
+                "close": "-",
+                "detail": str(outcome.reason),
+            }
+        case Unbound():
+            return {
+                "unit": outcome.unit.identifier,
+                "source": "-",
+                "outcome": "unbound",
+                "date": "-",
+                "close": "-",
+                "detail": "-",
+            }
+        case _:
+            assert_never(outcome)
+
+
+@cli.command()
+@click.pass_obj
+def fetch_prices_cmd(make_session):
+    targets_res = ListPriceTargets(make_session()).execute()
+    if targets_res.is_err:
+        raise click.ClickException(str(targets_res.unwrap_err()))
+    targets = targets_res.unwrap()
+    if not targets.by_plugin and not targets.unbound:
+        click.echo("No held securities")
+        return
+
+    plugins = load_price_plugins() if targets.by_plugin else {}
+    fetched = call_price_plugins(targets, plugins)
+    report_res = AppendPrices(make_session()).execute(targets, fetched, date.today())  # noqa: DTZ011 - the user's local date, by design
+    if report_res.is_err:
+        raise click.ClickException(str(report_res.unwrap_err()))
+    report = report_res.unwrap()
+    outcomes = report.outcomes
+
+    click.echo(tabulate([_fetch_row(outcome) for outcome in outcomes], headers="keys"))
+    for unrequested in report.ignored:
+        click.echo(str(unrequested))
+    unpriced = sum(isinstance(outcome, Unpriced) for outcome in outcomes)
+    if unpriced:
+        raise click.ClickException(f"{unpriced} held securities unpriced")
 
 
 if __name__ == "__main__":

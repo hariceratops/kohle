@@ -1,3 +1,4 @@
+from datetime import date
 from decimal import Decimal
 
 
@@ -77,7 +78,7 @@ class NotASecurityUnit(UnitError):
         self.kind = kind
 
     def __str__(self) -> str:
-        return f"Unit {self.identifier!r} is a {self.kind}, not a security, and cannot be a traded instrument"
+        return f"Unit {self.identifier!r} is a {self.kind}, not a security"
 
 
 class DuplicateUnit(UnitError):
@@ -372,3 +373,79 @@ ReclassifyError = AccountError | JournalError | ClassificationError | SplitError
 # post_entry for the adjusting entry, and DuplicateLineInEntry for two
 # persons named twice in one invocation (design §4.3).
 SplitImportedEntryError = AccountError | JournalError | ClassificationError | SplitError
+
+
+class PriceError(Exception):
+    pass
+
+
+class UnknownPricePlugin(PriceError):
+    def __init__(self, name: str, available: list[str]) -> None:
+        super().__init__()
+        self.name = name
+        self.available = available
+
+    def __str__(self) -> str:
+        installed = ", ".join(self.available) if self.available else "none installed"
+        return f"Unknown price plugin {self.name!r}. Available: {installed}"
+
+
+class EmptyPriceSymbol(PriceError):
+    def __str__(self) -> str:
+        return "Price symbol cannot be empty"
+
+
+SetPriceSourceError = UnitError | PriceError
+
+
+class MissingCloseResult(Exception):
+    def __init__(self, symbol: str) -> None:
+        super().__init__()
+        self.symbol = symbol
+
+    def __str__(self) -> str:
+        return f"Plugin returned no result for symbol {self.symbol!r}"
+
+
+class NonPositivePrice(Exception):
+    def __init__(self, price: Decimal) -> None:
+        super().__init__()
+        self.price = price
+
+    def __str__(self) -> str:
+        return f"Close price {self.price} must be a positive finite number"
+
+
+class FutureCloseDate(Exception):
+    def __init__(self, price_date: date, today: date) -> None:
+        super().__init__()
+        self.price_date = price_date
+        self.today = today
+
+    def __str__(self) -> str:
+        return f"Close dated {self.price_date} is after today ({self.today})"
+
+
+class NonBaseCurrency(Exception):
+    def __init__(self, currency: str, base: str) -> None:
+        super().__init__()
+        self.currency = currency
+        self.base = base
+
+    def __str__(self) -> str:
+        return f"Close is in {self.currency!r}, but only {self.base} closes are accepted"
+
+
+class UnrequestedSymbol(Exception):
+    def __init__(self, plugin_name: str, symbol: str) -> None:
+        super().__init__()
+        self.plugin_name = plugin_name
+        self.symbol = symbol
+
+    def __str__(self) -> str:
+        return f"Plugin {self.plugin_name!r} returned a result for unrequested symbol {self.symbol!r}; ignored"
+
+
+PriceRejection = MissingCloseResult | NonPositivePrice | FutureCloseDate | NonBaseCurrency
+
+ListPriceTargetsError = BalanceError | PriceError

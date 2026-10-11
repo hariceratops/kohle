@@ -332,8 +332,9 @@ class Split(base, Archivable):
 
 
 class Price(base):
-    """Fetched valuation for a unit on a date. Written by price plugins, read
-    only by reporting — never by transaction recording."""
+    """Fetched valuation for a unit on a date. Written by `fetch-prices` from
+    plugin results, read only by reporting — never by transaction recording.
+    One row per unit per day, whatever the source."""
 
     __tablename__ = "prices"
 
@@ -346,7 +347,7 @@ class Price(base):
     unit: Mapped["Unit"] = relationship("Unit")
 
     __table_args__ = (
-        UniqueConstraint("unit_id", "price_date", "source", name="uq_price_unit_date_source"),
+        UniqueConstraint("unit_id", "price_date", name="uq_price_unit_date"),
     )
 
     def __eq__(self, other) -> bool:
@@ -354,8 +355,21 @@ class Price(base):
             isinstance(other, Price)
             and self.unit_id == other.unit_id
             and self.price_date == other.price_date
-            and self.source == other.source
         )
 
     def __repr__(self) -> str:
         return f"<Price(unit_id={self.unit_id}, date={self.price_date}, price={self.price})>"
+
+
+class PriceBinding(base):
+    """Where a security's price comes from: a plugin and the symbol it knows
+    the unit by. At most one per unit; no currency, the plugin reports it."""
+
+    __tablename__ = "price_bindings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    unit_id: Mapped[int] = mapped_column(ForeignKey("units.id"), nullable=False)
+    plugin_name: Mapped[str] = mapped_column(String, nullable=False)
+    symbol: Mapped[str] = mapped_column(String, nullable=False)
+
+    __table_args__ = (UniqueConstraint("unit_id", name="uq_price_binding_unit"),)
