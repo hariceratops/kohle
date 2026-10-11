@@ -10,7 +10,7 @@ Spec: `dev/specs/price-fetcher-plugin.md`
 
 ## Acceptance Criteria
 
-- A new migration changes `prices` uniqueness from
+- A new migration, off 029's revision, changes `prices` uniqueness from
   (`unit_id`, `price_date`, `source`) to (`unit_id`, `price_date`);
   `source` holds the plugin name. `tests/test_migration_downgrade.py` still
   passes.
@@ -28,7 +28,12 @@ Spec: `dev/specs/price-fetcher-plugin.md`
   `Operation` audit trail.
 - Output gives exactly one outcome per held security: priced by plugin X on
   date D with the previous stored close shown alongside; already stored for D;
+  unpriced, with a reason (an `Unavailable` reason, or the plugin's `Err`);
   or unbound. A held security with no binding is not an error.
+- A plugin `Err` leaves every unit bound to it unpriced with the plugin's
+  error as the reason, and writes no row for them; rows from other plugins in
+  the same run are still written.
+- The exit code is non-zero if any bound unit ends unpriced.
 - Running `fetch-prices` twice against an unchanged file writes nothing the
   second time and every unit reports "already stored". No code path updates
   or deletes a price row.

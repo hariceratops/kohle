@@ -22,6 +22,12 @@ Spec: `dev/specs/price-fetcher-plugin.md`
   `Unavailable(transient)` for every symbol it did not reach; this is not a
   whole-plugin `Err`. A recorded run throttled after the first symbol writes
   that symbol's close, reports the rest as transient, and exits non-zero.
+- Under a quota that cannot cover every bound symbol, symbols are requested
+  in order of oldest stored close first (a symbol with no stored close
+  first), so the gap between the freshest and the stalest price stays
+  bounded as holdings grow instead of the same alphabetical tail starving
+  every day. Ties break by symbol. The ordering is a pure function with its
+  own test.
 - A symbol the provider does not carry is `Unavailable(not_covered)`.
 - Closes are reported in EUR: binding a symbol is the user's assertion that it
   quotes in EUR, and the plugin makes no extra request to check.
