@@ -174,13 +174,13 @@ def test_net_worth_max_age_days_boundary(
 def test_net_worth_max_age_days_midrange(session_factory: sessionmaker, mixed_ledger: None) -> None:
     # FRESH is 1 day old and STALE 30: N=10 keeps the first fresh, N=0 makes it stale,
     # N=60 makes the second fresh. None sits within a day of N.
-    def statuses(max_age: int) -> tuple[str, str]:
+    def statuses(max_age: int) -> tuple[bool, bool]:
         result = CliRunner().invoke(cli, ["net-worth", "--max-age-days", str(max_age)], obj=session_factory)
         assert result.exit_code == 0, result.output
         rows = result.output.splitlines()
         fresh = next(r for r in rows if " FRESH " in r)
         stale = next(r for r in rows if " STALE " in r)
-        return ("fresh" in fresh, "fresh" in stale)  # type: ignore[return-value]
+        return ("fresh" in fresh, "fresh" in stale)
 
     assert statuses(10) == (True, False)
     assert statuses(60) == (True, True)

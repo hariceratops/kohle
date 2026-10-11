@@ -393,10 +393,7 @@ def balance_cmd(make_session, account_name: str, max_age_days: int):
         rows.append({
             "unit": "Total (base currency)",
             "quantity": valued[0].balance.quantity,
-            "price": None,
-            "price date": None,
-            "market value": valued[0].balance.quantity,
-            "status": None,
+            **_market_columns(valued[0]),
             "average cost": None,
         })
     # missingval renders None as "-" without putting a str into the
@@ -404,7 +401,7 @@ def balance_cmd(make_session, account_name: str, max_age_days: int):
     # the whole column as non-numeric, silently disabling floatfmt for
     # every other row in it (not just the one with the missing value).
     click.echo(tabulate(rows, headers="keys", floatfmt=".2f", missingval="-"))
-    # Gated on M, not on "any non-base row": a sold-out security is a
+    # Gated on `holdings`, not on "any non-base row": a sold-out security is a
     # non-base row but not a holding. The total sums `valued`, never `rows`,
     # so the restatement row cannot be counted.
     summary = summarise(valued)

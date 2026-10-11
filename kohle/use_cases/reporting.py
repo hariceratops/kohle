@@ -68,12 +68,12 @@ def at_market(rows: Iterable[ValuedBalance]) -> Decimal:
 
 @dataclass(frozen=True, slots=True)
 class EstimateSummary:
-    holdings: int  # M
-    stale: int  # S
-    no_price: int  # C
+    holdings: int
+    stale: int
+    no_price: int
 
     @property
-    def estimated(self) -> int:  # K
+    def estimated(self) -> int:
         return self.stale + self.no_price
 
 
