@@ -215,3 +215,35 @@ class AppendPrices(UnitOfWork[FetchReport, PriceError]):
 
 def _unit_identifier(outcome: FetchOutcome) -> str:
     return outcome.unit.identifier
+
+
+@dataclass(frozen=True, slots=True)
+class Fresh:
+    close: Price
+
+
+@dataclass(frozen=True, slots=True)
+class Stale:
+    close: Price
+
+
+@dataclass(frozen=True, slots=True)
+class NoClose:
+    pass
+
+
+LatestClose = Fresh | Stale | NoClose
+
+
+def latest_close(
+    ctx: DbTransactionContext, unit_id: int, today: date, max_age_days: int = 7
+) -> Result[LatestClose, PriceError]:
+    latest_res = latest_price_service(ctx, unit_id)
+    if latest_res.is_err:
+        return Result.err(latest_res.unwrap_err())
+    close = latest_res.unwrap()
+    if close is None:
+        return Result.ok(NoClose())
+    if (today - close.price_date).days <= max_age_days:
+        return Result.ok(Fresh(close))
+    return Result.ok(Stale(close))
