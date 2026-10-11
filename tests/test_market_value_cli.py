@@ -89,12 +89,34 @@ def test_net_worth_columns_and_lines(session_factory: sessionmaker, mixed_ledger
     assert "Net worth (at market): 1050.00" in lines
 
 
-@pytest.mark.skip(reason="scaffold: issue 036")
-def test_net_worth_always_prints_market_and_summary() -> None:
-    # TODO(036) — one test per site:
-    #   - euro-only ledger (M = 0): last two lines are 'Net worth (at market): X' and '0 of 0 holdings estimated'
-    #   - mixed ledger: the summary carries K, M, S and C
-    raise NotImplementedError
+def test_net_worth_summary_on_a_euro_only_ledger(session_factory: sessionmaker) -> None:
+    with session_factory() as session:
+        ctx = DbTransactionContext(session)
+        AddAccount(session).execute(PEOPLE_ROOT, AccountType.asset).unwrap()
+        checking = add_account_service(ctx, "Checking", AccountType.asset, "DE1").unwrap()
+        salary = add_account_service(ctx, "Salary", AccountType.income).unwrap()
+        eur = add_unit_service(ctx, "EUR", "Euro", UnitKind.currency).unwrap()
+        add_journal_entry_service(
+            ctx, date(2026, 3, 1), "salary", "Salary",
+            [
+                LineSpec(checking.id, eur.id, Decimal(1000), EUR, is_debit=True),
+                LineSpec(salary.id, eur.id, Decimal(1000), EUR, is_debit=False),
+            ],
+        ).unwrap()
+        session.commit()
+
+    result = CliRunner().invoke(cli, ["net-worth"], obj=session_factory)
+    assert result.exit_code == 0, result.output
+    assert result.output.splitlines()[-2:] == ["Net worth (at market): 1000.00", "0 of 0 holdings estimated"]
+
+
+def test_net_worth_summary_on_a_mixed_ledger(session_factory: sessionmaker, mixed_ledger: None) -> None:
+    result = CliRunner().invoke(cli, ["net-worth"], obj=session_factory)
+    assert result.exit_code == 0, result.output
+    assert result.output.splitlines()[-2:] == [
+        "Net worth (at market): 1050.00",
+        "2 of 3 holdings estimated (1 stale, 1 at cost)",
+    ]
 
 
 @pytest.mark.skip(reason="scaffold: issue 037")

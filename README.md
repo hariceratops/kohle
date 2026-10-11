@@ -362,6 +362,7 @@ Receivables (People)  EUR                16.00     -     -                      
 
 Net worth (at cost): 11537.00
 Net worth (at market): 11677.50
+2 of 3 holdings estimated (1 stale, 1 at cost)
 ```
 
 The total folds receivables in rather than reporting them next to net worth,
@@ -386,6 +387,11 @@ The `status` column says where a market value came from:
 
 `Net worth (at cost)` is unchanged and `Net worth (at market)` is the sum of
 every row's market value in both sections. Receivables stay at face value.
+
+The last line counts the holdings whose market value is an estimate: rows
+other than euros with a nonzero quantity (3 above), of which those with a
+`stale` or `no price (at cost)` status are estimated. It always prints, as
+`0 of M holdings estimated` when none are.
 
 ### Prices
 Current prices come from price plugins, a second plugin kind in the same

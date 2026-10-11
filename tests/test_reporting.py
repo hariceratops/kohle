@@ -167,11 +167,11 @@ def test_valued_net_worth_on_a_mixed_ledger(session: Session, ledger: dict) -> N
     assert report.at_cost.net_worth_at_cost == plain.net_worth_at_cost
 
 
-@pytest.mark.skip(reason="scaffold: issue 036")
-def test_net_worth_estimates() -> None:
-    # TODO(036) — one test per site:
-    #   - estimates gives K, M, S and C on the mixed ledger
-    raise NotImplementedError
+def test_net_worth_estimates(session: Session, ledger: dict) -> None:
+    summary = ValuedNetWorth(session).execute(TODAY, 7).unwrap().estimates
+
+    # Non-base nonzero rows: FRESH, STALE, NEVER. SOLD is zero; both EUR rows are base.
+    assert (summary.holdings, summary.stale, summary.no_price, summary.estimated) == (3, 1, 1, 2)
 
 
 @pytest.mark.skip(reason="scaffold: issue 038")

@@ -36,7 +36,7 @@ from kohle.use_cases.prices import (
     Unpriced,
     call_price_plugins,
 )
-from kohle.use_cases.reporting import ValuedBalance, ValuedNetWorth
+from kohle.use_cases.reporting import EstimateSummary, ValuedBalance, ValuedNetWorth
 from kohle.use_cases.rules import AddRule, ListRules, RemoveRule
 from kohle.use_cases.splitting import (
     AddSplitGroup,
@@ -648,6 +648,15 @@ def _net_worth_rows(section: str, rows: list[ValuedBalance]) -> list[dict]:
     ]
 
 
+def _estimates_line(summary: EstimateSummary) -> str:
+    if summary.estimated == 0:
+        return f"0 of {summary.holdings} holdings estimated"
+    return (
+        f"{summary.estimated} of {summary.holdings} holdings estimated "
+        f"({summary.stale} stale, {summary.no_price} at cost)"
+    )
+
+
 @cli.command()
 @click.pass_obj
 def net_worth_cmd(make_session):
@@ -665,6 +674,7 @@ def net_worth_cmd(make_session):
     # rather than a bare number the user has to trust.
     click.echo(f"\nNet worth (at cost): {report.at_cost.net_worth_at_cost:.2f}")
     click.echo(f"Net worth (at market): {report.net_worth_at_market:.2f}")
+    click.echo(_estimates_line(report.estimates))
 
 
 @cli.command()

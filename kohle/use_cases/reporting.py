@@ -65,6 +65,32 @@ def at_market(rows: Iterable[ValuedBalance]) -> Decimal:
 
 
 @dataclass(frozen=True, slots=True)
+class EstimateSummary:
+    holdings: int  # M
+    stale: int  # S
+    no_price: int  # C
+
+    @property
+    def estimated(self) -> int:  # K
+        return self.stale + self.no_price
+
+
+def summarise(rows: Iterable[ValuedBalance]) -> EstimateSummary:
+    # `close is not None` is exactly the lookup condition in value_balances,
+    # so M is the nonzero non-base rows without a second definition.
+    holdings = stale = no_price = 0
+    for r in rows:
+        if r.close is None:
+            continue
+        holdings += 1
+        if isinstance(r.close, Stale):
+            stale += 1
+        elif isinstance(r.close, NoClose):
+            no_price += 1
+    return EstimateSummary(holdings, stale, no_price)
+
+
+@dataclass(frozen=True, slots=True)
 class ValuedNetWorthReport:
     at_cost: NetWorthReport
     own: list[ValuedBalance]
@@ -73,6 +99,10 @@ class ValuedNetWorthReport:
     @property
     def net_worth_at_market(self) -> Decimal:
         return at_market(self.own) + at_market(self.receivables)
+
+    @property
+    def estimates(self) -> EstimateSummary:
+        return summarise(self.own + self.receivables)
 
 
 class ValuedNetWorth(UnitOfWork[ValuedNetWorthReport, ValuationError]):

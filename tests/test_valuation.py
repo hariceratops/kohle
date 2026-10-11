@@ -11,7 +11,12 @@ import pytest
 from kohle.domain.models import Price
 from kohle.use_cases.journal import UnitBalance
 from kohle.use_cases.prices import Fresh, NoClose, Stale
-from kohle.use_cases.reporting import ValuedBalance, at_market
+from kohle.use_cases.reporting import (
+    EstimateSummary,
+    ValuedBalance,
+    at_market,
+    summarise,
+)
 
 
 def _balance(identifier: str, quantity: str, average_cost: str | None) -> UnitBalance:
@@ -62,10 +67,25 @@ def test_at_market_totals() -> None:
     assert at_market([]) == Decimal(0)
 
 
-@pytest.mark.skip(reason="scaffold: issue 036")
 def test_summarise_counts() -> None:
-    # TODO(036) — one test per site:
-    #   - mixed list (euro, fresh, stale, no close, a zero row): K, M, S and C asserted
-    #   - an empty list gives all zeros
-    #   - a euro-only list gives M = 0, balance's 'print neither line' case
-    raise NotImplementedError
+    rows = [
+        ValuedBalance(_balance("EUR", "100", "1"), None),
+        ValuedBalance(_balance("A", "2", "10"), Fresh(_close("15"))),
+        ValuedBalance(_balance("B", "1", "7"), Stale(_close("8"))),
+        ValuedBalance(_balance("C", "4", "2"), NoClose()),
+        ValuedBalance(_balance("D", "1", "3"), NoClose()),
+        ValuedBalance(_balance("E", "0", None), None),
+    ]
+    summary = summarise(rows)
+    assert (summary.holdings, summary.stale, summary.no_price, summary.estimated) == (4, 1, 2, 3)
+
+
+def test_summarise_of_nothing_is_all_zeros() -> None:
+    assert summarise([]) == EstimateSummary(0, 0, 0)
+
+
+def test_summarise_of_a_euro_only_list_has_no_holdings() -> None:
+    rows = [ValuedBalance(_balance("EUR", "100", "1"), None), ValuedBalance(_balance("X", "0", None), None)]
+    summary = summarise(rows)
+    assert summary.holdings == 0
+    assert summary.estimated == 0
