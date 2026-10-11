@@ -104,8 +104,9 @@ kohle-cli list-operations                             # the audit trail
 ```
 
 `balance` reports one row per unit with its average cost, and rolls up across
-an account's whole subtree. There is no market valuation: without a price
-feed the only value information available is what was paid.
+an account's whole subtree. There is no market valuation yet: fetched prices
+are stored (see [Prices](#prices)) but no report reads them, so the only value
+information `balance` shows is what was paid.
 
 `entries-in-period` shows the counterparty an imported line came from, or `-`
 for entries made by hand, which have none.
@@ -368,9 +369,63 @@ with a negative balance (you owe them) lowers the total; a positive one
 
 Every figure is reported **at recorded cost**, not current market value —
 "at cost" is in the output label because a holding bought at 100 and now
-worth 140 is still reported at 100. Market valuation needs a price feed,
-which this codebase doesn't have yet; that's the separate, deferred
-`portfolio-and-profit-reporting` work.
+worth 140 is still reported at 100. Prices are fetched and stored now (see
+[Prices](#prices)), but market valuation, which reads them, is the separate,
+deferred `portfolio-and-profit-reporting` work.
+
+### Prices
+Current prices come from price plugins, a second plugin kind in the same
+`kohle.plugins` entry-point group as the importers. Fetching is always an
+explicit command; recording, importing and reports never fetch, and recorded
+entries never depend on a price.
+
+```
+kohle-cli set-price-source IE00B4L5Y983 alphavantage VWCE.DEX
+kohle-cli set-price-source DE0005190003 file BMW
+kohle-cli fetch-prices
+```
+
+`set-price-source UNIT PLUGIN SYMBOL` binds a `security` unit to exactly one
+plugin and the symbol that plugin knows it by; running it again replaces the
+binding. The symbol is never guessed. Binding a symbol is also your assertion
+that it quotes in EUR: only EUR closes are accepted, and a wrongly bound
+foreign-currency symbol cannot be caught.
+
+`fetch-prices` asks each plugin once for the latest daily close of the
+securities you hold that are bound to it, and appends it to the price history.
+It prints one row per held security: `priced` (with the previous stored close),
+`already stored`, `unpriced` with a reason, or `unbound`. It exits non-zero if
+any bound unit ends unpriced; an unbound unit alone is not an error. There is
+no fallback to another plugin: to change a unit's source, rebind it. History is
+append-only and a date is stored once, so re-running is a no-op, and a wrong
+stored close cannot be corrected in this version.
+
+Every close is checked before it is written: the price must be finite and above
+zero, the date not in the future, the currency EUR. A rejected close leaves only
+that symbol's units unpriced.
+
+#### Bundled price plugins
+- `file`: reads `identifier,date,close` rows from the CSV named by the
+  environment variable `KOHLE_PRICE_FILE` and returns each symbol's most recent
+  row. It works offline, and is the way to price a unit no other plugin covers.
+- `alphavantage`: Alpha Vantage `TIME_SERIES_DAILY`, with the API key in
+  `KOHLE_ALPHAVANTAGE_KEY`. It stores the latest daily bar dated before today
+  (UTC), so a trading day still in progress is never stored. The free tier
+  allows one symbol per request and about 25 requests a day; symbols are
+  requested oldest stored close first so prices rotate, and a throttled run
+  keeps what it fetched and reports the rest as `transient`. Symbols carry the
+  exchange suffix (for example `.DEX`), so look up the EUR listing yourself.
+
+Physical gold and other commodity units are not priced yet.
+
+#### Writing price plugins
+Subclass `PriceFetcherPlugin` from `kohle.plugin.price_plugin` and register it
+under `kohle.plugins` as for importers. The one method takes the requested
+symbols and returns, per symbol, a `Close` (date, `Decimal` price, currency) or
+`Unavailable` (`no_symbol`, `not_covered` or `transient`); a failure of the
+whole plugin, such as being offline or a missing key, is an error value. A
+plugin must not do I/O or read configuration when constructed, and must spend
+requests in the order given. Nothing in core needs to change.
 
 ### Writing importer plugins
 A new plugin can be rolled out by defining an entry point to kohle plugins

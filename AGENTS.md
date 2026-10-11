@@ -18,7 +18,10 @@ transaction. Cash in the base currency is stored at price 1, so cash lines
 and asset lines have the same shape and reporting never branches on which
 kind it is. Prices fetched later live in their own table and are read only by
 reporting, never by transaction recording — a recorded entry must not depend
-on what a price source said on any particular day.
+on what a price source said on any particular day. `fetch-prices` is the only
+writer of that table. It calls price plugins, a second plugin kind in the same
+entry-point group as the importers, each unit bound to exactly one plugin and
+symbol by `set-price-source`.
 
 Accounts form a tree and everything is an account: bank accounts, virtual
 sub-accounts for earmarked savings, instruments, expense categories, and
