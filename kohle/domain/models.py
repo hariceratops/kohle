@@ -332,8 +332,9 @@ class Split(base, Archivable):
 
 
 class Price(base):
-    """Fetched valuation for a unit on a date. Written by price plugins, read
-    only by reporting — never by transaction recording."""
+    """Fetched valuation for a unit on a date. Written by `fetch-prices` from
+    plugin results, read only by reporting — never by transaction recording.
+    One row per unit per day, whatever the source."""
 
     __tablename__ = "prices"
 
@@ -346,7 +347,7 @@ class Price(base):
     unit: Mapped["Unit"] = relationship("Unit")
 
     __table_args__ = (
-        UniqueConstraint("unit_id", "price_date", "source", name="uq_price_unit_date_source"),
+        UniqueConstraint("unit_id", "price_date", name="uq_price_unit_date"),
     )
 
     def __eq__(self, other) -> bool:
@@ -354,7 +355,6 @@ class Price(base):
             isinstance(other, Price)
             and self.unit_id == other.unit_id
             and self.price_date == other.price_date
-            and self.source == other.source
         )
 
     def __repr__(self) -> str:

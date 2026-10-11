@@ -1,10 +1,12 @@
 from collections.abc import Sequence
+from datetime import date
+from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
 from kohle.core.result import Result
 from kohle.domain.domain_errors import PriceError
-from kohle.domain.models import PriceBinding
+from kohle.domain.models import Price, PriceBinding
 from kohle.infrastructure.crud import crud_create, crud_retrieve, crud_update
 from kohle.infrastructure.transaction_context import DbTransactionContext
 
@@ -73,3 +75,42 @@ def set_price_binding_service(
     if binding.plugin_name == plugin_name and binding.symbol == symbol:
         return Result.ok(binding)
     return _update_price_binding_service(ctx, binding.id, plugin_name, symbol)
+
+
+@crud_create
+def add_price_service(
+    ctx: DbTransactionContext, unit_id: int, price_date: date, price: Decimal, source: str
+) -> Result[Price, PriceError]:
+    def op(session: Session) -> Price:
+        row = Price(unit_id=unit_id, price_date=price_date, price=price, source=source)
+        session.add(row)
+        return row
+
+    return ctx.run(op).map_err(lambda err: PriceError(str(err)))
+
+
+@crud_retrieve
+def price_exists_service(
+    ctx: DbTransactionContext, unit_id: int, price_date: date
+) -> Result[bool, PriceError]:
+    def op(session: Session) -> bool:
+        return (
+            session.query(Price.id)
+            .filter(Price.unit_id == unit_id, Price.price_date == price_date)
+            .first()
+        ) is not None
+
+    return ctx.run(op).map_err(lambda err: PriceError(str(err)))
+
+
+@crud_retrieve
+def latest_price_service(ctx: DbTransactionContext, unit_id: int) -> Result[Price | None, PriceError]:
+    def op(session: Session) -> Price | None:
+        return (
+            session.query(Price)
+            .filter(Price.unit_id == unit_id)
+            .order_by(Price.price_date.desc())
+            .first()
+        )
+
+    return ctx.run(op).map_err(lambda err: PriceError(str(err)))

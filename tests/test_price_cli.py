@@ -4,16 +4,30 @@
 """
 
 from collections.abc import Sequence
+from datetime import date
+from decimal import Decimal
+from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import sessionmaker
 
 from kohle.app.cli.cli import cli
+from kohle.app.plugins.kohle_file_price_fetcher import FilePriceFetcher
 from kohle.core.result import Result
-from kohle.domain.models import PriceBinding, UnitKind
+from kohle.domain.models import (
+    AccountType,
+    OperationGroup,
+    Price,
+    PriceBinding,
+    UnitKind,
+)
+from kohle.infrastructure.transaction_context import DbTransactionContext
 from kohle.plugin.price_plugin import PriceFetcherPlugin, PriceFetchError, PriceResult
+from kohle.services.account_services import add_account_service
+from kohle.services.journal_services import LineSpec, add_journal_entry_service
+from kohle.services.unit_services import get_unit_by_identifier_service
 from kohle.use_cases.units import AddUnit
 
 
@@ -71,25 +85,95 @@ def test_set_price_source_refusals_exit_non_zero(
         assert session.scalars(select(PriceBinding)).all() == []
 
 
-@pytest.mark.skip(reason="scaffold: issue 030")
-def test_fetch_prices_with_the_file_plugin() -> None:
-    # TODO(030) — one test per site:
-    #   - real FilePriceFetcher, KOHLE_PRICE_FILE at a temp file: priced, then a re-run reports already stored for every unit
-    raise NotImplementedError
+def _hold(session_factory: sessionmaker, *identifiers: str) -> None:
+    with session_factory() as session:
+        ctx = DbTransactionContext(session)
+        depot = add_account_service(ctx, "Depot", AccountType.asset).unwrap()
+        cash = add_account_service(ctx, "Cash", AccountType.asset).unwrap()
+        eur = get_unit_by_identifier_service(ctx, "EUR").unwrap()
+        for identifier in identifiers:
+            unit = get_unit_by_identifier_service(ctx, identifier).unwrap()
+            add_journal_entry_service(
+                ctx, date(2026, 1, 1), f"buy-{identifier}", identifier,
+                [
+                    LineSpec(depot.id, unit.id, Decimal(1), Decimal(10), is_debit=True),
+                    LineSpec(cash.id, eur.id, Decimal(10), Decimal(1), is_debit=False),
+                ],
+            ).unwrap()
+        session.commit()
 
 
-@pytest.mark.skip(reason="scaffold: issue 030")
-def test_unbound_only_exits_zero() -> None:
-    # TODO(030) — one test per site:
-    #   - an unbound held unit is the only gap
-    raise NotImplementedError
+def _fetch_prices(ledger: sessionmaker, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("kohle.app.cli.cli.load_price_plugins", lambda: {"file": FilePriceFetcher()})
+    return CliRunner().invoke(cli, ["fetch-prices"], obj=ledger)
 
 
-@pytest.mark.skip(reason="scaffold: issue 030")
-def test_unset_price_file_exits_one() -> None:
-    # TODO(030) — one test per site:
-    #   - message per unit
-    raise NotImplementedError
+def _bind(ledger: sessionmaker, monkeypatch: pytest.MonkeyPatch, unit: str, symbol: str) -> None:
+    monkeypatch.setattr("kohle.app.cli.cli.load_price_plugins", lambda: {"file": FilePriceFetcher()})
+    result = CliRunner().invoke(cli, ["set-price-source", unit, "file", symbol], obj=ledger)
+    assert result.exit_code == 0, result.output
+
+
+def test_fetch_prices_with_the_file_plugin(
+    ledger: sessionmaker, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    with ledger() as session:
+        AddUnit(session).execute("X2", "Y", UnitKind.security).unwrap()
+    _hold(ledger, "X1", "X2")
+    _bind(ledger, monkeypatch, "X1", "XYZ")
+    _bind(ledger, monkeypatch, "X2", "ABC")
+    price_file = tmp_path / "prices.csv"
+    price_file.write_text("identifier,date,close\nXYZ,2026-03-02,12.5\nABC,2026-03-02,3\n", encoding="utf-8")
+    monkeypatch.setenv("KOHLE_PRICE_FILE", str(price_file))
+
+    first = _fetch_prices(ledger, monkeypatch)
+
+    assert first.exit_code == 0, first.output
+    assert first.output.count("priced") == 2
+    assert "file:XYZ" in first.output
+    assert "previous none" in first.output
+    with ledger() as session:
+        assert sorted((p.price, p.source) for p in session.scalars(select(Price))) == [
+            (Decimal(3), "file"),
+            (Decimal("12.5"), "file"),
+        ]
+
+    with ledger() as session:
+        groups_after_first = session.scalar(select(func.count()).select_from(OperationGroup))
+
+    second = _fetch_prices(ledger, monkeypatch)
+
+    assert second.exit_code == 0, second.output
+    assert second.output.count("already stored") == 2
+    with ledger() as session:
+        assert len(session.scalars(select(Price)).all()) == 2
+        assert session.scalar(select(func.count()).select_from(OperationGroup)) == groups_after_first
+
+
+def test_unbound_only_exits_zero(ledger: sessionmaker, monkeypatch: pytest.MonkeyPatch) -> None:
+    _hold(ledger, "X1")
+
+    result = _fetch_prices(ledger, monkeypatch)
+
+    assert result.exit_code == 0, result.output
+    assert "unbound" in result.output
+
+
+def test_unset_price_file_exits_one(
+    ledger: sessionmaker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _hold(ledger, "X1")
+    _bind(ledger, monkeypatch, "X1", "XYZ")
+    monkeypatch.delenv("KOHLE_PRICE_FILE", raising=False)
+
+    result = _fetch_prices(ledger, monkeypatch)
+
+    assert result.exit_code == 1
+    assert "unpriced" in result.output
+    assert "KOHLE_PRICE_FILE is not set" in result.output
+    assert "1 held securities unpriced" in result.output
+    with ledger() as session:
+        assert session.scalars(select(Price)).all() == []
 
 
 @pytest.mark.skip(reason="scaffold: issue 033")
@@ -99,8 +183,8 @@ def test_alphavantage_throttle_scenario() -> None:
     raise NotImplementedError
 
 
-@pytest.mark.skip(reason="scaffold: issue 030")
-def test_nothing_held_says_so() -> None:
-    # TODO(030) — one test per site:
-    #   - prints `No held securities`
-    raise NotImplementedError
+def test_nothing_held_says_so(ledger: sessionmaker, monkeypatch: pytest.MonkeyPatch) -> None:
+    result = _fetch_prices(ledger, monkeypatch)
+
+    assert result.exit_code == 0, result.output
+    assert "No held securities" in result.output

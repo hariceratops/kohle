@@ -1,4 +1,5 @@
 from decimal import Decimal, InvalidOperation
+from typing import assert_never
 
 import click
 from tabulate import tabulate
@@ -21,7 +22,17 @@ from kohle.use_cases.journal import (
     RecordSplitEntry,
 )
 from kohle.use_cases.operations import ListOperations
-from kohle.use_cases.prices import SetPriceSource
+from kohle.use_cases.prices import (
+    AlreadyStored,
+    AppendPrices,
+    FetchOutcome,
+    ListPriceTargets,
+    Priced,
+    SetPriceSource,
+    Unbound,
+    Unpriced,
+    call_price_plugins,
+)
 from kohle.use_cases.rules import AddRule, ListRules, RemoveRule
 from kohle.use_cases.splitting import (
     AddSplitGroup,
@@ -677,6 +688,74 @@ def set_price_source_cmd(make_session, unit: str, plugin: str, symbol: str):
         raise click.ClickException(str(res.unwrap_err()))
     binding = res.unwrap()
     click.echo(f"Price source for {unit}: {binding.plugin_name} {binding.symbol}")
+
+
+def _fetch_row(outcome: FetchOutcome) -> dict[str, str]:
+    match outcome:
+        case Priced():
+            previous = outcome.previous
+            detail = f"previous {previous.price} on {previous.price_date}" if previous else "previous none"
+            return {
+                "unit": outcome.unit.identifier,
+                "source": f"{outcome.plugin_name}:{outcome.symbol}",
+                "outcome": "priced",
+                "date": str(outcome.close.price_date),
+                "close": str(outcome.close.price),
+                "detail": detail,
+            }
+        case AlreadyStored():
+            return {
+                "unit": outcome.unit.identifier,
+                "source": f"{outcome.plugin_name}:{outcome.symbol}",
+                "outcome": "already stored",
+                "date": str(outcome.price_date),
+                "close": "-",
+                "detail": "-",
+            }
+        case Unpriced():
+            return {
+                "unit": outcome.unit.identifier,
+                "source": f"{outcome.plugin_name}:{outcome.symbol}",
+                "outcome": "unpriced",
+                "date": "-",
+                "close": "-",
+                "detail": str(outcome.reason),
+            }
+        case Unbound():
+            return {
+                "unit": outcome.unit.identifier,
+                "source": "-",
+                "outcome": "unbound",
+                "date": "-",
+                "close": "-",
+                "detail": "-",
+            }
+        case _:
+            assert_never(outcome)
+
+
+@cli.command()
+@click.pass_obj
+def fetch_prices_cmd(make_session):
+    targets_res = ListPriceTargets(make_session()).execute()
+    if targets_res.is_err:
+        raise click.ClickException(str(targets_res.unwrap_err()))
+    targets = targets_res.unwrap()
+    if not targets.by_plugin and not targets.unbound:
+        click.echo("No held securities")
+        return
+
+    plugins = load_price_plugins() if targets.by_plugin else {}
+    fetched = call_price_plugins(targets, plugins)
+    report_res = AppendPrices(make_session()).execute(targets, fetched)
+    if report_res.is_err:
+        raise click.ClickException(str(report_res.unwrap_err()))
+    outcomes = report_res.unwrap().outcomes
+
+    click.echo(tabulate([_fetch_row(outcome) for outcome in outcomes], headers="keys"))
+    unpriced = sum(isinstance(outcome, Unpriced) for outcome in outcomes)
+    if unpriced:
+        raise click.ClickException(f"{unpriced} held securities unpriced")
 
 
 if __name__ == "__main__":

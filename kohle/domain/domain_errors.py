@@ -395,3 +395,15 @@ class EmptyPriceSymbol(PriceError):
 
 
 SetPriceSourceError = UnitError | PriceError
+
+
+class MissingCloseResult(Exception):
+    def __init__(self, symbol: str) -> None:
+        super().__init__()
+        self.symbol = symbol
+
+    def __str__(self) -> str:
+        return f"Plugin returned no result for symbol {self.symbol!r}"
+
+
+ListPriceTargetsError = BalanceError | PriceError

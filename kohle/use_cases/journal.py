@@ -26,7 +26,7 @@ from kohle.domain.domain_errors import (
     UnitNotFoundError,
     UnknownInstruments,
 )
-from kohle.domain.models import AccountType, JournalEntry, JournalLine, UnitKind
+from kohle.domain.models import AccountType, JournalEntry, JournalLine, Unit, UnitKind
 from kohle.infrastructure.transaction_context import DbTransactionContext
 from kohle.infrastructure.uow import UnitOfWork
 from kohle.plugin.importer_plugin import CashRow, SecurityRow, StatementRow
@@ -596,6 +596,30 @@ def account_balance(ctx: DbTransactionContext, account_id: int) -> Result[list[U
         return Result.err(lines_res.unwrap_err())
 
     return Result.ok(aggregate_by_unit(lines_res.unwrap()))
+
+
+def held_units(ctx: DbTransactionContext) -> Result[list[Unit], BalanceError]:
+    """Units with a nonzero net quantity across every account, by identifier.
+
+    Folded in Python rather than summed in SQL: SQLite stores NUMERIC as REAL,
+    so a SQL SUM of 0.1 + 0.2 - 0.3 is not zero and a sold-out fractional
+    position would count as held for ever."""
+    accounts_res = list_accounts_service(ctx)
+    if accounts_res.is_err:
+        return Result.err(accounts_res.unwrap_err())
+
+    lines_res = account_lines_service(ctx, [account.id for account in accounts_res.unwrap()])
+    if lines_res.is_err:
+        return Result.err(lines_res.unwrap_err())
+    lines = lines_res.unwrap()
+
+    units = {line.unit.identifier: line.unit for line in lines}
+    held = [
+        units[balance.unit_identifier]
+        for balance in aggregate_by_unit(lines)
+        if balance.quantity != 0
+    ]
+    return Result.ok(sorted(held, key=lambda unit: unit.identifier))
 
 
 class QueryAccountBalance(UnitOfWork[list[UnitBalance], BalanceError]):
