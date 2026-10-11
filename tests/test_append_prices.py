@@ -12,7 +12,14 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from kohle.core.result import Result
-from kohle.domain.domain_errors import MissingCloseResult, UnknownPricePlugin
+from kohle.domain.domain_errors import (
+    FutureCloseDate,
+    MissingCloseResult,
+    NonBaseCurrency,
+    NonPositivePrice,
+    UnknownPricePlugin,
+    UnrequestedSymbol,
+)
 from kohle.domain.models import (
     AccountType,
     Operation,
@@ -47,6 +54,7 @@ from kohle.use_cases.prices import (
 )
 
 DAY = date(2026, 3, 2)
+TODAY = date(2026, 3, 3)
 
 
 class _FakePlugin(PriceFetcherPlugin):
@@ -139,7 +147,7 @@ def test_every_held_security_gets_exactly_one_outcome(session: Session, ledger: 
         },
     )
 
-    report = AppendPrices(session).execute(targets, fetched).unwrap()
+    report = AppendPrices(session).execute(targets, fetched, TODAY).unwrap()
 
     by_unit = {outcome.unit.identifier: outcome for outcome in report.outcomes}
     assert [o.unit.identifier for o in report.outcomes] == ["A", "B", "C", "D"]
@@ -168,7 +176,7 @@ def test_previous_close_is_shown_alongside(session: Session, ledger: dict[str, U
     fetched = call_price_plugins(targets, {"file": _FakePlugin("file", Result.ok({"SHARED": _close("12")})),
                                            "other": _FakePlugin("other", Result.ok({}))})
 
-    report = AppendPrices(session).execute(targets, fetched).unwrap()
+    report = AppendPrices(session).execute(targets, fetched, TODAY).unwrap()
 
     priced = next(o for o in report.outcomes if o.unit.identifier == "A")
     assert isinstance(priced, Priced)
@@ -182,10 +190,10 @@ def test_second_run_writes_nothing(session: Session, ledger: dict[str, Unit]) ->
         "file": _FakePlugin("file", Result.ok({"SHARED": _close("12")})),
         "other": _FakePlugin("other", Result.ok({"CCC": _close("5")})),
     }
-    AppendPrices(session).execute(targets, call_price_plugins(targets, plugins)).unwrap()
+    AppendPrices(session).execute(targets, call_price_plugins(targets, plugins), TODAY).unwrap()
     rows, groups = len(_stored(session)), _groups(session)
 
-    report = AppendPrices(session).execute(targets, call_price_plugins(targets, plugins)).unwrap()
+    report = AppendPrices(session).execute(targets, call_price_plugins(targets, plugins), TODAY).unwrap()
 
     assert [type(o) for o in report.outcomes] == [AlreadyStored, AlreadyStored, AlreadyStored, Unbound]
     assert len(_stored(session)) == rows == 3
@@ -202,7 +210,7 @@ def test_plugin_err_isolated_from_other_plugins(session: Session, ledger: dict[s
         },
     )
 
-    report = AppendPrices(session).execute(targets, fetched).unwrap()
+    report = AppendPrices(session).execute(targets, fetched, TODAY).unwrap()
 
     by_unit = {o.unit.identifier: o for o in report.outcomes}
     for identifier in ("A", "B"):
@@ -217,7 +225,7 @@ def test_uninstalled_plugin_leaves_its_units_unpriced(session: Session, ledger: 
     targets = _targets(session)
     fetched = call_price_plugins(targets, {"file": _FakePlugin("file", Result.ok({"SHARED": _close("12")}))})
 
-    report = AppendPrices(session).execute(targets, fetched).unwrap()
+    report = AppendPrices(session).execute(targets, fetched, TODAY).unwrap()
 
     outcome = next(o for o in report.outcomes if o.unit.identifier == "C")
     assert isinstance(outcome, Unpriced)
@@ -232,7 +240,7 @@ def test_missing_result_is_unpriced(session: Session, ledger: dict[str, Unit]) -
         {"file": _FakePlugin("file", Result.ok({})), "other": _FakePlugin("other", Result.ok({"CCC": _close("5")}))},
     )
 
-    report = AppendPrices(session).execute(targets, fetched).unwrap()
+    report = AppendPrices(session).execute(targets, fetched, TODAY).unwrap()
 
     outcome = next(o for o in report.outcomes if o.unit.identifier == "A")
     assert isinstance(outcome, Unpriced)
@@ -253,13 +261,110 @@ def test_each_plugin_is_called_once_with_only_its_own_symbols_sorted(
     assert other_plugin.calls == [["CCC"]]
 
 
-@pytest.mark.skip(reason="scaffold: issue 031")
-def test_validation_rejections_are_per_unit() -> None:
-    # TODO(031) — one test per site:
-    #   - 031: zero, negative, future date, non-EUR each rejected with its own reason
-    #   - another unit in the same run is still priced
-    #   - an unrequested symbol lands in `ignored` and writes nothing
-    raise NotImplementedError
+def _bad_close(case: str) -> Close:
+    match case:
+        case "zero":
+            return _close("0")
+        case "negative":
+            return _close("-1")
+        case "nan":
+            return _close("NaN")
+        case "infinity":
+            return _close("Infinity")
+        case "future":
+            return _close("12", date(2026, 3, 4))
+        case _:
+            return Close(price_date=DAY, price=Decimal(12), currency="USD")
+
+
+@pytest.mark.parametrize(
+    ("case", "rejection"),
+    [
+        ("zero", NonPositivePrice),
+        ("negative", NonPositivePrice),
+        ("nan", NonPositivePrice),
+        ("infinity", NonPositivePrice),
+        ("future", FutureCloseDate),
+        ("usd", NonBaseCurrency),
+    ],
+)
+def test_rejected_close_leaves_unit_unpriced_and_others_priced(
+    session: Session, ledger: dict[str, Unit], case: str, rejection: type[Exception]
+) -> None:
+    targets = _targets(session)
+    fetched = call_price_plugins(
+        targets,
+        {
+            "file": _FakePlugin("file", Result.ok({"SHARED": _bad_close(case)})),
+            "other": _FakePlugin("other", Result.ok({"CCC": _close("5")})),
+        },
+    )
+
+    report = AppendPrices(session).execute(targets, fetched, TODAY).unwrap()
+
+    by_unit = {o.unit.identifier: o for o in report.outcomes}
+    for identifier in ("A", "B"):
+        outcome = by_unit[identifier]
+        assert isinstance(outcome, Unpriced)
+        assert type(outcome.reason) is rejection
+    assert isinstance(by_unit["C"], Priced)
+    assert [p.unit_id for p in _stored(session)] == [ledger["C"].id]
+
+
+def test_close_dated_today_is_accepted(session: Session, ledger: dict[str, Unit]) -> None:
+    targets = _targets(session)
+    fetched = call_price_plugins(
+        targets,
+        {
+            "file": _FakePlugin("file", Result.ok({"SHARED": _close("12", TODAY)})),
+            "other": _FakePlugin("other", Result.ok({})),
+        },
+    )
+
+    report = AppendPrices(session).execute(targets, fetched, TODAY).unwrap()
+
+    assert isinstance(next(o for o in report.outcomes if o.unit.identifier == "A"), Priced)
+
+
+def test_valid_shared_close_can_be_stored_for_one_unit_and_priced_for_the_other(
+    session: Session, ledger: dict[str, Unit]
+) -> None:
+    _seed_price(session, ledger["B"], DAY, "11")
+    targets = _targets(session)
+    fetched = call_price_plugins(
+        targets,
+        {
+            "file": _FakePlugin("file", Result.ok({"SHARED": _close("12")})),
+            "other": _FakePlugin("other", Result.ok({})),
+        },
+    )
+
+    report = AppendPrices(session).execute(targets, fetched, TODAY).unwrap()
+
+    by_unit = {o.unit.identifier: o for o in report.outcomes}
+    assert isinstance(by_unit["A"], Priced)
+    assert isinstance(by_unit["B"], AlreadyStored)
+
+
+def test_unrequested_symbol_is_ignored_and_writes_nothing(session: Session, ledger: dict[str, Unit]) -> None:
+    targets = _targets(session)
+    fetched = call_price_plugins(
+        targets,
+        {
+            "file": _FakePlugin("file", Result.ok({"SHARED": _close("12"), "CCC": _close("99")})),
+            "other": _FakePlugin("other", Result.ok({"CCC": _close("5"), "ZZZ": _close("1")})),
+        },
+    )
+
+    report = AppendPrices(session).execute(targets, fetched, TODAY).unwrap()
+
+    assert [(e.plugin_name, e.symbol) for e in report.ignored] == [("file", "CCC"), ("other", "ZZZ")]
+    assert all(isinstance(e, UnrequestedSymbol) for e in report.ignored)
+    assert {p.unit_id: p.price for p in _stored(session)} == {
+        ledger["A"].id: Decimal(12),
+        ledger["B"].id: Decimal(12),
+        ledger["C"].id: Decimal(5),
+    }
 
 
 def test_audit_trail_one_group_per_run(session: Session, ledger: dict[str, Unit]) -> None:
@@ -273,7 +378,7 @@ def test_audit_trail_one_group_per_run(session: Session, ledger: dict[str, Unit]
     )
     groups_before = _groups(session)
 
-    AppendPrices(session).execute(targets, fetched).unwrap()
+    AppendPrices(session).execute(targets, fetched, TODAY).unwrap()
 
     created = list(session.scalars(select(Operation).where(Operation.entity_type == "prices")))
     assert [(op.action) for op in created] == ["create"] * 3

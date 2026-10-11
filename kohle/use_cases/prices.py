@@ -5,17 +5,23 @@ from datetime import date
 from kohle.core.result import Result
 from kohle.domain.domain_errors import (
     EmptyPriceSymbol,
+    FutureCloseDate,
     ListPriceTargetsError,
     MissingCloseResult,
+    NonBaseCurrency,
+    NonPositivePrice,
     NotASecurityUnit,
     PriceError,
+    PriceRejection,
     SetPriceSourceError,
     UnknownPricePlugin,
+    UnrequestedSymbol,
 )
 from kohle.domain.models import Price, PriceBinding, Unit, UnitKind
 from kohle.infrastructure.transaction_context import DbTransactionContext
 from kohle.infrastructure.uow import UnitOfWork
 from kohle.plugin.price_plugin import (
+    Close,
     PriceFetcherPlugin,
     PriceFetchError,
     PriceResult,
@@ -29,7 +35,7 @@ from kohle.services.price_services import (
     set_price_binding_service,
 )
 from kohle.services.unit_services import get_unit_by_identifier_service
-from kohle.use_cases.journal import held_units
+from kohle.use_cases.journal import BASE_CURRENCY, held_units
 
 
 class SetPriceSource(UnitOfWork[PriceBinding, SetPriceSourceError]):
@@ -126,7 +132,7 @@ class Unpriced:
     unit: Unit
     plugin_name: str
     symbol: str
-    reason: Unavailable | PriceFetchError | UnknownPricePlugin | MissingCloseResult
+    reason: Unavailable | PriceFetchError | UnknownPricePlugin | PriceRejection
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,12 +146,27 @@ FetchOutcome = Priced | AlreadyStored | Unpriced | Unbound
 @dataclass(frozen=True, slots=True)
 class FetchReport:
     outcomes: list[FetchOutcome]
+    ignored: list[UnrequestedSymbol]
+
+
+def validate_close(close: Close, today: date) -> PriceRejection | None:
+    # is_finite() first: comparing NaN raises InvalidOperation, which would roll back every unit.
+    if not close.price.is_finite() or close.price <= 0:
+        return NonPositivePrice(close.price)
+    if close.price_date > today:
+        return FutureCloseDate(close.price_date, today)
+    if close.currency != BASE_CURRENCY:
+        return NonBaseCurrency(close.currency, BASE_CURRENCY)
+    return None
 
 
 class AppendPrices(UnitOfWork[FetchReport, PriceError]):
-    def execute(self, targets: PriceTargets, fetched: FetchedCloses) -> Result[FetchReport, PriceError]:
+    def execute(
+        self, targets: PriceTargets, fetched: FetchedCloses, today: date
+    ) -> Result[FetchReport, PriceError]:
         def use_case(ctx: DbTransactionContext) -> Result[FetchReport, PriceError]:
             outcomes: list[FetchOutcome] = [Unbound(unit) for unit in targets.unbound]
+            ignored: list[UnrequestedSymbol] = []
 
             for name, symbols in targets.by_plugin.items():
                 results_res = fetched[name]
@@ -158,6 +179,7 @@ class AppendPrices(UnitOfWork[FetchReport, PriceError]):
                     )
                     continue
                 results = results_res.unwrap()
+                ignored.extend(UnrequestedSymbol(name, key) for key in results if key not in symbols)
 
                 for symbol, units in symbols.items():
                     result = results.get(symbol)
@@ -165,6 +187,8 @@ class AppendPrices(UnitOfWork[FetchReport, PriceError]):
                         outcomes.extend(Unpriced(unit, name, symbol, MissingCloseResult(symbol)) for unit in units)
                     elif isinstance(result, Unavailable):
                         outcomes.extend(Unpriced(unit, name, symbol, result) for unit in units)
+                    elif (rejection := validate_close(result, today)) is not None:
+                        outcomes.extend(Unpriced(unit, name, symbol, rejection) for unit in units)
                     else:
                         for unit in units:
                             # Checked before the insert: after one UNIQUE violation the
@@ -184,7 +208,7 @@ class AppendPrices(UnitOfWork[FetchReport, PriceError]):
                                 return Result.err(added_res.unwrap_err())
                             outcomes.append(Priced(unit, name, symbol, added_res.unwrap(), previous_res.unwrap()))
 
-            return Result.ok(FetchReport(sorted(outcomes, key=_unit_identifier)))
+            return Result.ok(FetchReport(sorted(outcomes, key=_unit_identifier), ignored))
 
         return self._run(use_case)
 

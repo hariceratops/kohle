@@ -1,3 +1,4 @@
+from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import assert_never
 
@@ -747,12 +748,15 @@ def fetch_prices_cmd(make_session):
 
     plugins = load_price_plugins() if targets.by_plugin else {}
     fetched = call_price_plugins(targets, plugins)
-    report_res = AppendPrices(make_session()).execute(targets, fetched)
+    report_res = AppendPrices(make_session()).execute(targets, fetched, date.today())  # noqa: DTZ011 - the user's local date, by design
     if report_res.is_err:
         raise click.ClickException(str(report_res.unwrap_err()))
-    outcomes = report_res.unwrap().outcomes
+    report = report_res.unwrap()
+    outcomes = report.outcomes
 
     click.echo(tabulate([_fetch_row(outcome) for outcome in outcomes], headers="keys"))
+    for unrequested in report.ignored:
+        click.echo(str(unrequested))
     unpriced = sum(isinstance(outcome, Unpriced) for outcome in outcomes)
     if unpriced:
         raise click.ClickException(f"{unpriced} held securities unpriced")

@@ -1,3 +1,4 @@
+from datetime import date
 from decimal import Decimal
 
 
@@ -405,5 +406,46 @@ class MissingCloseResult(Exception):
     def __str__(self) -> str:
         return f"Plugin returned no result for symbol {self.symbol!r}"
 
+
+class NonPositivePrice(Exception):
+    def __init__(self, price: Decimal) -> None:
+        super().__init__()
+        self.price = price
+
+    def __str__(self) -> str:
+        return f"Close price {self.price} must be a positive finite number"
+
+
+class FutureCloseDate(Exception):
+    def __init__(self, price_date: date, today: date) -> None:
+        super().__init__()
+        self.price_date = price_date
+        self.today = today
+
+    def __str__(self) -> str:
+        return f"Close dated {self.price_date} is after today ({self.today})"
+
+
+class NonBaseCurrency(Exception):
+    def __init__(self, currency: str, base: str) -> None:
+        super().__init__()
+        self.currency = currency
+        self.base = base
+
+    def __str__(self) -> str:
+        return f"Close is in {self.currency!r}, but only {self.base} closes are accepted"
+
+
+class UnrequestedSymbol(Exception):
+    def __init__(self, plugin_name: str, symbol: str) -> None:
+        super().__init__()
+        self.plugin_name = plugin_name
+        self.symbol = symbol
+
+    def __str__(self) -> str:
+        return f"Plugin {self.plugin_name!r} returned a result for unrequested symbol {self.symbol!r}; ignored"
+
+
+PriceRejection = MissingCloseResult | NonPositivePrice | FutureCloseDate | NonBaseCurrency
 
 ListPriceTargetsError = BalanceError | PriceError

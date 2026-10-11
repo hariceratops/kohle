@@ -176,6 +176,27 @@ def test_unset_price_file_exits_one(
         assert session.scalars(select(Price)).all() == []
 
 
+def test_rejected_file_close_exits_one_and_valid_unit_is_still_stored(
+    ledger: sessionmaker, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    with ledger() as session:
+        AddUnit(session).execute("X2", "Y", UnitKind.security).unwrap()
+    _hold(ledger, "X1", "X2")
+    _bind(ledger, monkeypatch, "X1", "XYZ")
+    _bind(ledger, monkeypatch, "X2", "ABC")
+    price_file = tmp_path / "prices.csv"
+    price_file.write_text("identifier,date,close\nXYZ,2026-03-02,0\nABC,2026-03-02,3\n", encoding="utf-8")
+    monkeypatch.setenv("KOHLE_PRICE_FILE", str(price_file))
+
+    result = _fetch_prices(ledger, monkeypatch)
+
+    assert result.exit_code == 1
+    assert "positive finite number" in result.output
+    assert "1 held securities unpriced" in result.output
+    with ledger() as session:
+        assert [(p.price, p.source) for p in session.scalars(select(Price))] == [(Decimal(3), "file")]
+
+
 @pytest.mark.skip(reason="scaffold: issue 033")
 def test_alphavantage_throttle_scenario() -> None:
     # TODO(033) — one test per site:
