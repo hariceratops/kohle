@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -24,7 +24,7 @@ from kohle.app.cli import cli as cli_module
 from kohle.app.cli.cli import cli
 from kohle.core.result import Result
 from kohle.db.connection import base
-from kohle.domain.models import Price
+from kohle.domain.models import Operation, Price, Unit
 from kohle.plugin.price_plugin import (
     Close,
     PriceFetcherPlugin,
@@ -219,19 +219,58 @@ def test_third_plugin_binds_and_fetches_without_core_changes(
         assert (stored.price, stored.price_date, stored.source) == (Decimal("42.5"), date(2026, 3, 2), "third")
 
 
-@pytest.mark.skip(reason="scaffold: issue 039")
-def test_reports_leave_prices_and_operations_untouched() -> None:
-    # TODO(039) — one test per site:
-    #   - running balance and net-worth leaves the prices row count unchanged
-    #   - and writes no Operation row
-    raise NotImplementedError
+def test_reports_leave_prices_and_operations_untouched(session_factory: sessionmaker) -> None:
+    runner = CliRunner()
+    setup = [
+        ["add-account", "Depot", "--type", "asset"],
+        ["add-account", "Cash", "--type", "asset"],
+        ["add-account", "People", "--type", "asset"],
+        ["add-unit", "EUR", "Euro", "--kind", "currency"],
+        ["add-unit", "X1", "Thing", "--kind", "security"],
+        ["record", "2026-01-02", "buy", "10", "--from", "Cash", "--to", "Depot", "--to-unit", "X1", "--to-price", "5"],
+    ]
+    for args in setup:
+        result = runner.invoke(cli, args, obj=session_factory)
+        assert result.exit_code == 0, result.output
+    with session_factory() as session:
+        unit_id = session.scalars(select(Unit.id).where(Unit.identifier == "X1")).one()
+        session.add(Price(unit_id=unit_id, price_date=date(2026, 1, 3), price=Decimal(6), source="file"))
+        session.commit()
+
+    def counts() -> tuple[int, int]:
+        with session_factory() as session:
+            return (
+                session.scalar(select(func.count()).select_from(Price)) or 0,
+                session.scalar(select(func.count()).select_from(Operation)) or 0,
+            )
+
+    before = counts()
+    for args in (["balance", "Depot"], ["net-worth"]):
+        result = runner.invoke(cli, args, obj=session_factory)
+        assert result.exit_code == 0, result.output
+
+    assert before[0] == 1
+    assert counts() == before
 
 
-@pytest.mark.skip(reason="scaffold: issue 039")
-def test_report_code_never_references_price_writers() -> None:
-    # TODO(039) — exact identifiers, as in the guard above, not substrings:
-    #   - the balance and net-worth CLI callbacks (inspect.getsource)
-    #   - and the source of kohle/use_cases/reporting.py
-    #   - none of load_price_plugins, PriceFetcherPlugin, call_price_plugins,
-    #     AppendPrices, add_price_service
-    raise NotImplementedError
+PRICE_WRITER_IDENTIFIERS = {
+    "load_price_plugins",
+    "PriceFetcherPlugin",
+    "call_price_plugins",
+    "AppendPrices",
+    "add_price_service",
+}
+
+
+def _report_sources() -> dict[str, str]:
+    sources = {"kohle/use_cases/reporting.py": (ROOT / "kohle/use_cases/reporting.py").read_text(encoding="utf-8")}
+    for name in ("balance_cmd", "net_worth_cmd"):
+        callback = getattr(cli_module, name).callback
+        assert callback is not None
+        sources[f"cli.{name}"] = inspect.getsource(callback)
+    return sources
+
+
+@pytest.mark.parametrize("site", list(_report_sources()))
+def test_report_code_never_references_price_writers(site: str) -> None:
+    assert _references(_report_sources()[site]) & PRICE_WRITER_IDENTIFIERS == set()
