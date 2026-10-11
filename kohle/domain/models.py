@@ -359,3 +359,17 @@ class Price(base):
 
     def __repr__(self) -> str:
         return f"<Price(unit_id={self.unit_id}, date={self.price_date}, price={self.price})>"
+
+
+class PriceBinding(base):
+    """Where a security's price comes from: a plugin and the symbol it knows
+    the unit by. At most one per unit; no currency, the plugin reports it."""
+
+    __tablename__ = "price_bindings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    unit_id: Mapped[int] = mapped_column(ForeignKey("units.id"), nullable=False)
+    plugin_name: Mapped[str] = mapped_column(String, nullable=False)
+    symbol: Mapped[str] = mapped_column(String, nullable=False)
+
+    __table_args__ = (UniqueConstraint("unit_id", name="uq_price_binding_unit"),)

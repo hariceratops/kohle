@@ -6,7 +6,7 @@ from tabulate import tabulate
 from kohle.db.connection import session_local
 from kohle.domain.domain_errors import AccountNotFoundError
 from kohle.domain.models import DEFAULT_RULE_PRIORITY, AccountType, UnitKind
-from kohle.plugin.plugin_manager import load_plugins
+from kohle.plugin.plugin_manager import load_plugins, load_price_plugins
 from kohle.use_cases.accounts import AddAccount, ListAccount, ListChildAccounts
 from kohle.use_cases.classification import ListUnclassified, Reclassify
 from kohle.use_cases.journal import (
@@ -21,6 +21,7 @@ from kohle.use_cases.journal import (
     RecordSplitEntry,
 )
 from kohle.use_cases.operations import ListOperations
+from kohle.use_cases.prices import SetPriceSource
 from kohle.use_cases.rules import AddRule, ListRules, RemoveRule
 from kohle.use_cases.splitting import (
     AddSplitGroup,
@@ -663,6 +664,19 @@ def settle_up_cmd(make_session, group_name: str | None):
             f'Settle with: kohle-cli record <date> "<description>" {transfer.quantity:.2f} '
             f"--from {payer} --to {payee}"
         )
+
+
+@cli.command()
+@click.argument("unit")
+@click.argument("plugin")
+@click.argument("symbol")
+@click.pass_obj
+def set_price_source_cmd(make_session, unit: str, plugin: str, symbol: str):
+    res = SetPriceSource(make_session()).execute(unit, plugin, symbol, sorted(load_price_plugins()))
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    binding = res.unwrap()
+    click.echo(f"Price source for {unit}: {binding.plugin_name} {binding.symbol}")
 
 
 if __name__ == "__main__":

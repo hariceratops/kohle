@@ -77,7 +77,7 @@ class NotASecurityUnit(UnitError):
         self.kind = kind
 
     def __str__(self) -> str:
-        return f"Unit {self.identifier!r} is a {self.kind}, not a security, and cannot be a traded instrument"
+        return f"Unit {self.identifier!r} is a {self.kind}, not a security"
 
 
 class DuplicateUnit(UnitError):
@@ -372,3 +372,26 @@ ReclassifyError = AccountError | JournalError | ClassificationError | SplitError
 # post_entry for the adjusting entry, and DuplicateLineInEntry for two
 # persons named twice in one invocation (design §4.3).
 SplitImportedEntryError = AccountError | JournalError | ClassificationError | SplitError
+
+
+class PriceError(Exception):
+    pass
+
+
+class UnknownPricePlugin(PriceError):
+    def __init__(self, name: str, available: list[str]) -> None:
+        super().__init__()
+        self.name = name
+        self.available = available
+
+    def __str__(self) -> str:
+        installed = ", ".join(self.available) if self.available else "none installed"
+        return f"Unknown price plugin {self.name!r}. Available: {installed}"
+
+
+class EmptyPriceSymbol(PriceError):
+    def __str__(self) -> str:
+        return "Price symbol cannot be empty"
+
+
+SetPriceSourceError = UnitError | PriceError

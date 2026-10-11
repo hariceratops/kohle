@@ -29,6 +29,7 @@ BEFORE_CLASSIFICATIONS = "c5b8e2f47a13"
 BEFORE_PEOPLE_ROOT = "3e7b91c0af52"
 BEFORE_SPLITS = "TODO"
 BEFORE_SPLIT_GROUPS = "TODO"
+BEFORE_PRICE_BINDINGS = "a1cebfe54f33"
 
 
 @pytest.fixture
@@ -338,3 +339,29 @@ def test_upgrade_refuses_on_a_pre_existing_people_account(tmp_path: Path) -> Non
     with pytest.raises(RuntimeError) as exc_info:
         command.upgrade(config, "head")
     assert "People" in str(exc_info.value)
+
+
+def test_price_bindings_round_trips_when_empty(migrated_db) -> None:
+    config, db = migrated_db
+    assert "price_bindings" in _tables(db)
+
+    command.downgrade(config, BEFORE_PRICE_BINDINGS)
+    assert "price_bindings" not in _tables(db)
+
+    command.upgrade(config, "head")
+    assert "price_bindings" in _tables(db)
+
+
+def test_downgrade_refuses_rather_than_dropping_a_price_binding(migrated_db) -> None:
+    config, db = migrated_db
+    _exec(
+        db,
+        "INSERT INTO units (id, kind, identifier, name, created_at) "
+        "VALUES (900, 'security', 'X1', 'X', '2026-01-01')",
+        "INSERT INTO price_bindings (unit_id, plugin_name, symbol) VALUES (900, 'file', 'XYZ')",
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        command.downgrade(config, BEFORE_PRICE_BINDINGS)
+    assert "1 price binding" in str(exc_info.value)
+    assert "price_bindings" in _tables(db), "refusal must leave the schema untouched"
