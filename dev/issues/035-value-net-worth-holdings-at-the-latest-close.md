@@ -37,4 +37,6 @@ Spec: `dev/specs/market-value-reporting.md`
   `latest_close` read on the summed quantity.
 - Every existing net-worth test passes unchanged, including
   `test_no_price_plugins_means_no_output_change`. The README net-worth
-  section drops "no market valuation yet" and shows the new output.
+  section's "Every figure is reported at recorded cost" paragraph is
+  rewritten and shows the new output; the "no market valuation yet" sentence
+  in "Reading the ledger" belongs to `balance` and stays until 038.

@@ -14,9 +14,17 @@ Spec: `dev/specs/market-value-reporting.md`
   `average cost`, which stays last, and existing values are unchanged.
 - The same valuation rules and status words as `net-worth` apply, from the
   same function; no second copy of the rule.
-- Two lines end the output: a market-value total equal to the sum of the rows'
-  market values, then the `K of M holdings estimated (S stale, C at cost)`
-  summary. `balance` prints no at-cost total.
+- When the account holds at least one non-base-currency unit with nonzero
+  quantity (M > 0), two lines end the output: `Market value: X`, equal to the
+  sum of the unit rows' market values (the `Total (base currency)` restatement
+  row is never summed), then the
+  `K of M holdings estimated (S stale, C at cost)` summary. The label cannot
+  be "Total", which an existing test asserts is absent for multi-unit
+  accounts. `balance` prints no at-cost total.
+- When M = 0 (for example a euro-only expense category) neither line is
+  printed, so such output differs from today only by the new columns. This
+  supersedes the frozen spec's "output shape does not depend on the data" for
+  `balance`; it depends on the spec revision the user is making.
 - `balance --max-age-days N` behaves as on `net-worth`.
 - The `Total (base currency)` restatement row renders `-` in the new columns
   except market value, which is the quantity; no `str` enters a numeric column

@@ -23,8 +23,17 @@ It covers only valuation at the latest close. The rest of
     last column. The column order is: `unit`, `quantity`, `price`,
     `price date`, `market value`, `status`, `average cost`.
   - Existing values stay as they are.
-  - Two new lines go at the end of the output: a market-value total, then
-    the estimate summary.
+  - When the account holds at least one non-base-currency unit with nonzero
+    quantity (M > 0, as defined under the estimate summary), two new lines
+    go at the end of the output: `Market value: X`, then the estimate
+    summary. When M = 0, for example a euro-only expense category, neither
+    line is printed (confirmed by the user).
+  - The label is `Market value:`, not anything containing "Total":
+    `tests/test_cli.py` asserts that "Total" never appears in the output for
+    a multi-unit account.
+  - `Market value: X` sums the unit rows only, never the
+    `Total (base currency)` restatement row, which would count a
+    single-currency account twice.
   - There is no new at-cost total. The cost of each row is already visible
     as quantity × average cost.
   - `No holdings` output is unchanged and gets neither line.
@@ -33,7 +42,8 @@ It covers only valuation at the latest close. The rest of
     existing last column stays last. The column order is: `section`, `unit`,
     `quantity`, `price`, `price date`, `market value`, `status`, `at cost`.
   - The existing `Net worth (at cost): X` line stays byte-identical. Two new
-    lines follow it: a market-value total, then the estimate summary.
+    lines always follow it: `Net worth (at market): X`, then the estimate
+    summary.
   - Both totals are reported. The at-cost figures never depend on a fetch or
     on the price table.
 - **Valuation rule, per unit row with nonzero quantity:**
@@ -48,8 +58,10 @@ It covers only valuation at the latest close. The rest of
     non-EUR currency. These are not told apart. Saying why a unit has no close
     is `fetch-prices`' job.
 - **Base-currency rows have no status** (confirmed by the user). They render
-  `-` in the status, price and price-date columns, which is the existing `missingval` convention for
-  "not applicable". Why: a base-currency value is exact rather than an
+  `-` in the status, price and price-date columns via tabulate's
+  `missingval="-"`, the convention `balance` already uses for "not
+  applicable". `net-worth` passes no `missingval` today, so it gains
+  `missingval="-"`. Why: a base-currency value is exact rather than an
   estimate, and it is not derived from a close. Labelling it `fresh` would
   claim that a price was fetched. Adding a fourth status word would grow the
   vocabulary that people grep for, and nothing would be gained.
@@ -58,14 +70,17 @@ It covers only valuation at the latest close. The rest of
   sold out. They keep their existing at-cost rendering, get market value 0
   and `-` for status, price and price date, and are not counted in the
   summary. No close is looked up for them.
-- **Estimate summary.** In both reports, one line after the market total
-  reads
+- **Estimate summary.** One line after the market total reads
   `K of M holdings estimated (S stale, C at cost)`.
   - M is the number of non-base-currency rows with nonzero quantity.
   - K = S + C.
   - Base-currency rows are not counted, because they can never be estimates.
-  - When K = 0 the line still prints, as `0 of M holdings estimated`, so the
-    output shape does not depend on the data.
+  - In `net-worth` the line always prints. When K = 0 it prints as
+    `0 of M holdings estimated`, so `net-worth`'s output shape does not
+    depend on the data.
+  - In `balance` the line, like the market-value line before it, prints only
+    when M > 0. When M > 0 and K = 0 it prints as `0 of M holdings
+    estimated`.
 - **Threshold flag.** `balance` and `net-worth` both take
   `--max-age-days N`, a non-negative integer with default 7. The value is
   passed through to `latest_close`'s `max_age_days`. There is no persistent
@@ -84,8 +99,14 @@ It covers only valuation at the latest close. The rest of
   - The net-worth market total equals the sum of the market values of all
     rows in both sections. The at-cost total is unchanged from today on the
     same ledger.
-  - The `balance` market total equals the sum of its rows' market values.
+  - The `balance` market total equals the sum of its unit rows' market
+    values; the `Total (base currency)` restatement row is not summed.
     `balance` prints no at-cost total.
+  - A euro-only `balance` (M = 0) prints neither the `Market value:` line nor
+    the summary line. A `balance` of a mixed account, holding base currency
+    and at least one other unit with nonzero quantity, prints both.
+  - `net-worth` prints `Net worth (at market): X` and the summary line on
+    every ledger, including `0 of M holdings estimated` when K = 0.
   - `average cost` is the last column of every `balance` row, and `at cost`
     is the last column of every `net-worth` row.
   - Boundary: with `--max-age-days 7`, a close 7 days old is `fresh` and one
@@ -161,18 +182,30 @@ Also out of scope:
   quantity × per-unit value.
 - **Output that changes shape** (the design must handle all of these):
   - `balance_cmd` table (`kohle/app/cli/cli.py`) gains four columns between
-    `quantity` and `average cost`, followed by the market-total line and the
-    summary line.
+    `quantity` and `average cost`, followed, only when M > 0, by the
+    `Market value: X` line and the summary line.
     - The `Total (base currency)` restatement row renders `-` in the new
-      columns except market value, which is the quantity.
+      columns except market value, which is the quantity. It is never
+      included in `Market value: X`.
     - The new columns must not mix `str` into numeric columns, because of the
       `floatfmt`/`missingval` trap documented in `balance_cmd`. That means
       price and market value use `None` → `-`, never a string.
   - `_net_worth_rows` / `net_worth_cmd` table gains the same four columns
-    between `quantity` and `at cost`. The market-total line and the summary
+    between `quantity` and `at cost`, and its `tabulate` call gains
+    `missingval="-"`. The `Net worth (at market): X` line and the summary
     line follow the existing at-cost line.
-  - README "Reading the ledger" and "Net worth" sections: their example
-    output and their "no market valuation yet" prose.
+  - README, one section per slice:
+    - "Net worth": the net-worth slice updates the example output and
+      rewrites the at-cost-only paragraph ("Every figure is reported at
+      recorded cost ...").
+    - "Reading the ledger", which describes `balance`: the balance slice
+      updates the example output and replaces the "no market valuation yet"
+      sentence.
+- **Rounding.** Totals are summed as exact `Decimal`s and printed with
+  `Decimal`'s `:.2f`, while table cells go through tabulate's `floatfmt`. So
+  the printed cells may differ from the printed total by a cent while the
+  `Decimal` totals are exact, as the at-cost total already can. Tests compare
+  `Decimal`s, not printed cells.
 - **Existing tests that constrain layout:**
   - `tests/test_cli.py::test_balance_renders_none_average_cost_as_dash_without_breaking_other_rows`
     reads `average cost` as the *last* whitespace token of a row
@@ -187,8 +220,16 @@ Also out of scope:
 
 ## Open Questions
 
-None blocking. The user answered all three questions from the first draft,
-and the answers are written into the requirements above:
+None blocking.
+
+The user's decision on `balance`'s M = 0 output, made after the design's
+"conflicts and gaps" review, is written into the Goals bullets on `balance`
+and on the estimate summary, the Testable list, and Technical Approach under
+"Output that changes shape". It replaces "the output shape does not depend on
+the data" for `balance` only; `net-worth` is unchanged.
+
+The user answered all three questions from the first draft, and the answers
+are written into the requirements above:
 
 - **`balance` totals.** `balance` gets a market total and the summary line
   at the end of its output, and no at-cost total. `net-worth` keeps both

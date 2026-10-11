@@ -14,6 +14,9 @@ Spec: `dev/specs/market-value-reporting.md`
   close is fresh.
 - With `--max-age-days 7` a close 7 days old is `fresh` and one 8 days old is
   `stale`; the same pair is pinned at a non-default N.
+- The CLI boundary test pins `today` by monkeypatching `kohle.app.cli.cli.date`;
+  the exact 7/8-day boundary is also tested at the use-case level with an
+  explicit `today`.
 - A negative or non-integer value is rejected by click with a usage error and
   nothing is read.
 - No persistent setting or config mechanism is added.
