@@ -187,27 +187,126 @@ def test_net_worth_max_age_days_midrange(session_factory: sessionmaker, mixed_le
     assert statuses(0) == (False, False)
 
 
-@pytest.mark.skip(reason="scaffold: issue 038")
-def test_balance_columns_and_restatement_row() -> None:
-    # TODO(038) — one test per site:
-    #   - header order: unit quantity price price date market value status average cost
-    #   - 'Total (base currency)' row: '-' in price, price date, status, average cost; quantity in market value
-    raise NotImplementedError
+def test_balance_columns_and_restatement_row(session_factory: sessionmaker, mixed_ledger: None) -> None:
+    result = CliRunner().invoke(cli, ["balance", "Depot"], obj=session_factory)
+    assert result.exit_code == 0, result.output
+    lines = result.output.splitlines()
+    assert lines[0].split() == [
+        "unit", "quantity", "price", "price", "date", "market", "value", "status", "average", "cost",
+    ]
+    fresh_row = next(r for r in lines if r.startswith("FRESH"))
+    assert "12.00" in fresh_row and "120.00" in fresh_row and "fresh" in fresh_row
+    assert fresh_row.split()[-1] == "10.00"
+
+    euro_only = CliRunner().invoke(cli, ["balance", "Alice"], obj=session_factory)
+    assert euro_only.exit_code == 0, euro_only.output
+    total_row = next(r for r in euro_only.output.splitlines() if r.startswith("Total (base currency)"))
+    assert total_row.split()[3:] == ["16.00", "-", "-", "16.00", "-", "-"]
 
 
-@pytest.mark.skip(reason="scaffold: issue 038")
-def test_balance_market_lines_only_for_non_base_holdings() -> None:
-    # TODO(038) — one test per site:
-    #   - a euro-only account (M = 0) prints neither 'Market value' nor 'holdings estimated'
-    #   - a mixed account prints both as the last two lines; X is the sum of unit rows only
-    #   - a mixed account with K = 0 prints '0 of M holdings estimated'
-    #   - REGRESSION: an account whose only non-euro row is sold out (M = 0) prints neither line: the gate is M, not 'any non-base row'
-    #   - 'No holdings' output unchanged
-    raise NotImplementedError
+def _euro_and_securities(session_factory: sessionmaker, held: str | None, sold: str | None) -> None:
+    """Account `Box` holds euros, plus `held` bought and `sold` bought then sold out."""
+    with session_factory() as session:
+        ctx = DbTransactionContext(session)
+        box = add_account_service(ctx, "Box", AccountType.asset).unwrap()
+        income = add_account_service(ctx, "Income", AccountType.income).unwrap()
+        eur = add_unit_service(ctx, "EUR", "Euro", UnitKind.currency).unwrap()
+        add_journal_entry_service(
+            ctx, date(2026, 3, 1), "in", "in",
+            [
+                LineSpec(box.id, eur.id, Decimal(100), EUR, is_debit=True),
+                LineSpec(income.id, eur.id, Decimal(100), EUR, is_debit=False),
+            ],
+        ).unwrap()
+        for name in (held, sold):
+            if name is None:
+                continue
+            unit = add_unit_service(ctx, name, name, UnitKind.security).unwrap()
+            add_journal_entry_service(
+                ctx, date(2026, 3, 2), f"buy-{name}", f"buy {name}",
+                [
+                    LineSpec(box.id, unit.id, Decimal(2), Decimal(10), is_debit=True),
+                    LineSpec(box.id, eur.id, Decimal(20), EUR, is_debit=False),
+                ],
+            ).unwrap()
+            if name == sold:
+                add_journal_entry_service(
+                    ctx, date(2026, 3, 3), f"sell-{name}", f"sell {name}",
+                    [
+                        LineSpec(box.id, eur.id, Decimal(20), EUR, is_debit=True),
+                        LineSpec(box.id, unit.id, Decimal(2), Decimal(10), is_debit=False),
+                    ],
+                ).unwrap()
+            if name == held:
+                session.flush()
+                session.add(Price(unit_id=unit.id, price_date=date.today() - timedelta(days=1), price=Decimal(12), source="file"))  # noqa: DTZ011
+        session.commit()
 
 
-@pytest.mark.skip(reason="scaffold: issue 038")
-def test_balance_max_age_days() -> None:
-    # TODO(038) — one test per site:
-    #   - same flag, same behaviour as net-worth
-    raise NotImplementedError
+def test_balance_market_lines_only_for_non_base_holdings(session_factory: sessionmaker, mixed_ledger: None) -> None:
+    def run(account: str) -> list[str]:
+        result = CliRunner().invoke(cli, ["balance", account], obj=session_factory)
+        assert result.exit_code == 0, result.output
+        return result.output.splitlines()
+
+    euro_only = run("Alice")
+    assert "Market value" not in "\n".join(euro_only) and "holdings estimated" not in "\n".join(euro_only)
+    assert euro_only[-1].startswith("Total (base currency)")
+
+    mixed = run("Depot")
+    assert mixed[-3] == ""
+    assert mixed[-2:] == ["Market value: 320.00", "2 of 3 holdings estimated (1 stale, 1 at cost)"]
+    # unit rows only: 120 + 180 + 20.
+    assert "Total (base currency)" not in "\n".join(mixed)
+
+    assert run("Salary")[0].startswith("unit")
+
+
+def test_balance_market_line_with_no_estimates(session_factory: sessionmaker) -> None:
+    _euro_and_securities(session_factory, held="HELD", sold=None)
+    result = CliRunner().invoke(cli, ["balance", "Box"], obj=session_factory)
+    assert result.exit_code == 0, result.output
+    assert result.output.splitlines()[-2:] == ["Market value: 104.00", "0 of 1 holdings estimated"]
+
+
+def test_balance_market_lines_not_printed_when_only_non_base_row_is_sold_out(session_factory: sessionmaker) -> None:
+    # REGRESSION: the gate is M (nonzero non-base rows), not "any non-base row".
+    _euro_and_securities(session_factory, held=None, sold="GONE")
+    result = CliRunner().invoke(cli, ["balance", "Box"], obj=session_factory)
+    assert result.exit_code == 0, result.output
+    assert "GONE" in result.output
+    assert "Market value" not in result.output and "holdings estimated" not in result.output
+
+
+def test_balance_no_holdings_is_unchanged(session_factory: sessionmaker) -> None:
+    with session_factory() as session:
+        add_account_service(DbTransactionContext(session), "Empty", AccountType.asset).unwrap()
+        session.commit()
+    result = CliRunner().invoke(cli, ["balance", "Empty"], obj=session_factory)
+    assert result.exit_code == 0, result.output
+    assert result.output == "No holdings\n"
+
+
+@pytest.mark.parametrize("value", ["-1", "x"])
+def test_balance_rejects_an_invalid_max_age_days(value: str) -> None:
+    def forbidden_factory():
+        raise AssertionError("no session may be opened for an invalid --max-age-days")
+
+    result = CliRunner().invoke(cli, ["balance", "Depot", "--max-age-days", value], obj=forbidden_factory)
+    assert result.exit_code == 2
+    assert "--max-age-days" in result.output
+
+
+def test_balance_max_age_days(session_factory: sessionmaker, mixed_ledger: None) -> None:
+    # FRESH is 1 day old and STALE 30; neither sits within a day of N.
+    def statuses(max_age: int) -> tuple[bool, bool]:
+        result = CliRunner().invoke(cli, ["balance", "Depot", "--max-age-days", str(max_age)], obj=session_factory)
+        assert result.exit_code == 0, result.output
+        rows = result.output.splitlines()
+        fresh = next(r for r in rows if r.startswith("FRESH"))
+        stale = next(r for r in rows if r.startswith("STALE"))
+        return ("fresh" in fresh, "fresh" in stale)
+
+    assert statuses(10) == (True, False)
+    assert statuses(60) == (True, True)
+    assert statuses(0) == (False, False)

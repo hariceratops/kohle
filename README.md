@@ -103,10 +103,29 @@ kohle-cli entries-in-period Groceries 2026-03-01 2026-04-01
 kohle-cli list-operations                             # the audit trail
 ```
 
-`balance` reports one row per unit with its average cost, and rolls up across
-an account's whole subtree. There is no market valuation yet: fetched prices
-are stored (see [Prices](#prices)) but no report reads them, so the only value
-information `balance` shows is what was paid.
+`balance` reports one row per unit and rolls up across an account's whole
+subtree. Each row shows what was paid (`average cost`) beside the latest stored
+close and the market value it gives, with the same `status` words as
+[`net-worth`](#net-worth) and the same `--max-age-days N` flag:
+
+```
+unit            quantity    price  price date      market value  status                average cost
+------------  ----------  -------  ------------  --------------  ------------------  --------------
+EUR               250.00     -     -                     250.00  -                             1.00
+IE00B4L5Y983       10.00   112.40  2026-10-09           1124.00  fresh                       100.00
+DE0005190003        3.00    80.50  2026-09-01            241.50  stale (2026-09-01)           75.00
+XAU-G             100.00     -     -                    5500.00  no price (at cost)           55.00
+
+Market value: 7115.50
+2 of 3 holdings estimated (1 stale, 1 at cost)
+```
+
+`Market value` is the sum of the unit rows, and the last line counts estimated
+holdings as in `net-worth`. Both lines print only when the account holds at
+least one non-euro unit with a nonzero quantity; a euro-only account (or one
+whose other units are sold out) shows the columns alone, and its
+`Total (base currency)` row repeats the quantity as its market value. Reports
+read stored closes and never fetch (see [Prices](#prices)).
 
 `entries-in-period` shows the counterparty an imported line came from, or `-`
 for entries made by hand, which have none.

@@ -13,10 +13,12 @@ from kohle.core.result import Result
 from kohle.domain.domain_errors import PriceError, ValuationError
 from kohle.infrastructure.transaction_context import DbTransactionContext
 from kohle.infrastructure.uow import UnitOfWork
+from kohle.services.account_services import get_account_by_name_service
 from kohle.use_cases.journal import (
     BASE_CURRENCY,
     NetWorthReport,
     UnitBalance,
+    account_balance,
     net_worth,
 )
 from kohle.use_cases.prices import Fresh, LatestClose, NoClose, Stale, latest_close
@@ -125,5 +127,30 @@ class ValuedNetWorth(UnitOfWork[ValuedNetWorthReport, ValuationError]):
                 return Result.err(receivables_res.unwrap_err())
 
             return Result.ok(ValuedNetWorthReport(report, own_res.unwrap(), receivables_res.unwrap()))
+
+        return self._run(use_case)
+
+
+class QueryValuedBalance(UnitOfWork[list[ValuedBalance], ValuationError]):
+    """An account subtree's balances at their latest close. The fold and every
+    close read share one transaction."""
+
+    def execute(
+        self, account_name: str, today: date, max_age_days: int
+    ) -> Result[list[ValuedBalance], ValuationError]:
+        def use_case(ctx: DbTransactionContext) -> Result[list[ValuedBalance], ValuationError]:
+            account_res = get_account_by_name_service(ctx, account_name)
+            if account_res.is_err:
+                return Result.err(account_res.unwrap_err())
+
+            balances_res = account_balance(ctx, account_res.unwrap().id)
+            if balances_res.is_err:
+                return Result.err(balances_res.unwrap_err())
+
+            valued_res = value_balances(ctx, balances_res.unwrap(), today, max_age_days)
+            if valued_res.is_err:
+                return Result.err(valued_res.unwrap_err())
+
+            return Result.ok(valued_res.unwrap())
 
         return self._run(use_case)

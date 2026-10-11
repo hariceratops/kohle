@@ -9,6 +9,7 @@ from decimal import Decimal
 import pytest
 from sqlalchemy.orm import Session
 
+from kohle.domain.domain_errors import AccountNotFoundError
 from kohle.domain.models import AccountType, Price, UnitKind
 from kohle.infrastructure.transaction_context import DbTransactionContext
 from kohle.services.account_services import (
@@ -19,7 +20,12 @@ from kohle.services.journal_services import LineSpec, add_journal_entry_service
 from kohle.services.unit_services import add_unit_service
 from kohle.use_cases.journal import NetWorth, account_balance
 from kohle.use_cases.prices import Fresh, NoClose, Stale
-from kohle.use_cases.reporting import ValuedNetWorth, value_balances
+from kohle.use_cases.reporting import (
+    QueryValuedBalance,
+    ValuedNetWorth,
+    summarise,
+    value_balances,
+)
 
 TODAY = date(2026, 3, 10)
 EUR = Decimal(1)
@@ -174,9 +180,40 @@ def test_net_worth_estimates(session: Session, ledger: dict) -> None:
     assert (summary.holdings, summary.stale, summary.no_price, summary.estimated) == (3, 1, 1, 2)
 
 
-@pytest.mark.skip(reason="scaffold: issue 038")
-def test_query_valued_balance() -> None:
-    # TODO(038) — one test per site:
-    #   - the same rule on a subtree
-    #   - an unknown account is Err(AccountNotFoundError)
-    raise NotImplementedError
+def test_query_valued_balance_applies_the_rule_across_a_subtree(session: Session) -> None:
+    ctx = DbTransactionContext(session)
+    checking = add_account_service(ctx, "Checking", AccountType.asset, "DE1").unwrap()
+    brokerage = add_account_service(ctx, "Brokerage", AccountType.asset).unwrap()
+    depot_a = add_account_service(ctx, "Depot A", AccountType.asset, "DE2", brokerage.id).unwrap()
+    depot_b = add_account_service(ctx, "Depot B", AccountType.asset, "DE3", brokerage.id).unwrap()
+    eur = add_unit_service(ctx, "EUR", "Euro", UnitKind.currency).unwrap()
+    fresh = add_unit_service(ctx, "FRESH", "Fresh", UnitKind.security).unwrap()
+    never = add_unit_service(ctx, "NEVER", "Never fetched", UnitKind.security).unwrap()
+    add_journal_entry_service(
+        ctx, date(2026, 3, 1), "salary", "Salary",
+        [
+            LineSpec(checking.id, eur.id, Decimal(1000), EUR, is_debit=True),
+            LineSpec(add_account_service(ctx, "Salary", AccountType.income).unwrap().id, eur.id, Decimal(1000), EUR, is_debit=False),
+        ],
+    ).unwrap()
+    _buy(ctx, "fresh-a", depot_a, fresh, "2", "10", checking, eur)
+    _buy(ctx, "fresh-b", depot_b, fresh, "3", "10", checking, eur)
+    _buy(ctx, "never", depot_b, never, "5", "4", checking, eur)
+    session.commit()
+    _seed_close(session, fresh.id, 1, "12")
+
+    valued = QueryValuedBalance(session).execute("Brokerage", TODAY, 7).unwrap()
+
+    by_unit = {v.balance.unit_identifier: v for v in valued}
+    assert isinstance(by_unit["FRESH"].close, Fresh)
+    assert by_unit["FRESH"].market_value == Decimal(60)  # 5 shares across both depots at 12
+    assert by_unit["NEVER"].close == NoClose()
+    assert by_unit["NEVER"].market_value == Decimal(20)
+    assert summarise(valued).holdings == 2
+
+
+def test_query_valued_balance_of_an_unknown_account_is_an_error(session: Session) -> None:
+    res = QueryValuedBalance(session).execute("Nowhere", TODAY, 7)
+
+    assert res.is_err
+    assert isinstance(res.unwrap_err(), AccountNotFoundError)

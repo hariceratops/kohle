@@ -16,7 +16,6 @@ from kohle.use_cases.journal import (
     CrossUnitLine,
     ImportStatement,
     LineInput,
-    QueryAccountBalance,
     QueryJournalByPeriod,
     RecordSimpleEntry,
     RecordSplitEntry,
@@ -36,7 +35,14 @@ from kohle.use_cases.prices import (
     Unpriced,
     call_price_plugins,
 )
-from kohle.use_cases.reporting import EstimateSummary, ValuedBalance, ValuedNetWorth
+from kohle.use_cases.reporting import (
+    EstimateSummary,
+    QueryValuedBalance,
+    ValuedBalance,
+    ValuedNetWorth,
+    at_market,
+    summarise,
+)
 from kohle.use_cases.rules import AddRule, ListRules, RemoveRule
 from kohle.use_cases.splitting import (
     AddSplitGroup,
@@ -364,28 +370,33 @@ def entries_in_period(make_session, account_name, start, end):
 
 @cli.command()
 @click.argument("account_name")
+@MAX_AGE_DAYS
 @click.pass_obj
-def balance_cmd(make_session, account_name: str):
-    query = QueryAccountBalance(make_session())
-    res = query.execute(account_name)
+def balance_cmd(make_session, account_name: str, max_age_days: int):
+    res = QueryValuedBalance(make_session()).execute(account_name, date.today(), max_age_days)  # noqa: DTZ011 - the user's local date, by design
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
-    balances = res.unwrap()
-    if not balances:
+    valued = res.unwrap()
+    if not valued:
         click.echo("No holdings")
         return
     rows = [
         {
-            "unit": b.unit_identifier,
-            "quantity": b.quantity,
-            "average cost": b.average_cost,
+            "unit": v.balance.unit_identifier,
+            "quantity": v.balance.quantity,
+            **_market_columns(v),
+            "average cost": v.balance.average_cost,
         }
-        for b in balances
+        for v in valued
     ]
-    if len(balances) == 1 and balances[0].unit_identifier == BASE_CURRENCY:
+    if len(valued) == 1 and valued[0].balance.unit_identifier == BASE_CURRENCY:
         rows.append({
             "unit": "Total (base currency)",
-            "quantity": balances[0].quantity,
+            "quantity": valued[0].balance.quantity,
+            "price": None,
+            "price date": None,
+            "market value": valued[0].balance.quantity,
+            "status": None,
             "average cost": None,
         })
     # missingval renders None as "-" without putting a str into the
@@ -393,6 +404,13 @@ def balance_cmd(make_session, account_name: str):
     # the whole column as non-numeric, silently disabling floatfmt for
     # every other row in it (not just the one with the missing value).
     click.echo(tabulate(rows, headers="keys", floatfmt=".2f", missingval="-"))
+    # Gated on M, not on "any non-base row": a sold-out security is a
+    # non-base row but not a holding. The total sums `valued`, never `rows`,
+    # so the restatement row cannot be counted.
+    summary = summarise(valued)
+    if summary.holdings > 0:
+        click.echo(f"\nMarket value: {at_market(valued):.2f}")
+        click.echo(_estimates_line(summary))
 
 
 @cli.command()
