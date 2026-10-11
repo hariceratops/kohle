@@ -1,4 +1,4 @@
-from collections.abc import Collection, Mapping
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 
@@ -61,10 +61,26 @@ class SetPriceSource(UnitOfWork[PriceBinding, SetPriceSourceError]):
         return self._run(use_case)
 
 
+def oldest_close_first(stored: Mapping[str, Sequence[date | None]]) -> list[str]:
+    """Symbols in the order a quota-limited plugin should spend requests. `stored`
+    maps each symbol to the latest stored close date of each unit bound to it
+    (None: no close). A symbol is as stale as its stalest unit; no close sorts
+    before any date; ties break by symbol."""
+
+    def key(symbol: str) -> tuple[bool, date, str]:
+        dates = stored[symbol]
+        oldest = None if None in dates else min(d for d in dates if d is not None)
+        return (oldest is not None, oldest or date.min, symbol)
+
+    return sorted(stored, key=key)
+
+
 @dataclass(frozen=True, slots=True)
 class PriceTargets:
     # plugin name -> symbol -> the held units bound to that (plugin, symbol)
     by_plugin: dict[str, dict[str, list[Unit]]]
+    # plugin name -> its symbols in the order to request them
+    request_order: dict[str, list[str]]
     unbound: list[Unit]
 
 
@@ -89,7 +105,21 @@ class ListPriceTargets(UnitOfWork[PriceTargets, ListPriceTargetsError]):
                     unbound.append(unit)
                 else:
                     by_plugin.setdefault(binding.plugin_name, {}).setdefault(binding.symbol, []).append(unit)
-            return Result.ok(PriceTargets(by_plugin, unbound))
+
+            request_order: dict[str, list[str]] = {}
+            for name, symbols in by_plugin.items():
+                stored: dict[str, list[date | None]] = {}
+                for symbol, units in symbols.items():
+                    dates: list[date | None] = []
+                    for unit in units:
+                        latest_res = latest_price_service(ctx, unit.id)
+                        if latest_res.is_err:
+                            return Result.err(latest_res.unwrap_err())
+                        latest = latest_res.unwrap()
+                        dates.append(None if latest is None else latest.price_date)
+                    stored[symbol] = dates
+                request_order[name] = oldest_close_first(stored)
+            return Result.ok(PriceTargets(by_plugin, request_order, unbound))
 
         return self._run(use_case)
 
@@ -106,7 +136,7 @@ def call_price_plugins(targets: PriceTargets, plugins: Mapping[str, PriceFetcher
         if plugin is None:
             fetched[name] = Result.err(UnknownPricePlugin(name, sorted(plugins)))
         else:
-            fetched[name] = plugin.fetch_latest_closes(sorted(targets.by_plugin[name])).map_err(lambda e: e)
+            fetched[name] = plugin.fetch_latest_closes(targets.request_order[name]).map_err(lambda e: e)
     return fetched
 
 

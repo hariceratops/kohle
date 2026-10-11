@@ -61,6 +61,7 @@ kohle-tui = "kohle.app.tui.tui:main"
 kohle-deutsche-bank = "kohle.app.plugins.kohle_deutsche_bank_importer:DeustcheBankStatementImporter"
 kohle-simple-broker = "kohle.app.plugins.kohle_simple_broker_importer:SimpleBrokerStatementImporter"
 file = "kohle.app.plugins.kohle_file_price_fetcher:FilePriceFetcher"
+alphavantage = "kohle.app.plugins.kohle_alphavantage_price_fetcher:AlphaVantagePriceFetcher"
 
 # Set packages to include
 [tool.setuptools.packages.find]

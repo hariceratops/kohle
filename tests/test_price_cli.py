@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from click.testing import CliRunner
@@ -14,6 +15,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import sessionmaker
 
 from kohle.app.cli.cli import cli
+from kohle.app.plugins.kohle_alphavantage_price_fetcher import AlphaVantagePriceFetcher
 from kohle.app.plugins.kohle_file_price_fetcher import FilePriceFetcher
 from kohle.core.result import Result
 from kohle.domain.models import (
@@ -197,11 +199,71 @@ def test_rejected_file_close_exits_one_and_valid_unit_is_still_stored(
         assert [(p.price, p.source) for p in session.scalars(select(Price))] == [(Decimal(3), "file")]
 
 
-@pytest.mark.skip(reason="scaffold: issue 033")
-def test_alphavantage_throttle_scenario() -> None:
-    # TODO(033) — one test per site:
-    #   - 033: exits 1 with one row stored (design §10.6)
-    raise NotImplementedError
+class _AlphaFake:
+    def __init__(self, bodies: dict[str, bytes]) -> None:
+        self.bodies = bodies
+        self.symbols: list[str] = []
+
+    def __call__(self, url: str) -> bytes:
+        symbol = parse_qs(urlparse(url).query)["symbol"][0]
+        self.symbols.append(symbol)
+        return self.bodies[symbol]
+
+
+def _alpha_fetch(ledger: sessionmaker, monkeypatch: pytest.MonkeyPatch, fake: _AlphaFake):
+    plugin = AlphaVantagePriceFetcher(http_get=fake, sleep=lambda _seconds: None)
+    monkeypatch.setattr("kohle.app.cli.cli.load_price_plugins", lambda: {"alphavantage": plugin})
+    monkeypatch.setenv("KOHLE_ALPHAVANTAGE_KEY", "TESTKEY")
+    return CliRunner().invoke(cli, ["fetch-prices"], obj=ledger)
+
+
+def _bind_alpha(ledger: sessionmaker, monkeypatch: pytest.MonkeyPatch) -> None:
+    with ledger() as session:
+        AddUnit(session).execute("X2", "Y", UnitKind.security).unwrap()
+    _hold(ledger, "X1", "X2")
+    monkeypatch.setattr("kohle.app.cli.cli.load_price_plugins", lambda: {"alphavantage": AlphaVantagePriceFetcher()})
+    for unit, symbol in (("X1", "A"), ("X2", "B")):
+        result = CliRunner().invoke(cli, ["set-price-source", unit, "alphavantage", symbol], obj=ledger)
+        assert result.exit_code == 0, result.output
+
+
+def _fixture(name: str) -> bytes:
+    return (Path(__file__).parent / "fixtures" / "alphavantage" / name).read_bytes()
+
+
+def test_alphavantage_throttle_scenario(ledger: sessionmaker, monkeypatch: pytest.MonkeyPatch) -> None:
+    _bind_alpha(ledger, monkeypatch)
+    fake = _AlphaFake({"A": _fixture("daily.json"), "B": _fixture("daily_limit.json")})
+
+    result = _alpha_fetch(ledger, monkeypatch, fake)
+
+    assert result.exit_code == 1
+    assert fake.symbols == ["A", "B"]
+    assert "1 held securities unpriced" in result.output
+    assert "transient" in result.output
+    assert "TESTKEY" not in result.output
+    with ledger() as session:
+        (stored,) = session.scalars(select(Price))
+        assert (stored.unit.identifier, stored.price, stored.source) == ("X1", Decimal("227.1300"), "alphavantage")
+
+
+def test_alphavantage_requests_the_unit_with_no_close_first(
+    ledger: sessionmaker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _bind_alpha(ledger, monkeypatch)
+    with ledger() as session:
+        a = get_unit_by_identifier_service(DbTransactionContext(session), "X1").unwrap()
+        session.add(Price(unit_id=a.id, price_date=date(2026, 10, 1), price=Decimal(5), source="alphavantage"))
+        session.commit()
+    fake = _AlphaFake({"A": _fixture("daily_limit.json"), "B": _fixture("daily.json")})
+
+    result = _alpha_fetch(ledger, monkeypatch, fake)
+
+    assert result.exit_code == 1
+    assert fake.symbols == ["B", "A"]
+    with ledger() as session:
+        stored = {p.unit.identifier: p.price for p in session.scalars(select(Price))}
+        assert stored == {"X1": Decimal(5), "X2": Decimal("227.1300")}
 
 
 def test_nothing_held_says_so(ledger: sessionmaker, monkeypatch: pytest.MonkeyPatch) -> None:

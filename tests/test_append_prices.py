@@ -385,3 +385,42 @@ def test_audit_trail_one_group_per_run(session: Session, ledger: dict[str, Unit]
     assert sorted(op.entity_id for op in created) == sorted(p.id for p in _stored(session))
     assert len({op.group_id for op in created}) == 1
     assert _groups(session) == groups_before + 1
+
+
+def test_request_order_follows_stored_closes(session: Session, ledger: dict[str, Unit]) -> None:
+    ctx = DbTransactionContext(session)
+    set_price_binding_service(ctx, ledger["D"].id, "file", "AAA").unwrap()
+    session.commit()
+    _seed_price(session, ledger["A"], date(2026, 3, 1), "9")
+    _seed_price(session, ledger["D"], date(2026, 3, 2), "9")
+
+    targets = _targets(session)
+
+    # SHARED has a unit (B) with no close; alphabetical order would put AAA first.
+    assert targets.request_order == {"file": ["SHARED", "AAA"], "other": ["CCC"]}
+
+
+def test_request_order_ranks_a_shared_binding_by_its_oldest_unit(
+    session: Session, ledger: dict[str, Unit]
+) -> None:
+    ctx = DbTransactionContext(session)
+    set_price_binding_service(ctx, ledger["D"].id, "file", "AAA").unwrap()
+    session.commit()
+    _seed_price(session, ledger["A"], date(2026, 3, 1), "9")
+    _seed_price(session, ledger["B"], date(2026, 3, 2), "9")
+    _seed_price(session, ledger["D"], date(2026, 3, 1), "9")
+
+    # Tied on 03-01 (SHARED via A, AAA via D): the symbol breaks the tie.
+    assert _targets(session).request_order["file"] == ["AAA", "SHARED"]
+
+
+def test_call_price_plugins_passes_the_request_order_unchanged(session: Session, ledger: dict[str, Unit]) -> None:
+    ctx = DbTransactionContext(session)
+    set_price_binding_service(ctx, ledger["D"].id, "file", "AAA").unwrap()
+    session.commit()
+    _seed_price(session, ledger["D"], date(2026, 3, 1), "9")
+    plugin = _FakePlugin("file", Result.ok({}))
+
+    call_price_plugins(_targets(session), {"file": plugin, "other": _FakePlugin("other", Result.ok({}))})
+
+    assert plugin.calls == [["SHARED", "AAA"]]
