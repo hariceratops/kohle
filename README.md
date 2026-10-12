@@ -103,10 +103,29 @@ kohle-cli entries-in-period Groceries 2026-03-01 2026-04-01
 kohle-cli list-operations                             # the audit trail
 ```
 
-`balance` reports one row per unit with its average cost, and rolls up across
-an account's whole subtree. There is no market valuation yet: fetched prices
-are stored (see [Prices](#prices)) but no report reads them, so the only value
-information `balance` shows is what was paid.
+`balance` reports one row per unit and rolls up across an account's whole
+subtree. Each row shows what was paid (`average cost`) beside the latest stored
+close and the market value it gives, with the same `status` words as
+[`net-worth`](#net-worth) and the same `--max-age-days N` flag:
+
+```
+unit            quantity    price  price date      market value  status                average cost
+------------  ----------  -------  ------------  --------------  ------------------  --------------
+EUR               250.00     -     -                     250.00  -                             1.00
+IE00B4L5Y983       10.00   112.40  2026-10-09           1124.00  fresh                       100.00
+DE0005190003        3.00    80.50  2026-09-01            241.50  stale (2026-09-01)           75.00
+XAU-G             100.00     -     -                    5500.00  no price (at cost)           55.00
+
+Market value: 7115.50
+2 of 3 holdings estimated (1 stale, 1 at cost)
+```
+
+`Market value` is the sum of the unit rows, and the last line counts estimated
+holdings as in `net-worth`. Both lines print only when the account holds at
+least one non-euro unit with a nonzero quantity; a euro-only account (or one
+whose other units are sold out) shows the columns alone, and its
+`Total (base currency)` row repeats the quantity as its market value. Reports
+read stored closes and never fetch (see [Prices](#prices)).
 
 `entries-in-period` shows the counterparty an imported line came from, or `-`
 for entries made by hand, which have none.
@@ -352,12 +371,17 @@ kohle-cli net-worth
 ```
 
 ```
-section                   unit    quantity    at cost
-------------------------  ------  ---------  --------
-Own accounts              EUR      4796.00    4796.00
-Receivables (People)      EUR        16.00      16.00
+section               unit            quantity    price  price date      market value  status                at cost
+--------------------  ------------  ----------  -------  ------------  --------------  ------------------  ---------
+Own accounts          EUR              4796.00     -     -                    4796.00  -                     4796.00
+Own accounts          IE00B4L5Y983       10.00   112.40  2026-10-09           1124.00  fresh                 1000.00
+Own accounts          DE0005190003        3.00    80.50  2026-09-01            241.50  stale (2026-09-01)     225.00
+Own accounts          XAU-G             100.00     -     -                    5500.00  no price (at cost)    5500.00
+Receivables (People)  EUR                16.00     -     -                      16.00  -                       16.00
 
-Net worth (at cost): 4812.00
+Net worth (at cost): 11537.00
+Net worth (at market): 11677.50
+2 of 3 holdings estimated (1 stale, 1 at cost)
 ```
 
 The total folds receivables in rather than reporting them next to net worth,
@@ -367,11 +391,27 @@ balances, so including them would always report exactly 0. A person account
 with a negative balance (you owe them) lowers the total; a positive one
 (they owe you) raises it.
 
-Every figure is reported **at recorded cost**, not current market value —
-"at cost" is in the output label because a holding bought at 100 and now
-worth 140 is still reported at 100. Prices are fetched and stored now (see
-[Prices](#prices)), but market valuation, which reads them, is the separate,
-deferred `portfolio-and-profit-reporting` work.
+Each holding is shown twice: **at cost** (what you recorded, the moving
+average) and **at market** (quantity times the latest stored close). The close
+comes from the `prices` table that `fetch-prices` fills; reports never fetch.
+The `status` column says where a market value came from:
+
+- `fresh`: the latest close is at most 7 days old (`--max-age-days N` changes
+  the 7; `0` means only today's close is fresh).
+- `stale (YYYY-MM-DD)`: the latest close is older; it is still used, and its
+  date is shown.
+- `no price (at cost)`: no close is stored (never fetched, no price source
+  bound, or a unit that has no price), so the holding is valued at cost.
+- `-`: euros are worth their quantity, and a holding with quantity 0 is worth
+  0; neither looks up a close.
+
+`Net worth (at cost)` is unchanged and `Net worth (at market)` is the sum of
+every row's market value in both sections. Receivables stay at face value.
+
+The last line counts the holdings whose market value is an estimate: rows
+other than euros with a nonzero quantity (3 above), of which those with a
+`stale` or `no price (at cost)` status are estimated. It always prints, as
+`0 of M holdings estimated` when none are.
 
 ### Prices
 Current prices come from price plugins, a second plugin kind in the same

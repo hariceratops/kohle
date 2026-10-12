@@ -528,14 +528,27 @@ class UnitBalance:
     unit_identifier: str
     quantity: Decimal
     average_cost: Decimal | None
+    unit_id: int
+
+    @property
+    def at_cost(self) -> Decimal:
+        """`quantity * average_cost`, not `sum(line.value)` — the two coincide
+        for a euro-only ledger and diverge the moment a holding is partly sold,
+        because the sale's counter-line is priced at the sale price, not the
+        cost basis, and so carries the realised gain invisibly (design §9.3).
+        `average_cost` is `None` only when `quantity` is 0, which contributes 0."""
+        if self.average_cost is None:
+            return Decimal(0)
+        return self.quantity * self.average_cost
 
 
 class _RunningCost:
     """Per-unit accumulator for the moving-average cost fold (design §6.4)."""
 
-    __slots__ = ("basis", "quantity")
+    __slots__ = ("basis", "quantity", "unit_id")
 
-    def __init__(self) -> None:
+    def __init__(self, unit_id: int) -> None:
+        self.unit_id = unit_id
         self.basis = Decimal(0)
         self.quantity = Decimal(0)
 
@@ -574,10 +587,10 @@ def aggregate_by_unit(lines: Iterable[JournalLine]) -> list[UnitBalance]:
     for line in lines:
         identifier = line.unit.identifier
         if identifier not in running:
-            running[identifier] = _RunningCost()
+            running[identifier] = _RunningCost(line.unit_id)
         running[identifier].apply(line)
     return [
-        UnitBalance(identifier, cost.quantity, cost.average_cost)
+        UnitBalance(identifier, cost.quantity, cost.average_cost, cost.unit_id)
         for identifier, cost in running.items()
     ]
 
@@ -635,16 +648,8 @@ class QueryAccountBalance(UnitOfWork[list[UnitBalance], BalanceError]):
 
 
 def _at_cost(balances: Iterable[UnitBalance]) -> Decimal:
-    """`quantity * average_cost`, not `sum(line.value)` — the two coincide
-    for a euro-only ledger and diverge the moment a holding is partly sold,
-    because the sale's counter-line is priced at the sale price, not the
-    cost basis, and so carries the realised gain invisibly (design §9.3).
-    `average_cost` is `None` only when `quantity` is 0, so skipping it here
-    contributes 0 either way."""
-    return sum(
-        (b.quantity * b.average_cost for b in balances if b.average_cost is not None),
-        Decimal(0),
-    )
+    """Sum of `UnitBalance.at_cost`, which documents why it is not `sum(line.value)`."""
+    return sum((b.at_cost for b in balances), Decimal(0))
 
 
 @dataclass(frozen=True, slots=True)
@@ -665,7 +670,7 @@ class NetWorthReport:
         return self.own_at_cost + self.receivables_at_cost
 
 
-class NetWorth(UnitOfWork[NetWorthReport, BalanceError]):
+def net_worth(ctx: DbTransactionContext) -> Result[NetWorthReport, BalanceError]:
     """Net worth at recorded cost (design §9). Income and expense accounts
     are excluded — every entry balances, so including them would always net
     to exactly 0, which would look like a bug rather than a definition error
@@ -673,40 +678,43 @@ class NetWorth(UnitOfWork[NetWorthReport, BalanceError]):
     membership rather than selected by account type, so a person account
     still counts even with the default `expense` type `add-account` gives
     it, and nothing is double-counted since the partition is by subtree.
-    Market valuation is a separate, deferred spec (design §9.4) — this is
-    `quantity * average_cost`, see `_at_cost`.
-    """
+    Factored out of `NetWorth` so `reporting.ValuedNetWorth` can run the same
+    partition inside its own transaction."""
+    people_res = get_account_by_name_service(ctx, PEOPLE_ROOT)
+    if people_res.is_err:
+        return Result.err(people_res.unwrap_err())
+
+    people_ids_res = descendant_account_ids_service(ctx, people_res.unwrap().id)
+    if people_ids_res.is_err:
+        return Result.err(people_ids_res.unwrap_err())
+    people_ids = set(people_ids_res.unwrap())
+
+    accounts_res = list_accounts_service(ctx)
+    if accounts_res.is_err:
+        return Result.err(accounts_res.unwrap_err())
+    balance_sheet_ids = {
+        a.id for a in accounts_res.unwrap()
+        if a.type in (AccountType.asset, AccountType.liability)
+    } | people_ids
+
+    own_lines_res = account_lines_service(ctx, balance_sheet_ids - people_ids)
+    if own_lines_res.is_err:
+        return Result.err(own_lines_res.unwrap_err())
+
+    receivables_lines_res = account_lines_service(ctx, people_ids)
+    if receivables_lines_res.is_err:
+        return Result.err(receivables_lines_res.unwrap_err())
+
+    return Result.ok(NetWorthReport(
+        own=aggregate_by_unit(own_lines_res.unwrap()),
+        receivables=aggregate_by_unit(receivables_lines_res.unwrap()),
+    ))
+
+
+class NetWorth(UnitOfWork[NetWorthReport, BalanceError]):
+    """Net worth at recorded cost, see `net_worth`. Market valuation is
+    `reporting.ValuedNetWorth`; this is `quantity * average_cost`, see
+    `UnitBalance.at_cost`."""
 
     def execute(self) -> Result[NetWorthReport, BalanceError]:
-        def use_case(ctx: DbTransactionContext) -> Result[NetWorthReport, BalanceError]:
-            people_res = get_account_by_name_service(ctx, PEOPLE_ROOT)
-            if people_res.is_err:
-                return Result.err(people_res.unwrap_err())
-
-            people_ids_res = descendant_account_ids_service(ctx, people_res.unwrap().id)
-            if people_ids_res.is_err:
-                return Result.err(people_ids_res.unwrap_err())
-            people_ids = set(people_ids_res.unwrap())
-
-            accounts_res = list_accounts_service(ctx)
-            if accounts_res.is_err:
-                return Result.err(accounts_res.unwrap_err())
-            balance_sheet_ids = {
-                a.id for a in accounts_res.unwrap()
-                if a.type in (AccountType.asset, AccountType.liability)
-            } | people_ids
-
-            own_lines_res = account_lines_service(ctx, balance_sheet_ids - people_ids)
-            if own_lines_res.is_err:
-                return Result.err(own_lines_res.unwrap_err())
-
-            receivables_lines_res = account_lines_service(ctx, people_ids)
-            if receivables_lines_res.is_err:
-                return Result.err(receivables_lines_res.unwrap_err())
-
-            return Result.ok(NetWorthReport(
-                own=aggregate_by_unit(own_lines_res.unwrap()),
-                receivables=aggregate_by_unit(receivables_lines_res.unwrap()),
-            ))
-
-        return self._run(use_case)
+        return self._run(net_worth)

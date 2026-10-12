@@ -16,8 +16,6 @@ from kohle.use_cases.journal import (
     CrossUnitLine,
     ImportStatement,
     LineInput,
-    NetWorth,
-    QueryAccountBalance,
     QueryJournalByPeriod,
     RecordSimpleEntry,
     RecordSplitEntry,
@@ -27,12 +25,23 @@ from kohle.use_cases.prices import (
     AlreadyStored,
     AppendPrices,
     FetchOutcome,
+    Fresh,
     ListPriceTargets,
+    NoClose,
     Priced,
     SetPriceSource,
+    Stale,
     Unbound,
     Unpriced,
     call_price_plugins,
+)
+from kohle.use_cases.reporting import (
+    EstimateSummary,
+    QueryValuedBalance,
+    ValuedBalance,
+    ValuedNetWorth,
+    at_market,
+    summarise,
 )
 from kohle.use_cases.rules import AddRule, ListRules, RemoveRule
 from kohle.use_cases.splitting import (
@@ -58,6 +67,11 @@ class DecimalParamType(click.ParamType):
 
 
 DECIMAL = DecimalParamType()
+
+MAX_AGE_DAYS = click.option(
+    "--max-age-days", type=click.IntRange(min=0), default=7, show_default=True,
+    help="Days a close stays fresh; older closes are marked stale",
+)
 
 
 def _parse_line(raw: str) -> LineInput:
@@ -356,28 +370,30 @@ def entries_in_period(make_session, account_name, start, end):
 
 @cli.command()
 @click.argument("account_name")
+@MAX_AGE_DAYS
 @click.pass_obj
-def balance_cmd(make_session, account_name: str):
-    query = QueryAccountBalance(make_session())
-    res = query.execute(account_name)
+def balance_cmd(make_session, account_name: str, max_age_days: int):
+    res = QueryValuedBalance(make_session()).execute(account_name, date.today(), max_age_days)  # noqa: DTZ011 - the user's local date, by design
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
-    balances = res.unwrap()
-    if not balances:
+    valued = res.unwrap()
+    if not valued:
         click.echo("No holdings")
         return
     rows = [
         {
-            "unit": b.unit_identifier,
-            "quantity": b.quantity,
-            "average cost": b.average_cost,
+            "unit": v.balance.unit_identifier,
+            "quantity": v.balance.quantity,
+            **_market_columns(v),
+            "average cost": v.balance.average_cost,
         }
-        for b in balances
+        for v in valued
     ]
-    if len(balances) == 1 and balances[0].unit_identifier == BASE_CURRENCY:
+    if len(valued) == 1 and valued[0].balance.unit_identifier == BASE_CURRENCY:
         rows.append({
             "unit": "Total (base currency)",
-            "quantity": balances[0].quantity,
+            "quantity": valued[0].balance.quantity,
+            **_market_columns(valued[0]),
             "average cost": None,
         })
     # missingval renders None as "-" without putting a str into the
@@ -385,6 +401,13 @@ def balance_cmd(make_session, account_name: str):
     # the whole column as non-numeric, silently disabling floatfmt for
     # every other row in it (not just the one with the missing value).
     click.echo(tabulate(rows, headers="keys", floatfmt=".2f", missingval="-"))
+    # Gated on `holdings`, not on "any non-base row": a sold-out security is a
+    # non-base row but not a holding. The total sums `valued`, never `rows`,
+    # so the restatement row cannot be counted.
+    summary = summarise(valued)
+    if summary.holdings > 0:
+        click.echo(f"\nMarket value: {at_market(valued):.2f}")
+        click.echo(_estimates_line(summary))
 
 
 @cli.command()
@@ -609,33 +632,69 @@ def _print_who_owes_what_by_group(make_session):
     click.echo("\nNote: group figures are historical allocations, not settlement-adjusted balances.")
 
 
-def _net_worth_rows(section: str, balances: list) -> list[dict]:
+def _market_columns(row: ValuedBalance) -> dict[str, object]:
+    price: Decimal | None
+    price_date: date | None
+    status: str | None
+    match row.close:
+        case Fresh(c):
+            price, price_date, status = c.price, c.price_date, "fresh"
+        case Stale(c):
+            price, price_date, status = c.price, c.price_date, f"stale ({c.price_date.isoformat()})"
+        case NoClose():
+            price, price_date, status = None, None, "no price (at cost)"
+        case None:
+            price, price_date, status = None, None, None
+        case _:
+            assert_never(row.close)
+    return {
+        "price": price,
+        "price date": price_date,
+        "market value": row.market_value,
+        "status": status,
+    }
+
+
+def _net_worth_rows(section: str, rows: list[ValuedBalance]) -> list[dict]:
     return [
         {
             "section": section,
-            "unit": b.unit_identifier,
-            "quantity": b.quantity,
-            "at cost": b.quantity * b.average_cost if b.average_cost is not None else Decimal(0),
+            "unit": r.balance.unit_identifier,
+            "quantity": r.balance.quantity,
+            **_market_columns(r),
+            "at cost": r.balance.at_cost,
         }
-        for b in balances
+        for r in rows
     ]
 
 
+def _estimates_line(summary: EstimateSummary) -> str:
+    if summary.estimated == 0:
+        return f"0 of {summary.holdings} holdings estimated"
+    return (
+        f"{summary.estimated} of {summary.holdings} holdings estimated "
+        f"({summary.stale} stale, {summary.no_price} at cost)"
+    )
+
+
 @cli.command()
+@MAX_AGE_DAYS
 @click.pass_obj
-def net_worth_cmd(make_session):
-    res = NetWorth(make_session()).execute()
+def net_worth_cmd(make_session, max_age_days: int):
+    res = ValuedNetWorth(make_session()).execute(date.today(), max_age_days)  # noqa: DTZ011 - the user's local date, by design
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
     report = res.unwrap()
     rows = _net_worth_rows("Own accounts", report.own) + _net_worth_rows(
         "Receivables (People)", report.receivables
     )
-    click.echo(tabulate(rows, headers="keys", floatfmt=".2f"))
+    click.echo(tabulate(rows, headers="keys", floatfmt=".2f", missingval="-"))
     # The total folds receivables in rather than reporting them separately
     # (design §2.4) — the breakdown above is what makes that checkable
     # rather than a bare number the user has to trust.
-    click.echo(f"\nNet worth (at cost): {report.net_worth_at_cost:.2f}")
+    click.echo(f"\nNet worth (at cost): {report.at_cost.net_worth_at_cost:.2f}")
+    click.echo(f"Net worth (at market): {report.net_worth_at_market:.2f}")
+    click.echo(_estimates_line(report.estimates))
 
 
 @cli.command()

@@ -21,7 +21,10 @@ reporting, never by transaction recording — a recorded entry must not depend
 on what a price source said on any particular day. `fetch-prices` is the only
 writer of that table. It calls price plugins, a second plugin kind in the same
 entry-point group as the importers, each unit bound to exactly one plugin and
-symbol by `set-price-source`.
+symbol by `set-price-source`. `balance` and `net-worth` value holdings at the
+latest stored close, marking stale and missing prices, through
+`kohle/use_cases/reporting.py`; that module is separate because a test forbids
+`journal.py` from touching prices, and `prices.py` holds the writers.
 
 Accounts form a tree and everything is an account: bank accounts, virtual
 sub-accounts for earmarked savings, instruments, expense categories, and
