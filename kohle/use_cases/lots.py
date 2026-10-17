@@ -12,7 +12,7 @@ from datetime import date
 from decimal import Decimal
 
 from kohle.core.result import Result
-from kohle.domain.domain_errors import LotError, RealisedError
+from kohle.domain.domain_errors import LotError, LotShortfall, RealisedError
 from kohle.domain.models import JournalLine, Unit, UnitKind
 from kohle.infrastructure.transaction_context import DbTransactionContext
 from kohle.infrastructure.uow import UnitOfWork
@@ -103,7 +103,9 @@ def replay(lines: Iterable[JournalLine], own: dict[int, str]) -> Result[LotRepla
             lot = Lot(line.entry.entry_date, line.id, line.quantity, line.unit_price)
             bisect.insort(queue, lot, key=_acquisition)
         else:
-            taken, _ = _take(queue, line.quantity)
+            taken, shortfall = _take(queue, line.quantity)
+            if shortfall > 0:
+                return Result.err(LotShortfall(identifier, own[line.account_id], line.entry.entry_date, shortfall))
             sales.append(Sale(
                 entry_date=line.entry.entry_date,
                 account_name=own[line.account_id],

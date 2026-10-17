@@ -3,6 +3,7 @@ from decimal import Decimal
 
 import pytest
 
+from kohle.domain.domain_errors import LotShortfall
 from kohle.domain.models import JournalEntry, JournalLine, Unit
 from kohle.use_cases.lots import Lot, _take, realised_gain, replay
 
@@ -54,9 +55,18 @@ def test_take_splits_a_lot_exactly():
     assert [lot.quantity for lot in queue] == [Decimal("0.2")]
 
 
-@pytest.mark.skip(reason="issue 041")
 def test_oversell_fails_naming_unit_account_date_and_shortfall():
-    ...
+    lines = [
+        _line(1, 1, "10", "100", is_debit=True),
+        _line(2, 2, "15", "130", is_debit=False),
+    ]
+
+    error = replay(lines, OWN).unwrap_err()
+
+    assert isinstance(error, LotShortfall)
+    assert str(error) == (
+        "X1 in 'Depot' on 2026-01-02: disposes of 5 more than the account holds; is an earlier purchase missing?"
+    )
 
 
 @pytest.mark.skip(reason="issue 042")

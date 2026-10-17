@@ -53,8 +53,20 @@ def test_realised_without_sales_prints_no_sales_and_zero_total(session_factory):
     assert result.output.splitlines() == ["No sales", "", "Realised gain: 0.00"]
 
 
-@pytest.mark.skip(reason="issues 041-043")
-def test_failures_exit_non_zero_with_no_table():
+def test_oversell_exits_non_zero_with_no_table(session_factory):
+    runner = _ledger(session_factory)
+    oversell = ["record", "2026-04-01", "sell", "100", "--from", "Depot", "--to", "Cash", "--from-unit", "X1", "--from-price", "130"]
+    assert runner.invoke(cli, oversell, obj=session_factory).exit_code == 0
+
+    result = runner.invoke(cli, ["realised"], obj=session_factory)
+
+    assert result.exit_code != 0
+    assert "X1" in result.output and "'Depot'" in result.output and "2026-04-01" in result.output
+    assert "Realised gain" not in result.output
+
+
+@pytest.mark.skip(reason="issues 042-043")
+def test_move_and_people_failures_exit_non_zero_with_no_table():
     ...
 
 

@@ -453,8 +453,23 @@ ListPriceTargetsError = BalanceError | PriceError
 ValuationError = BalanceError | PriceError
 
 
-class LotError(Exception):
-    pass
+class LotShortfall(Exception):
+    def __init__(self, unit_identifier: str, account_name: str, entry_date: date, shortfall: Decimal) -> None:
+        super().__init__()
+        self.unit_identifier = unit_identifier
+        self.account_name = account_name
+        self.entry_date = entry_date
+        self.shortfall = shortfall
+
+    def __str__(self) -> str:
+        return (
+            f"{self.unit_identifier} in {self.account_name!r} on {self.entry_date}: "
+            f"disposes of {self.shortfall.normalize():f} more than the account holds; "
+            "is an earlier purchase missing?"
+        )
+
+
+LotError = LotShortfall
 
 
 RealisedError = BalanceError | LotError
