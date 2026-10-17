@@ -95,6 +95,19 @@ kohle-cli record-split 2026-03-05 "Shared dinner" \
 Entries must balance by value, not by quantity — which is what lets 10 shares
 at 100 balance 1000 EUR.
 
+To move shares between two of your own depots, credit one and debit the other
+in the same entry. `realised` treats this as a move, not a sale: the lots keep
+their original dates and costs, and any equal price balances the entry.
+
+```bash
+kohle-cli record-split 2026-05-01 "Move to DepotB" \
+    --line DepotA:10:IE00B4L5Y983:100:credit \
+    --line DepotB:10:IE00B4L5Y983:100:debit
+```
+
+An entry that moves a different quantity out than in fails `realised` with
+`UnbalancedOwnMove`; record a sale or purchase as its own entry.
+
 ### Reading the ledger
 
 ```bash

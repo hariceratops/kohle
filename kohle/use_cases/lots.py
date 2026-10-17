@@ -12,7 +12,7 @@ from datetime import date
 from decimal import Decimal
 
 from kohle.core.result import Result
-from kohle.domain.domain_errors import LotError, LotShortfall, RealisedError
+from kohle.domain.domain_errors import LotError, LotShortfall, RealisedError, UnbalancedOwnMove
 from kohle.domain.models import JournalLine, Unit, UnitKind
 from kohle.infrastructure.transaction_context import DbTransactionContext
 from kohle.infrastructure.uow import UnitOfWork
@@ -87,33 +87,79 @@ def _take(queue: list[Lot], quantity: Decimal) -> tuple[list[Lot], Decimal]:
     return taken, remaining
 
 
+def _sale(line: JournalLine, account_name: str, taken: list[Lot]) -> Sale:
+    return Sale(
+        entry_date=line.entry.entry_date,
+        account_name=account_name,
+        unit_identifier=line.unit.identifier,
+        quantity=line.quantity,
+        proceeds=line.quantity * line.unit_price,
+        fifo_cost=sum((lot.cost for lot in taken), Decimal(0)),
+    )
+
+
+def _move(
+    queues: dict[tuple[int, str], list[Lot]],
+    own: dict[int, str],
+    credits: list[JournalLine],
+    debits: list[JournalLine],
+) -> LotError | None:
+    """Lots keep their dates and costs; the move lines' own prices are ignored."""
+    first = credits[0]
+    moved_out = sum((line.quantity for line in credits), Decimal(0))
+    moved_in = sum((line.quantity for line in debits), Decimal(0))
+    if moved_out != moved_in:
+        return UnbalancedOwnMove(first.entry.id, first.entry.entry_date, first.unit.identifier, moved_out, moved_in)
+
+    pool: list[Lot] = []
+    for line in credits:
+        queue = queues.setdefault((line.account_id, line.unit.identifier), [])
+        taken, shortfall = _take(queue, line.quantity)
+        if shortfall > 0:
+            return LotShortfall(line.unit.identifier, own[line.account_id], line.entry.entry_date, shortfall)
+        pool.extend(taken)
+    pool.sort(key=_acquisition)
+
+    for line in debits:
+        queue = queues.setdefault((line.account_id, line.unit.identifier), [])
+        dealt, _ = _take(pool, line.quantity)
+        for lot in dealt:
+            bisect.insort(queue, lot, key=_acquisition)
+    return None
+
+
 def replay(lines: Iterable[JournalLine], own: dict[int, str]) -> Result[LotReplay, LotError]:
     """`lines` must be in `(entry_date, line id)` order and already filtered by `_replayed`."""
+    groups: dict[tuple[int, str], list[JournalLine]] = {}
+    for line in lines:
+        if line.account_id in own:
+            groups.setdefault((line.entry.id, line.unit.identifier), []).append(line)
+
     queues: dict[tuple[int, str], list[Lot]] = {}
     unit_ids: dict[str, int] = {}
     sales: list[Sale] = []
 
-    for line in lines:
-        if line.account_id not in own:
+    for group in groups.values():
+        identifier = group[0].unit.identifier
+        unit_ids.setdefault(identifier, group[0].unit_id)
+        credits = [line for line in group if not line.is_debit]
+        debits = [line for line in group if line.is_debit]
+
+        if credits and debits:
+            move_error = _move(queues, own, credits, debits)
+            if move_error is not None:
+                return Result.err(move_error)
             continue
-        identifier = line.unit.identifier
-        unit_ids.setdefault(identifier, line.unit_id)
-        queue = queues.setdefault((line.account_id, identifier), [])
-        if line.is_debit:
-            lot = Lot(line.entry.entry_date, line.id, line.quantity, line.unit_price)
-            bisect.insort(queue, lot, key=_acquisition)
-        else:
+
+        for line in debits:
+            queue = queues.setdefault((line.account_id, identifier), [])
+            bisect.insort(queue, Lot(line.entry.entry_date, line.id, line.quantity, line.unit_price), key=_acquisition)
+        for line in credits:
+            queue = queues.setdefault((line.account_id, identifier), [])
             taken, shortfall = _take(queue, line.quantity)
             if shortfall > 0:
                 return Result.err(LotShortfall(identifier, own[line.account_id], line.entry.entry_date, shortfall))
-            sales.append(Sale(
-                entry_date=line.entry.entry_date,
-                account_name=own[line.account_id],
-                unit_identifier=identifier,
-                quantity=line.quantity,
-                proceeds=line.quantity * line.unit_price,
-                fifo_cost=sum((lot.cost for lot in taken), Decimal(0)),
-            ))
+            sales.append(_sale(line, own[line.account_id], taken))
 
     holdings: list[FifoHolding] = []
     for identifier, unit_id in unit_ids.items():

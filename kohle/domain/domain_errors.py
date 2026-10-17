@@ -469,7 +469,26 @@ class LotShortfall(Exception):
         )
 
 
-LotError = LotShortfall
+class UnbalancedOwnMove(Exception):
+    def __init__(
+        self, entry_id: int, entry_date: date, unit_identifier: str, moved_out: Decimal, moved_in: Decimal
+    ) -> None:
+        super().__init__()
+        self.entry_id = entry_id
+        self.entry_date = entry_date
+        self.unit_identifier = unit_identifier
+        self.moved_out = moved_out
+        self.moved_in = moved_in
+
+    def __str__(self) -> str:
+        return (
+            f"Entry {self.entry_id} on {self.entry_date} moves {self.moved_out.normalize():f} "
+            f"{self.unit_identifier} out of own accounts but {self.moved_in.normalize():f} in; "
+            "record the move and any sale or purchase as separate entries"
+        )
+
+
+LotError = LotShortfall | UnbalancedOwnMove
 
 
 RealisedError = BalanceError | LotError
