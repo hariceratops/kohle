@@ -1,3 +1,5 @@
+import subprocess
+import sys
 from datetime import date
 from decimal import Decimal
 
@@ -224,3 +226,12 @@ def test_net_worth_history_unknown_state_or_period_end_is_a_usage_error_before_a
     result = CliRunner().invoke(cli, ["net-worth-history", *args], obj=_forbidden_factory)
 
     assert result.exit_code == 2
+
+
+def test_every_command_is_registered_when_run_as_a_script():
+    # Commands defined below the __main__ guard are missing from `python -m`.
+    result = subprocess.run(
+        [sys.executable, "-m", "kohle.app.cli.cli", "--help"], capture_output=True, text=True, check=True
+    )
+    for name in cli.commands:
+        assert name in result.stdout

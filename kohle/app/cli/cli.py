@@ -886,10 +886,6 @@ def fetch_prices_cmd(make_session):
         raise click.ClickException(f"{unpriced} held securities unpriced")
 
 
-if __name__ == "__main__":
-    cli()
-
-
 @cli.command()
 @click.option(
     "--from", "start", type=click.DateTime(formats=["%Y-%m-%d"]), default=None,
@@ -935,3 +931,7 @@ def net_worth_history_cmd(make_session, start, end, period_end: str, state: str,
         for r in res.unwrap()
     ]
     click.echo(tabulate(rows, headers="keys", floatfmt=".2f", missingval="-"))
+
+
+if __name__ == "__main__":
+    cli()
