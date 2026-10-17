@@ -453,8 +453,41 @@ Without it every sale from all years is listed under one total. The `People`
 branch is excluded. `No sales` prints in place of the table when there are
 none; `Realised gain: 0.00` still closes the output.
 
-Note that `balance`'s `average cost` is a moving average, while `realised`
-uses FIFO, so the two can disagree about what a sold lot cost.
+`positions` lists each security still held, summed across all own accounts
+(the `People` branch is excluded), at its latest stored close beside the FIFO
+cost of the lots still held:
+
+```bash
+kohle-cli positions
+kohle-cli positions --max-age-days 14
+```
+
+```
+unit            quantity    price  price date      market value  status                FIFO cost    unrealised gain
+------------  ----------  -------  ------------  --------------  ------------------  -----------  -----------------
+IE00B4L5Y983        5.00   112.40  2026-10-09            562.00  fresh                    600.00             -38.00
+DE000A0F5UF5        4.00     -     -                     200.00  no price (at cost)       200.00               0.00
+
+Market value: 762.00
+FIFO cost: 800.00
+Unrealised gain: -38.00
+1 of 2 holdings estimated (0 stale, 1 at cost)
+```
+
+`unrealised gain` is `market value` minus `FIFO cost`. The status words and
+the `K of M holdings estimated` line are `net-worth`'s, and `--max-age-days`
+(default 7) behaves the same. A security with no stored close is valued at its
+FIFO cost, so its gain is 0 and the row is marked `no price (at cost)`.
+`No positions` prints in place of the table when nothing is held. `positions`
+never fetches prices.
+
+`positions` and `realised` fail, printing nothing else, when the ledger is
+inconsistent: a sale exceeding the lots its depot holds (the error names the
+unit, account, date and shortfall), or a security moving between an own
+account and a `People` account (the error names the entry).
+
+Note that `balance`'s `average cost` is a moving average, while `positions`
+and `realised` use FIFO, so they can disagree about what a lot cost.
 
 ### Prices
 Current prices come from price plugins, a second plugin kind in the same

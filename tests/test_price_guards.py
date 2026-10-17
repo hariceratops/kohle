@@ -283,7 +283,7 @@ def test_new_reports_leave_prices_operations_and_groups_untouched(session_factor
             )
 
     before = counts()
-    for args in (["realised"],):
+    for args in (["realised"], ["positions"]):
         result = runner.invoke(cli, args, obj=session_factory)
         assert result.exit_code == 0, result.output
 
@@ -305,7 +305,7 @@ def _report_sources() -> dict[str, str]:
         path: (ROOT / path).read_text(encoding="utf-8")
         for path in ("kohle/use_cases/reporting.py", "kohle/use_cases/lots.py")
     }
-    for name in ("balance_cmd", "net_worth_cmd", "realised_cmd"):
+    for name in ("balance_cmd", "net_worth_cmd", "realised_cmd", "positions_cmd"):
         callback = getattr(cli_module, name).callback
         assert callback is not None
         sources[f"cli.{name}"] = inspect.getsource(callback)

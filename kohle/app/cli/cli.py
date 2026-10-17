@@ -38,11 +38,15 @@ from kohle.use_cases.prices import (
 )
 from kohle.use_cases.reporting import (
     EstimateSummary,
+    QueryPositions,
     QueryValuedBalance,
     ValuedBalance,
     ValuedNetWorth,
+    ValuedRow,
     at_market,
+    fifo_cost,
     summarise,
+    unrealised_gain,
 )
 from kohle.use_cases.rules import AddRule, ListRules, RemoveRule
 from kohle.use_cases.splitting import (
@@ -633,7 +637,7 @@ def _print_who_owes_what_by_group(make_session):
     click.echo("\nNote: group figures are historical allocations, not settlement-adjusted balances.")
 
 
-def _market_columns(row: ValuedBalance) -> dict[str, object]:
+def _market_columns(row: ValuedRow) -> dict[str, object]:
     price: Decimal | None
     price_date: date | None
     status: str | None
@@ -696,6 +700,34 @@ def net_worth_cmd(make_session, max_age_days: int):
     click.echo(f"\nNet worth (at cost): {report.at_cost.net_worth_at_cost:.2f}")
     click.echo(f"Net worth (at market): {report.net_worth_at_market:.2f}")
     click.echo(_estimates_line(report.estimates))
+
+
+@cli.command()
+@MAX_AGE_DAYS
+@click.pass_obj
+def positions_cmd(make_session, max_age_days: int):
+    res = QueryPositions(make_session()).execute(date.today(), max_age_days)  # noqa: DTZ011 - the user's local date, by design
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    positions = res.unwrap()
+    if not positions:
+        click.echo("No positions")
+    else:
+        rows = [
+            {
+                "unit": p.holding.unit_identifier,
+                "quantity": p.holding.quantity,
+                **_market_columns(p),
+                "FIFO cost": p.holding.fifo_cost,
+                "unrealised gain": p.unrealised_gain,
+            }
+            for p in positions
+        ]
+        click.echo(tabulate(rows, headers="keys", floatfmt=".2f", missingval="-"))
+    click.echo(f"\nMarket value: {at_market(positions):.2f}")
+    click.echo(f"FIFO cost: {fifo_cost(positions):.2f}")
+    click.echo(f"Unrealised gain: {unrealised_gain(positions):.2f}")
+    click.echo(_estimates_line(summarise(positions)))
 
 
 @cli.command()

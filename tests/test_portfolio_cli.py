@@ -86,9 +86,22 @@ def test_security_move_with_a_people_account_exits_non_zero_with_no_table(sessio
     assert "Realised gain" not in result.output and "date" not in result.output.splitlines()[0]
 
 
-@pytest.mark.skip(reason="issue 044")
-def test_positions_across_two_depots_with_a_move():
-    ...
+def test_positions_across_two_depots_with_a_move(session_factory):
+    runner = CliRunner()
+    for args in (
+        *_SETUP[:7],
+        ["add-account", "DepotB", "--type", "asset"],
+        ["record-split", "2026-04-01", "move", "--line", "Depot:4:X1:1:credit", "--line", "DepotB:4:X1:1:debit"],
+    ):
+        assert runner.invoke(cli, args, obj=session_factory).exit_code == 0
+
+    result = runner.invoke(cli, ["positions"], obj=session_factory)
+
+    assert result.exit_code == 0, result.output
+    lines = result.output.splitlines()
+    assert lines[2].split()[:2] == ["X1", "20.00"]
+    assert "FIFO cost: 2200.00" in lines
+    assert not any("move" in line for line in lines)
 
 
 @pytest.mark.skip(reason="issues 045-046")

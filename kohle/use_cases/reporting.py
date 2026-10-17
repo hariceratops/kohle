@@ -10,7 +10,7 @@ from decimal import Decimal
 from typing import assert_never
 
 from kohle.core.result import Result
-from kohle.domain.domain_errors import PriceError, ValuationError
+from kohle.domain.domain_errors import PositionsError, PriceError, ValuationError
 from kohle.infrastructure.transaction_context import DbTransactionContext
 from kohle.infrastructure.uow import UnitOfWork
 from kohle.services.account_services import get_account_by_name_service
@@ -21,7 +21,22 @@ from kohle.use_cases.journal import (
     account_balance,
     net_worth,
 )
+from kohle.use_cases.lots import FifoHolding, replay_ledger
 from kohle.use_cases.prices import Fresh, LatestClose, NoClose, Stale, latest_close
+
+
+def _market_value(quantity: Decimal, close: LatestClose | None, at_cost: Decimal) -> Decimal:
+    """One valuation rule for both cost bases: the caller says what a row with
+    no close falls back to."""
+    match close:
+        case Fresh(c) | Stale(c):
+            return quantity * c.price
+        case NoClose():
+            return at_cost
+        case None:
+            return quantity
+        case _:
+            assert_never(close)
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,15 +46,24 @@ class ValuedBalance:
 
     @property
     def market_value(self) -> Decimal:
-        match self.close:
-            case Fresh(c) | Stale(c):
-                return self.balance.quantity * c.price
-            case NoClose():
-                return self.balance.at_cost
-            case None:
-                return self.balance.quantity
-            case _:
-                assert_never(self.close)
+        return _market_value(self.balance.quantity, self.close, self.balance.at_cost)
+
+
+@dataclass(frozen=True, slots=True)
+class Position:
+    holding: FifoHolding
+    close: LatestClose  # never None: a positions row is always nonzero and non-base
+
+    @property
+    def market_value(self) -> Decimal:
+        return _market_value(self.holding.quantity, self.close, self.holding.fifo_cost)
+
+    @property
+    def unrealised_gain(self) -> Decimal:
+        return self.market_value - self.holding.fifo_cost
+
+
+ValuedRow = ValuedBalance | Position
 
 
 def value_balances(
@@ -62,8 +86,16 @@ def value_balances(
     return Result.ok(valued)
 
 
-def at_market(rows: Iterable[ValuedBalance]) -> Decimal:
+def at_market(rows: Iterable[ValuedRow]) -> Decimal:
     return sum((r.market_value for r in rows), Decimal(0))
+
+
+def fifo_cost(positions: Iterable[Position]) -> Decimal:
+    return sum((p.holding.fifo_cost for p in positions), Decimal(0))
+
+
+def unrealised_gain(positions: Iterable[Position]) -> Decimal:
+    return sum((p.unrealised_gain for p in positions), Decimal(0))
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,7 +109,7 @@ class EstimateSummary:
         return self.stale + self.no_price
 
 
-def summarise(rows: Iterable[ValuedBalance]) -> EstimateSummary:
+def summarise(rows: Iterable[ValuedRow]) -> EstimateSummary:
     # `close is not None` is exactly the lookup condition in value_balances,
     # so M is the nonzero non-base rows without a second definition.
     holdings = stale = no_price = 0
@@ -152,5 +184,26 @@ class QueryValuedBalance(UnitOfWork[list[ValuedBalance], ValuationError]):
                 return Result.err(valued_res.unwrap_err())
 
             return Result.ok(valued_res.unwrap())
+
+        return self._run(use_case)
+
+
+class QueryPositions(UnitOfWork[list[Position], PositionsError]):
+    """Held securities at their latest close beside FIFO cost. The replay and
+    every close read share one transaction."""
+
+    def execute(self, today: date, max_age_days: int) -> Result[list[Position], PositionsError]:
+        def use_case(ctx: DbTransactionContext) -> Result[list[Position], PositionsError]:
+            replay_res = replay_ledger(ctx)
+            if replay_res.is_err:
+                return Result.err(replay_res.unwrap_err())
+
+            positions: list[Position] = []
+            for holding in replay_res.unwrap().holdings:
+                close_res = latest_close(ctx, holding.unit_id, today, max_age_days)
+                if close_res.is_err:
+                    return Result.err(close_res.unwrap_err())
+                positions.append(Position(holding, close_res.unwrap()))
+            return Result.ok(positions)
 
         return self._run(use_case)

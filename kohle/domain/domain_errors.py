@@ -511,3 +511,5 @@ LotError = LotShortfall | UnbalancedOwnMove | SecurityMoveWithPeople
 
 
 RealisedError = BalanceError | LotError
+
+PositionsError = BalanceError | LotError | PriceError
