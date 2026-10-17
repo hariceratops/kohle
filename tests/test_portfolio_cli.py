@@ -1,7 +1,12 @@
+from datetime import date
+from decimal import Decimal
+
 import pytest
 from click.testing import CliRunner
+from sqlalchemy import select
 
 from kohle.app.cli.cli import cli
+from kohle.domain.models import Price, Unit
 
 _SETUP = [
     ["add-account", "Depot", "--type", "asset"],
@@ -104,6 +109,72 @@ def test_positions_across_two_depots_with_a_move(session_factory):
     assert not any("move" in line for line in lines)
 
 
-@pytest.mark.skip(reason="issues 045-046")
-def test_net_worth_history_final_row_matches_net_worth():
-    ...
+def _pin_today(monkeypatch: pytest.MonkeyPatch, pinned: date) -> None:
+    class PinnedDate(date):
+        @classmethod
+        def today(cls) -> "PinnedDate":
+            return cls(pinned.year, pinned.month, pinned.day)
+
+    monkeypatch.setattr("kohle.app.cli.cli.date", PinnedDate)
+
+
+def _forbidden_factory():
+    raise AssertionError("no session may be opened for a usage error")
+
+
+def test_net_worth_history_final_row_matches_net_worth(session_factory, monkeypatch):
+    _pin_today(monkeypatch, date(2026, 5, 20))
+    runner = _ledger(session_factory)
+    buy = ["record", "2026-04-02", "buy", "4", "--from", "Cash", "--to", "Depot", "--to-unit", "X1", "--to-price", "135"]
+    assert runner.invoke(cli, buy, obj=session_factory).exit_code == 0
+    with session_factory() as session:
+        unit_id = session.scalars(select(Unit.id).where(Unit.identifier == "X1")).one()
+        session.add(Price(unit_id=unit_id, price_date=date(2026, 5, 18), price=Decimal(140), source="file"))
+        session.commit()
+
+    history = runner.invoke(cli, ["net-worth-history"], obj=session_factory)
+    now = runner.invoke(cli, ["net-worth"], obj=session_factory)
+
+    assert history.exit_code == 0, history.output
+    assert now.exit_code == 0, now.output
+    lines = history.output.splitlines()
+    assert lines[0].split() == ["date", "at", "cost", "at", "market", "estimated"]
+    assert lines[2].split()[0] == "2025-06-15"
+    last = lines[-1].split()
+    assert last[0] == "2026-05-20"
+    at_cost = next(ln for ln in now.output.splitlines() if ln.startswith("Net worth (at cost)"))
+    at_market = next(ln for ln in now.output.splitlines() if ln.startswith("Net worth (at market)"))
+    estimates = now.output.splitlines()[-1].split()
+    assert last[1] == at_cost.split()[-1]
+    assert last[2] == at_market.split()[-1]
+    assert f"{estimates[0]} of {estimates[2]}" == " ".join(last[3:])
+    assert last[3:] == ["0", "of", "1"]
+
+
+def test_net_worth_history_past_to_ends_with_that_row_and_no_today_row(session_factory, monkeypatch):
+    _pin_today(monkeypatch, date(2026, 5, 20))
+    runner = _ledger(session_factory)
+
+    result = runner.invoke(cli, ["net-worth-history", "--from", "2026-03-01", "--to", "2026-04-20"], obj=session_factory)
+
+    assert result.exit_code == 0, result.output
+    assert [ln.split()[0] for ln in result.output.splitlines()[2:]] == [
+        "2026-03-15", "2026-03-31", "2026-04-15", "2026-04-20",
+    ]
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["--to", "2026-05-21"],
+        ["--from", "2026-05-01", "--to", "2026-04-01"],
+        ["--from", "2026-05-21"],
+    ],
+)
+def test_net_worth_history_usage_errors_exit_2_without_opening_a_session(monkeypatch, args):
+    _pin_today(monkeypatch, date(2026, 5, 20))
+
+    result = CliRunner().invoke(cli, ["net-worth-history", *args], obj=_forbidden_factory)
+
+    assert result.exit_code == 2
+    assert "--to" in result.output or "--from" in result.output

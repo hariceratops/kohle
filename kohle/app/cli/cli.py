@@ -38,6 +38,7 @@ from kohle.use_cases.prices import (
 )
 from kohle.use_cases.reporting import (
     EstimateSummary,
+    NetWorthHistory,
     QueryPositions,
     QueryValuedBalance,
     ValuedBalance,
@@ -886,3 +887,39 @@ def fetch_prices_cmd(make_session):
 
 if __name__ == "__main__":
     cli()
+
+
+@cli.command()
+@click.option(
+    "--from", "start", type=click.DateTime(formats=["%Y-%m-%d"]), default=None,
+    help="First date sampled; defaults to the earliest ledger entry",
+)
+@click.option(
+    "--to", "end", type=click.DateTime(formats=["%Y-%m-%d"]), default=None,
+    help="Last date sampled, not after today; defaults to today",
+)
+@MAX_AGE_DAYS
+@click.pass_obj
+def net_worth_history_cmd(make_session, start, end, max_age_days: int):
+    today = date.today()  # noqa: DTZ011 - the user's local date, by design
+    end_date = end.date() if end is not None else today
+    start_date = start.date() if start is not None else None
+    if end_date > today:
+        raise click.BadParameter(f"{end_date.isoformat()} is after today", param_hint="--to")
+    if start_date is not None and start_date > end_date:
+        raise click.BadParameter(
+            f"{start_date.isoformat()} is after the last date {end_date.isoformat()}", param_hint="--from"
+        )
+    res = NetWorthHistory(make_session()).execute(start_date, end_date, max_age_days)
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    rows = [
+        {
+            "date": r.on,
+            "at cost": r.report.at_cost.net_worth_at_cost,
+            "at market": r.report.net_worth_at_market,
+            "estimated": f"{r.report.estimates.estimated} of {r.report.estimates.holdings}",
+        }
+        for r in res.unwrap()
+    ]
+    click.echo(tabulate(rows, headers="keys", floatfmt=".2f", missingval="-"))

@@ -264,14 +264,14 @@ LatestClose = Fresh | Stale | NoClose
 
 
 def latest_close(
-    ctx: DbTransactionContext, unit_id: int, today: date, max_age_days: int = 7
+    ctx: DbTransactionContext, unit_id: int, as_of: date, max_age_days: int = 7
 ) -> Result[LatestClose, PriceError]:
-    latest_res = latest_price_service(ctx, unit_id)
+    latest_res = latest_price_service(ctx, unit_id, on_or_before=as_of)
     if latest_res.is_err:
         return Result.err(latest_res.unwrap_err())
     close = latest_res.unwrap()
     if close is None:
         return Result.ok(NoClose())
-    if (today - close.price_date).days <= max_age_days:
+    if (as_of - close.price_date).days <= max_age_days:
         return Result.ok(Fresh(close))
     return Result.ok(Stale(close))

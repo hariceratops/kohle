@@ -489,6 +489,41 @@ account and a `People` account (the error names the entry).
 Note that `balance`'s `average cost` is a moving average, while `positions`
 and `realised` use FIFO, so they can disagree about what a lot cost.
 
+### Net worth over time
+
+`net-worth-history` shows net worth at past sample dates: the 15th and the last
+calendar day of each month, plus a final row dated `--to` when that is not
+itself a sample date:
+
+```bash
+kohle-cli net-worth-history
+kohle-cli net-worth-history --from 2026-01-01 --to 2026-10-12
+```
+
+```
+date          at cost    at market  estimated
+----------  ---------  -----------  -----------
+2026-08-15   10210.00     10294.50  1 of 3
+2026-08-31   12890.00     12961.20  1 of 3
+2026-09-15   12650.00     12702.00  2 of 3
+2026-09-30   15330.00     15391.10  1 of 3
+2026-10-12   15105.00     15188.40  1 of 3
+```
+
+Each row values the ledger as `net-worth` does, using only the lines dated on or
+before that date (a line dated on a sample date is included, the next day's is
+not). Every non-euro holding is valued at its last stored close on or before
+that date, never a later one. A close within `--max-age-days` (default 7) of the
+row's date is fresh, an older one is stale, and a date before any close is
+valued at cost; both of the latter count in `estimated`, which reads `K of M`
+as in `net-worth`'s last line.
+
+`--from` defaults to the earliest ledger entry and `--to` to today. A `--to`
+after today, or a `--from` later than `--to`, is a usage error. With `--to`
+omitted the last row equals what `net-worth` prints today, unless an entry is
+dated in the future, which `net-worth` counts and the history does not. The
+report never fetches prices.
+
 ### Prices
 Current prices come from price plugins, a second plugin kind in the same
 `kohle.plugins` entry-point group as the importers. Fetching is always an

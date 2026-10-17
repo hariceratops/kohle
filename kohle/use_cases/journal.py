@@ -586,14 +586,40 @@ def aggregate_by_unit(lines: Iterable[JournalLine]) -> list[UnitBalance]:
     """
     running: dict[str, _RunningCost] = {}
     for line in lines:
-        identifier = line.unit.identifier
-        if identifier not in running:
-            running[identifier] = _RunningCost(line.unit_id)
-        running[identifier].apply(line)
+        _apply(running, line)
+    return _unit_balances(running)
+
+
+def _apply(running: dict[str, _RunningCost], line: JournalLine) -> None:
+    identifier = line.unit.identifier
+    if identifier not in running:
+        running[identifier] = _RunningCost(line.unit_id)
+    running[identifier].apply(line)
+
+
+def _unit_balances(running: dict[str, _RunningCost]) -> list[UnitBalance]:
     return [
         UnitBalance(identifier, cost.quantity, cost.average_cost, cost.unit_id)
         for identifier, cost in running.items()
     ]
+
+
+def aggregate_by_unit_through(
+    lines: Iterable[JournalLine], dates: Iterable[date]
+) -> list[list[UnitBalance]]:
+    """`aggregate_by_unit` of the lines dated on or before each date, in one
+    pass: re-folding a prefix per date is quadratic. `lines` must be in ledger
+    order and `dates` ascending."""
+    running: dict[str, _RunningCost] = {}
+    pending = iter(lines)
+    held = next(pending, None)
+    snapshots: list[list[UnitBalance]] = []
+    for day in dates:
+        while held is not None and held.entry.entry_date <= day:
+            _apply(running, held)
+            held = next(pending, None)
+        snapshots.append(_unit_balances(running))
+    return snapshots
 
 
 def account_balance(ctx: DbTransactionContext, account_id: int) -> Result[list[UnitBalance], BalanceError]:
@@ -703,16 +729,15 @@ def balance_sheet_accounts(ctx: DbTransactionContext) -> Result[BalanceSheetAcco
     ))
 
 
-def net_worth(ctx: DbTransactionContext) -> Result[NetWorthReport, BalanceError]:
-    """Net worth at recorded cost (design §9). Income and expense accounts
-    are excluded — every entry balances, so including them would always net
-    to exactly 0, which would look like a bug rather than a definition error
-    (design §9.2). Receivables are the People subtree, unioned in by
-    membership rather than selected by account type, so a person account
-    still counts even with the default `expense` type `add-account` gives
-    it, and nothing is double-counted since the partition is by subtree.
-    Factored out of `NetWorth` so `reporting.ValuedNetWorth` can run the same
-    partition inside its own transaction."""
+@dataclass(frozen=True, slots=True)
+class NetWorthLines:
+    own: list[JournalLine]
+    receivables: list[JournalLine]
+
+
+def net_worth_lines(ctx: DbTransactionContext) -> Result[NetWorthLines, BalanceError]:
+    """The lines net worth folds: the one definition shared by `net_worth` and
+    the history, which folds the same lines at several dates."""
     accounts_res = balance_sheet_accounts(ctx)
     if accounts_res.is_err:
         return Result.err(accounts_res.unwrap_err())
@@ -726,9 +751,26 @@ def net_worth(ctx: DbTransactionContext) -> Result[NetWorthReport, BalanceError]
     if receivables_lines_res.is_err:
         return Result.err(receivables_lines_res.unwrap_err())
 
+    return Result.ok(NetWorthLines(own_lines_res.unwrap(), receivables_lines_res.unwrap()))
+
+
+def net_worth(ctx: DbTransactionContext) -> Result[NetWorthReport, BalanceError]:
+    """Net worth at recorded cost (design §9). Income and expense accounts
+    are excluded — every entry balances, so including them would always net
+    to exactly 0, which would look like a bug rather than a definition error
+    (design §9.2). Receivables are the People subtree, unioned in by
+    membership rather than selected by account type, so a person account
+    still counts even with the default `expense` type `add-account` gives
+    it, and nothing is double-counted since the partition is by subtree.
+    Factored out of `NetWorth` so `reporting.ValuedNetWorth` can run the same
+    partition inside its own transaction."""
+    lines_res = net_worth_lines(ctx)
+    if lines_res.is_err:
+        return Result.err(lines_res.unwrap_err())
+    lines = lines_res.unwrap()
     return Result.ok(NetWorthReport(
-        own=aggregate_by_unit(own_lines_res.unwrap()),
-        receivables=aggregate_by_unit(receivables_lines_res.unwrap()),
+        own=aggregate_by_unit(lines.own),
+        receivables=aggregate_by_unit(lines.receivables),
     ))
 
 
