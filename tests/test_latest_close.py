@@ -64,3 +64,20 @@ def test_boundary_day_is_pinned(session: Session, unit_id: int) -> None:
     _seed(session, unit_id, 1, "12")
     assert isinstance(latest_close(ctx, unit_id, TODAY, max_age_days=1).unwrap(), Fresh)
     assert isinstance(latest_close(ctx, unit_id, TODAY + timedelta(days=1), max_age_days=1).unwrap(), Stale)
+
+
+def test_a_close_after_as_of_is_never_used(session: Session, unit_id: int) -> None:
+    ctx = DbTransactionContext(session)
+    _seed(session, unit_id, 10, "9")
+    _seed(session, unit_id, -5, "99")
+
+    close = latest_close(ctx, unit_id, TODAY, 7).unwrap()
+
+    assert isinstance(close, Stale)
+    assert close.close.price == Decimal(9)
+
+
+def test_as_of_before_the_first_close_is_no_close(session: Session, unit_id: int) -> None:
+    _seed(session, unit_id, 0, "9")
+
+    assert latest_close(DbTransactionContext(session), unit_id, TODAY - timedelta(days=1)).unwrap() == NoClose()

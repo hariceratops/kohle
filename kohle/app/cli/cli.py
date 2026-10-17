@@ -20,6 +20,7 @@ from kohle.use_cases.journal import (
     RecordSimpleEntry,
     RecordSplitEntry,
 )
+from kohle.use_cases.lots import QueryRealised, realised_gain
 from kohle.use_cases.operations import ListOperations
 from kohle.use_cases.prices import (
     AlreadyStored,
@@ -37,13 +38,19 @@ from kohle.use_cases.prices import (
 )
 from kohle.use_cases.reporting import (
     EstimateSummary,
+    NetWorthHistory,
+    QueryPositions,
     QueryValuedBalance,
     ValuedBalance,
     ValuedNetWorth,
+    ValuedRow,
     at_market,
+    fifo_cost,
     summarise,
+    unrealised_gain,
 )
 from kohle.use_cases.rules import AddRule, ListRules, RemoveRule
+from kohle.use_cases.sampling import STATES, PeriodEnd
 from kohle.use_cases.splitting import (
     AddSplitGroup,
     PersonShare,
@@ -632,7 +639,7 @@ def _print_who_owes_what_by_group(make_session):
     click.echo("\nNote: group figures are historical allocations, not settlement-adjusted balances.")
 
 
-def _market_columns(row: ValuedBalance) -> dict[str, object]:
+def _market_columns(row: ValuedRow) -> dict[str, object]:
     price: Decimal | None
     price_date: date | None
     status: str | None
@@ -695,6 +702,64 @@ def net_worth_cmd(make_session, max_age_days: int):
     click.echo(f"\nNet worth (at cost): {report.at_cost.net_worth_at_cost:.2f}")
     click.echo(f"Net worth (at market): {report.net_worth_at_market:.2f}")
     click.echo(_estimates_line(report.estimates))
+
+
+@cli.command()
+@MAX_AGE_DAYS
+@click.pass_obj
+def positions_cmd(make_session, max_age_days: int):
+    res = QueryPositions(make_session()).execute(date.today(), max_age_days)  # noqa: DTZ011 - the user's local date, by design
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    positions = res.unwrap()
+    if not positions:
+        click.echo("No positions")
+    else:
+        rows = [
+            {
+                "unit": p.holding.unit_identifier,
+                "quantity": p.holding.quantity,
+                **_market_columns(p),
+                "FIFO cost": p.holding.fifo_cost,
+                "unrealised gain": p.unrealised_gain,
+            }
+            for p in positions
+        ]
+        click.echo(tabulate(rows, headers="keys", floatfmt=".2f", missingval="-"))
+    click.echo(f"\nMarket value: {at_market(positions):.2f}")
+    click.echo(f"FIFO cost: {fifo_cost(positions):.2f}")
+    click.echo(f"Unrealised gain: {unrealised_gain(positions):.2f}")
+    click.echo(_estimates_line(summarise(positions)))
+
+
+@cli.command()
+@click.option(
+    "--year", type=click.IntRange(min=1), default=None,
+    help="Only sales dated in this year; their cost still comes from earlier lots",
+)
+@click.pass_obj
+def realised_cmd(make_session, year: int | None):
+    res = QueryRealised(make_session()).execute(year)
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    sales = res.unwrap()
+    if not sales:
+        click.echo("No sales")
+    else:
+        rows = [
+            {
+                "date": s.entry_date,
+                "account": s.account_name,
+                "unit": s.unit_identifier,
+                "quantity": s.quantity,
+                "proceeds": s.proceeds,
+                "FIFO cost": s.fifo_cost,
+                "gain": s.gain,
+            }
+            for s in sales
+        ]
+        click.echo(tabulate(rows, headers="keys", floatfmt=".2f", missingval="-"))
+    click.echo(f"\nRealised gain: {realised_gain(sales):.2f}")
 
 
 @cli.command()
@@ -819,6 +884,53 @@ def fetch_prices_cmd(make_session):
     unpriced = sum(isinstance(outcome, Unpriced) for outcome in outcomes)
     if unpriced:
         raise click.ClickException(f"{unpriced} held securities unpriced")
+
+
+@cli.command()
+@click.option(
+    "--from", "start", type=click.DateTime(formats=["%Y-%m-%d"]), default=None,
+    help="First date sampled; defaults to the earliest ledger entry",
+)
+@click.option(
+    "--to", "end", type=click.DateTime(formats=["%Y-%m-%d"]), default=None,
+    help="Last date sampled, not after today; defaults to today",
+)
+@click.option(
+    "--period-end", "period_end", type=click.Choice([p.value for p in PeriodEnd]),
+    default=PeriodEnd.last_working_day.value, show_default=True,
+    help="The month's second sample date: the calendar last day or the last working day",
+)
+@click.option(
+    "--state", type=click.Choice(STATES), default="BY", show_default=True,
+    help="Bundesland whose public holidays are not working days; ignored with month-end",
+)
+@MAX_AGE_DAYS
+@click.pass_obj
+def net_worth_history_cmd(make_session, start, end, period_end: str, state: str, max_age_days: int):
+    today = date.today()  # noqa: DTZ011 - the user's local date, by design
+    end_date = end.date() if end is not None else today
+    start_date = start.date() if start is not None else None
+    if end_date > today:
+        raise click.BadParameter(f"{end_date.isoformat()} is after today", param_hint="--to")
+    if start_date is not None and start_date > end_date:
+        raise click.BadParameter(
+            f"{start_date.isoformat()} is after the last date {end_date.isoformat()}", param_hint="--from"
+        )
+    res = NetWorthHistory(make_session()).execute(
+        start_date, end_date, max_age_days, PeriodEnd(period_end), state
+    )
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    rows = [
+        {
+            "date": r.on,
+            "at cost": r.report.at_cost.net_worth_at_cost,
+            "at market": r.report.net_worth_at_market,
+            "estimated": f"{r.report.estimates.estimated} of {r.report.estimates.holdings}",
+        }
+        for r in res.unwrap()
+    ]
+    click.echo(tabulate(rows, headers="keys", floatfmt=".2f", missingval="-"))
 
 
 if __name__ == "__main__":

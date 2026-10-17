@@ -95,6 +95,19 @@ kohle-cli record-split 2026-03-05 "Shared dinner" \
 Entries must balance by value, not by quantity — which is what lets 10 shares
 at 100 balance 1000 EUR.
 
+To move shares between two of your own depots, credit one and debit the other
+in the same entry. `realised` treats this as a move, not a sale: the lots keep
+their original dates and costs, and any equal price balances the entry.
+
+```bash
+kohle-cli record-split 2026-05-01 "Move to DepotB" \
+    --line DepotA:10:IE00B4L5Y983:100:credit \
+    --line DepotB:10:IE00B4L5Y983:100:debit
+```
+
+An entry that moves a different quantity out than in fails `realised` with
+`UnbalancedOwnMove`; record a sale or purchase as its own entry.
+
 ### Reading the ledger
 
 ```bash
@@ -412,6 +425,115 @@ The last line counts the holdings whose market value is an estimate: rows
 other than euros with a nonzero quantity (3 above), of which those with a
 `stale` or `no price (at cost)` status are estimated. It always prints, as
 `0 of M holdings estimated` when none are.
+
+### Positions and profit
+
+`realised` replays each depot's buys and sells in ledger order and lists every
+sale with its gain computed against the **oldest lots first** (FIFO, per
+depot):
+
+```bash
+kohle-cli realised
+kohle-cli realised --year 2026
+```
+
+```
+date        account    unit            quantity    proceeds    FIFO cost    gain
+----------  ---------  ------------  ----------  ----------  -----------  ------
+2026-03-10  Depot      IE00B4L5Y983       15.00     1950.00      1600.00  350.00
+
+Realised gain: 350.00
+```
+
+Proceeds are the quantity sold times the sale line's recorded unit price. The
+figures are gross, before fees and tax, so they serve as a cross-check against
+your broker's certificate, not as a tax computation. `--year` lists only sales
+dated in that year; their gains still use lots bought in earlier years.
+Without it every sale from all years is listed under one total. The `People`
+branch is excluded. `No sales` prints in place of the table when there are
+none; `Realised gain: 0.00` still closes the output.
+
+`positions` lists each security still held, summed across all own accounts
+(the `People` branch is excluded), at its latest stored close beside the FIFO
+cost of the lots still held:
+
+```bash
+kohle-cli positions
+kohle-cli positions --max-age-days 14
+```
+
+```
+unit            quantity    price  price date      market value  status                FIFO cost    unrealised gain
+------------  ----------  -------  ------------  --------------  ------------------  -----------  -----------------
+IE00B4L5Y983        5.00   112.40  2026-10-09            562.00  fresh                    600.00             -38.00
+DE000A0F5UF5        4.00     -     -                     200.00  no price (at cost)       200.00               0.00
+
+Market value: 762.00
+FIFO cost: 800.00
+Unrealised gain: -38.00
+1 of 2 holdings estimated (0 stale, 1 at cost)
+```
+
+`unrealised gain` is `market value` minus `FIFO cost`. The status words and
+the `K of M holdings estimated` line are `net-worth`'s, and `--max-age-days`
+(default 7) behaves the same. A security with no stored close is valued at its
+FIFO cost, so its gain is 0 and the row is marked `no price (at cost)`.
+`No positions` prints in place of the table when nothing is held. `positions`
+never fetches prices.
+
+`positions` and `realised` fail, printing nothing else, when the ledger is
+inconsistent: a sale exceeding the lots its depot holds (the error names the
+unit, account, date and shortfall), or a security moving between an own
+account and a `People` account (the error names the entry).
+
+Note that `balance`'s `average cost` is a moving average, while `positions`
+and `realised` use FIFO, so they can disagree about what a lot cost.
+
+### Net worth over time
+
+`net-worth-history` shows net worth at past sample dates: the 15th and the salary
+day (the last working day) of each month, plus a final row dated `--to` when that is not
+itself a sample date:
+
+```bash
+kohle-cli net-worth-history
+kohle-cli net-worth-history --from 2026-01-01 --to 2026-10-12
+```
+
+```
+date          at cost    at market  estimated
+----------  ---------  -----------  -----------
+2026-08-15   10210.00     10294.50  1 of 3
+2026-08-31   12890.00     12961.20  1 of 3
+2026-09-15   12650.00     12702.00  2 of 3
+2026-09-30   15330.00     15391.10  1 of 3
+2026-10-12   15105.00     15188.40  1 of 3
+```
+
+Each row values the ledger as `net-worth` does, using only the lines dated on or
+before that date (a line dated on a sample date is included, the next day's is
+not). Every non-euro holding is valued at its last stored close on or before
+that date, never a later one. A close within `--max-age-days` (default 7) of the
+row's date is fresh, an older one is stale, and a date before any close is
+valued at cost; both of the latter count in `estimated`, which reads `K of M`
+as in `net-worth`'s last line.
+
+`--period-end last-working-day` (the default) samples each month's second date
+on its last working day: Monday to Friday, not a public holiday of the
+`--state` Bundesland (default `BY`, a two-letter code such as `BE` or `NW`), and
+never 24 or 31 December. A month ending on a Saturday or a holiday therefore
+samples the working day before it, and December is 30 December when that is a
+weekday (2028: Friday 29 December). The 15th never moves. The row is dated that
+day and includes its lines. `--period-end month-end` keeps the calendar last
+day, and then `--state` has no effect. An unknown `--state` is a usage error.
+Holidays come from the pinned `holidays` package, so a deliberate upgrade of it
+can move a date.
+
+`--from` defaults to the earliest ledger entry and `--to` to today. A `--to`
+after today, or a `--from` later than `--to`, is a usage error. With `--to`
+omitted the last row equals what `net-worth` prints today, unless an entry is
+dated in the future, which `net-worth` counts and the history does not. The
+report never fetches prices.
 
 ### Prices
 Current prices come from price plugins, a second plugin kind in the same

@@ -1,0 +1,237 @@
+import subprocess
+import sys
+from datetime import date
+from decimal import Decimal
+
+import pytest
+from click.testing import CliRunner
+from sqlalchemy import select
+
+from kohle.app.cli.cli import cli
+from kohle.domain.models import Price, Unit
+
+_SETUP = [
+    ["add-account", "Depot", "--type", "asset"],
+    ["add-account", "Cash", "--type", "asset"],
+    ["add-account", "People", "--type", "asset"],
+    ["add-unit", "EUR", "Euro", "--kind", "currency"],
+    ["add-unit", "X1", "Thing", "--kind", "security"],
+    ["record", "2025-06-01", "buy", "10", "--from", "Cash", "--to", "Depot", "--to-unit", "X1", "--to-price", "100"],
+    ["record", "2026-01-05", "buy", "10", "--from", "Cash", "--to", "Depot", "--to-unit", "X1", "--to-price", "120"],
+    ["record", "2025-09-01", "sell", "5", "--from", "Depot", "--to", "Cash", "--from-unit", "X1", "--from-price", "130"],
+    ["record", "2026-03-10", "sell", "15", "--from", "Depot", "--to", "Cash", "--from-unit", "X1", "--from-price", "130"],
+]
+
+
+def _ledger(session_factory) -> CliRunner:
+    runner = CliRunner()
+    for args in _SETUP:
+        result = runner.invoke(cli, args, obj=session_factory)
+        assert result.exit_code == 0, result.output
+    return runner
+
+
+def test_realised_with_and_without_year(session_factory):
+    runner = _ledger(session_factory)
+
+    everything = runner.invoke(cli, ["realised"], obj=session_factory)
+    only_2026 = runner.invoke(cli, ["realised", "--year", "2026"], obj=session_factory)
+
+    assert everything.exit_code == 0, everything.output
+    lines = everything.output.splitlines()
+    assert lines[0].split() == ["date", "account", "unit", "quantity", "proceeds", "FIFO", "cost", "gain"]
+    assert [row.split()[-1] for row in lines[2:4]] == ["150.00", "250.00"]
+    assert lines[-1] == "Realised gain: 400.00"
+    assert only_2026.exit_code == 0, only_2026.output
+    rows = only_2026.output.splitlines()
+    assert [row.split()[-1] for row in rows[2:3]] == ["250.00"]
+    assert rows[-1] == "Realised gain: 250.00"
+    assert "2025-09-01" not in only_2026.output
+
+
+def test_realised_without_sales_prints_no_sales_and_zero_total(session_factory):
+    runner = CliRunner()
+    for args in _SETUP[:5]:
+        assert runner.invoke(cli, args, obj=session_factory).exit_code == 0
+
+    result = runner.invoke(cli, ["realised"], obj=session_factory)
+
+    assert result.exit_code == 0, result.output
+    assert result.output.splitlines() == ["No sales", "", "Realised gain: 0.00"]
+
+
+def test_oversell_exits_non_zero_with_no_table(session_factory):
+    runner = _ledger(session_factory)
+    oversell = ["record", "2026-04-01", "sell", "100", "--from", "Depot", "--to", "Cash", "--from-unit", "X1", "--from-price", "130"]
+    assert runner.invoke(cli, oversell, obj=session_factory).exit_code == 0
+
+    result = runner.invoke(cli, ["realised"], obj=session_factory)
+
+    assert result.exit_code != 0
+    assert "X1" in result.output and "'Depot'" in result.output and "2026-04-01" in result.output
+    assert "Realised gain" not in result.output
+
+
+@pytest.mark.parametrize("direction", ["debit", "credit"])
+def test_security_move_with_a_people_account_exits_non_zero_with_no_table(session_factory, direction):
+    runner = _ledger(session_factory)
+    other = "credit" if direction == "debit" else "debit"
+    for args in (
+        ["add-account", "Alice", "--type", "asset", "--parent", "People"],
+        [
+            "record-split", "2026-04-01", "give away",
+            "--line", f"Depot:1:X1:1:{direction}",
+            "--line", f"Alice:1:X1:1:{other}",
+        ],
+    ):
+        assert runner.invoke(cli, args, obj=session_factory).exit_code == 0
+
+    result = runner.invoke(cli, ["realised"], obj=session_factory)
+
+    assert result.exit_code != 0
+    assert "People account 'Alice'" in result.output and "own account 'Depot'" in result.output
+    assert "Realised gain" not in result.output and "date" not in result.output.splitlines()[0]
+
+
+def test_positions_across_two_depots_with_a_move(session_factory):
+    runner = CliRunner()
+    for args in (
+        *_SETUP[:7],
+        ["add-account", "DepotB", "--type", "asset"],
+        ["record-split", "2026-04-01", "move", "--line", "Depot:4:X1:1:credit", "--line", "DepotB:4:X1:1:debit"],
+    ):
+        assert runner.invoke(cli, args, obj=session_factory).exit_code == 0
+
+    result = runner.invoke(cli, ["positions"], obj=session_factory)
+
+    assert result.exit_code == 0, result.output
+    lines = result.output.splitlines()
+    assert lines[2].split()[:2] == ["X1", "20.00"]
+    assert "FIFO cost: 2200.00" in lines
+    assert not any("move" in line for line in lines)
+
+
+def _pin_today(monkeypatch: pytest.MonkeyPatch, pinned: date) -> None:
+    class PinnedDate(date):
+        @classmethod
+        def today(cls) -> "PinnedDate":
+            return cls(pinned.year, pinned.month, pinned.day)
+
+    monkeypatch.setattr("kohle.app.cli.cli.date", PinnedDate)
+
+
+def _forbidden_factory():
+    raise AssertionError("no session may be opened for a usage error")
+
+
+def test_net_worth_history_final_row_matches_net_worth(session_factory, monkeypatch):
+    _pin_today(monkeypatch, date(2026, 5, 20))
+    runner = _ledger(session_factory)
+    buy = ["record", "2026-04-02", "buy", "4", "--from", "Cash", "--to", "Depot", "--to-unit", "X1", "--to-price", "135"]
+    assert runner.invoke(cli, buy, obj=session_factory).exit_code == 0
+    with session_factory() as session:
+        unit_id = session.scalars(select(Unit.id).where(Unit.identifier == "X1")).one()
+        session.add(Price(unit_id=unit_id, price_date=date(2026, 5, 18), price=Decimal(140), source="file"))
+        session.commit()
+
+    history = runner.invoke(cli, ["net-worth-history"], obj=session_factory)
+    now = runner.invoke(cli, ["net-worth"], obj=session_factory)
+
+    assert history.exit_code == 0, history.output
+    assert now.exit_code == 0, now.output
+    lines = history.output.splitlines()
+    assert lines[0].split() == ["date", "at", "cost", "at", "market", "estimated"]
+    assert lines[2].split()[0] == "2025-06-15"
+    last = lines[-1].split()
+    assert last[0] == "2026-05-20"
+    at_cost = next(ln for ln in now.output.splitlines() if ln.startswith("Net worth (at cost)"))
+    at_market = next(ln for ln in now.output.splitlines() if ln.startswith("Net worth (at market)"))
+    estimates = now.output.splitlines()[-1].split()
+    assert last[1] == at_cost.split()[-1]
+    assert last[2] == at_market.split()[-1]
+    assert f"{estimates[0]} of {estimates[2]}" == " ".join(last[3:])
+    assert last[3:] == ["0", "of", "1"]
+
+
+def test_net_worth_history_past_to_ends_with_that_row_and_no_today_row(session_factory, monkeypatch):
+    _pin_today(monkeypatch, date(2026, 5, 20))
+    runner = _ledger(session_factory)
+
+    result = runner.invoke(cli, ["net-worth-history", "--from", "2026-03-01", "--to", "2026-04-20"], obj=session_factory)
+
+    assert result.exit_code == 0, result.output
+    assert [ln.split()[0] for ln in result.output.splitlines()[2:]] == [
+        "2026-03-15", "2026-03-31", "2026-04-15", "2026-04-20",
+    ]
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["--to", "2026-05-21"],
+        ["--from", "2026-05-01", "--to", "2026-04-01"],
+        ["--from", "2026-05-21"],
+    ],
+)
+def test_net_worth_history_usage_errors_exit_2_without_opening_a_session(monkeypatch, args):
+    _pin_today(monkeypatch, date(2026, 5, 20))
+
+    result = CliRunner().invoke(cli, ["net-worth-history", *args], obj=_forbidden_factory)
+
+    assert result.exit_code == 2
+    assert "--to" in result.output or "--from" in result.output
+
+
+def test_net_worth_history_defaults_to_last_working_day_in_bavaria(session_factory, monkeypatch):
+    _pin_today(monkeypatch, date(2026, 11, 20))
+    runner = _ledger(session_factory)
+
+    result = runner.invoke(cli, ["net-worth-history", "--from", "2026-10-01", "--to", "2026-10-31"], obj=session_factory)
+
+    assert result.exit_code == 0, result.output
+    assert [ln.split()[0] for ln in result.output.splitlines()[2:]] == [
+        "2026-10-15", "2026-10-30", "2026-10-31",
+    ]
+
+
+def test_net_worth_history_month_end_keeps_the_calendar_last_day_and_ignores_state(session_factory, monkeypatch):
+    _pin_today(monkeypatch, date(2026, 11, 20))
+    runner = _ledger(session_factory)
+    args = ["net-worth-history", "--from", "2026-10-01", "--to", "2026-10-31", "--period-end", "month-end"]
+
+    plain = runner.invoke(cli, args, obj=session_factory)
+    other = runner.invoke(cli, [*args, "--state", "BE"], obj=session_factory)
+
+    assert plain.exit_code == 0, plain.output
+    assert [ln.split()[0] for ln in plain.output.splitlines()[2:]] == ["2026-10-15", "2026-10-31"]
+    assert other.output == plain.output
+
+
+def test_net_worth_history_state_changes_the_period_end(session_factory, monkeypatch):
+    _pin_today(monkeypatch, date(2029, 6, 20))
+    runner = _ledger(session_factory)
+    base = ["net-worth-history", "--from", "2029-05-01", "--to", "2029-05-31"]
+
+    by = runner.invoke(cli, base, obj=session_factory)
+    be = runner.invoke(cli, [*base, "--state", "BE"], obj=session_factory)
+
+    assert [ln.split()[0] for ln in by.output.splitlines()[2:]] == ["2029-05-15", "2029-05-30", "2029-05-31"]
+    assert [ln.split()[0] for ln in be.output.splitlines()[2:]] == ["2029-05-15", "2029-05-31"]
+
+
+@pytest.mark.parametrize("args", [["--state", "Augsburg"], ["--state", "XX"], ["--period-end", "weekly"]])
+def test_net_worth_history_unknown_state_or_period_end_is_a_usage_error_before_any_read(monkeypatch, args):
+    _pin_today(monkeypatch, date(2026, 5, 20))
+
+    result = CliRunner().invoke(cli, ["net-worth-history", *args], obj=_forbidden_factory)
+
+    assert result.exit_code == 2
+
+
+def test_every_command_is_registered_when_run_as_a_script():
+    # Commands defined below the __main__ guard are missing from `python -m`.
+    result = subprocess.run(
+        [sys.executable, "-m", "kohle.app.cli.cli", "--help"], capture_output=True, text=True, check=True
+    )
+    for name in cli.commands:
+        assert name in result.stdout

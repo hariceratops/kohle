@@ -451,3 +451,65 @@ PriceRejection = MissingCloseResult | NonPositivePrice | FutureCloseDate | NonBa
 ListPriceTargetsError = BalanceError | PriceError
 
 ValuationError = BalanceError | PriceError
+
+
+class LotShortfall(Exception):
+    def __init__(self, unit_identifier: str, account_name: str, entry_date: date, shortfall: Decimal) -> None:
+        super().__init__()
+        self.unit_identifier = unit_identifier
+        self.account_name = account_name
+        self.entry_date = entry_date
+        self.shortfall = shortfall
+
+    def __str__(self) -> str:
+        return (
+            f"{self.unit_identifier} in {self.account_name!r} on {self.entry_date}: "
+            f"disposes of {self.shortfall.normalize():f} more than the account holds; "
+            "is an earlier purchase missing?"
+        )
+
+
+class UnbalancedOwnMove(Exception):
+    def __init__(
+        self, entry_id: int, entry_date: date, unit_identifier: str, moved_out: Decimal, moved_in: Decimal
+    ) -> None:
+        super().__init__()
+        self.entry_id = entry_id
+        self.entry_date = entry_date
+        self.unit_identifier = unit_identifier
+        self.moved_out = moved_out
+        self.moved_in = moved_in
+
+    def __str__(self) -> str:
+        return (
+            f"Entry {self.entry_id} on {self.entry_date} moves {self.moved_out.normalize():f} "
+            f"{self.unit_identifier} out of own accounts but {self.moved_in.normalize():f} in; "
+            "record the move and any sale or purchase as separate entries"
+        )
+
+
+class SecurityMoveWithPeople(Exception):
+    def __init__(
+        self, entry_id: int, entry_date: date, unit_identifier: str, own_account: str, people_account: str
+    ) -> None:
+        super().__init__()
+        self.entry_id = entry_id
+        self.entry_date = entry_date
+        self.unit_identifier = unit_identifier
+        self.own_account = own_account
+        self.people_account = people_account
+
+    def __str__(self) -> str:
+        return (
+            f"Entry {self.entry_id} on {self.entry_date} moves {self.unit_identifier} between own account "
+            f"{self.own_account!r} and People account {self.people_account!r}; "
+            "moving securities to or from people is not supported yet"
+        )
+
+
+LotError = LotShortfall | UnbalancedOwnMove | SecurityMoveWithPeople
+
+
+RealisedError = BalanceError | LotError
+
+PositionsError = BalanceError | LotError | PriceError

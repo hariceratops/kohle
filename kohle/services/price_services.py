@@ -95,13 +95,13 @@ def price_exists_service(
 
 
 @crud_retrieve
-def latest_price_service(ctx: DbTransactionContext, unit_id: int) -> Result[Price | None, PriceError]:
+def latest_price_service(
+    ctx: DbTransactionContext, unit_id: int, on_or_before: date | None = None
+) -> Result[Price | None, PriceError]:
     def op(session: Session) -> Price | None:
-        return (
-            session.query(Price)
-            .filter(Price.unit_id == unit_id)
-            .order_by(Price.price_date.desc())
-            .first()
-        )
+        query = session.query(Price).filter(Price.unit_id == unit_id)
+        if on_or_before is not None:
+            query = query.filter(Price.price_date <= on_or_before)
+        return query.order_by(Price.price_date.desc()).first()
 
     return ctx.run(op).map_err(lambda err: PriceError(str(err)))

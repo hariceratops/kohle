@@ -24,7 +24,7 @@ from kohle.app.cli import cli as cli_module
 from kohle.app.cli.cli import cli
 from kohle.core.result import Result
 from kohle.db.connection import base
-from kohle.domain.models import Operation, Price, Unit
+from kohle.domain.models import Operation, OperationGroup, Price, Unit
 from kohle.plugin.price_plugin import (
     Close,
     PriceFetcherPlugin,
@@ -39,6 +39,8 @@ RECORDING_MODULES = (
     "kohle.use_cases.journal",
     "kohle.use_cases.classification",
     "kohle.use_cases.splitting",
+    # Not a recording module: listed because realised gain must come from recorded prices only.
+    "kohle.use_cases.lots",
 )
 PRICE_ENTRY_POINT_NAMES = {"file", "alphavantage"}
 
@@ -72,6 +74,7 @@ def _guarded_sources() -> dict[str, str]:
             "kohle/use_cases/journal.py",
             "kohle/use_cases/classification.py",
             "kohle/use_cases/splitting.py",
+            "kohle/use_cases/lots.py",
             "kohle/plugin/importer_plugin.py",
         )
     }
@@ -253,6 +256,41 @@ def test_reports_leave_prices_and_operations_untouched(session_factory: sessionm
     assert counts() == before
 
 
+def test_new_reports_leave_prices_operations_and_groups_untouched(session_factory: sessionmaker) -> None:
+    runner = CliRunner()
+    setup = [
+        ["add-account", "Depot", "--type", "asset"],
+        ["add-account", "Cash", "--type", "asset"],
+        ["add-account", "People", "--type", "asset"],
+        ["add-unit", "EUR", "Euro", "--kind", "currency"],
+        ["add-unit", "X1", "Thing", "--kind", "security"],
+        ["record", "2026-01-02", "buy", "10", "--from", "Cash", "--to", "Depot", "--to-unit", "X1", "--to-price", "5"],
+        ["record", "2026-01-03", "sell", "4", "--from", "Depot", "--to", "Cash", "--from-unit", "X1", "--from-price", "6"],
+    ]
+    for args in setup:
+        result = runner.invoke(cli, args, obj=session_factory)
+        assert result.exit_code == 0, result.output
+    with session_factory() as session:
+        unit_id = session.scalars(select(Unit.id).where(Unit.identifier == "X1")).one()
+        session.add(Price(unit_id=unit_id, price_date=date(2026, 1, 3), price=Decimal(6), source="file"))
+        session.commit()
+
+    def counts() -> tuple[int, int, int]:
+        with session_factory() as session:
+            return tuple(
+                session.scalar(select(func.count()).select_from(model)) or 0
+                for model in (Price, Operation, OperationGroup)
+            )
+
+    before = counts()
+    for args in (["realised"], ["positions"], ["net-worth-history", "--from", "2026-01-02"]):
+        result = runner.invoke(cli, args, obj=session_factory)
+        assert result.exit_code == 0, result.output
+
+    assert before[0] == 1
+    assert counts() == before
+
+
 PRICE_WRITER_IDENTIFIERS = {
     "load_price_plugins",
     "PriceFetcherPlugin",
@@ -263,8 +301,11 @@ PRICE_WRITER_IDENTIFIERS = {
 
 
 def _report_sources() -> dict[str, str]:
-    sources = {"kohle/use_cases/reporting.py": (ROOT / "kohle/use_cases/reporting.py").read_text(encoding="utf-8")}
-    for name in ("balance_cmd", "net_worth_cmd"):
+    sources = {
+        path: (ROOT / path).read_text(encoding="utf-8")
+        for path in ("kohle/use_cases/reporting.py", "kohle/use_cases/lots.py")
+    }
+    for name in ("balance_cmd", "net_worth_cmd", "realised_cmd", "positions_cmd", "net_worth_history_cmd"):
         callback = getattr(cli_module, name).callback
         assert callback is not None
         sources[f"cli.{name}"] = inspect.getsource(callback)
