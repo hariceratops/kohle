@@ -491,8 +491,8 @@ and `realised` use FIFO, so they can disagree about what a lot cost.
 
 ### Net worth over time
 
-`net-worth-history` shows net worth at past sample dates: the 15th and the last
-calendar day of each month, plus a final row dated `--to` when that is not
+`net-worth-history` shows net worth at past sample dates: the 15th and the salary
+day (the last working day) of each month, plus a final row dated `--to` when that is not
 itself a sample date:
 
 ```bash
@@ -517,6 +517,17 @@ that date, never a later one. A close within `--max-age-days` (default 7) of the
 row's date is fresh, an older one is stale, and a date before any close is
 valued at cost; both of the latter count in `estimated`, which reads `K of M`
 as in `net-worth`'s last line.
+
+`--period-end last-working-day` (the default) samples each month's second date
+on its last working day: Monday to Friday, not a public holiday of the
+`--state` Bundesland (default `BY`, a two-letter code such as `BE` or `NW`), and
+never 24 or 31 December. A month ending on a Saturday or a holiday therefore
+samples the working day before it, and December is 30 December when that is a
+weekday (2028: Friday 29 December). The 15th never moves. The row is dated that
+day and includes its lines. `--period-end month-end` keeps the calendar last
+day, and then `--state` has no effect. An unknown `--state` is a usage error.
+Holidays come from the pinned `holidays` package, so a deliberate upgrade of it
+can move a date.
 
 `--from` defaults to the earliest ledger entry and `--to` to today. A `--to`
 after today, or a `--from` later than `--to`, is a usage error. With `--to`

@@ -178,3 +178,49 @@ def test_net_worth_history_usage_errors_exit_2_without_opening_a_session(monkeyp
 
     assert result.exit_code == 2
     assert "--to" in result.output or "--from" in result.output
+
+
+def test_net_worth_history_defaults_to_last_working_day_in_bavaria(session_factory, monkeypatch):
+    _pin_today(monkeypatch, date(2026, 11, 20))
+    runner = _ledger(session_factory)
+
+    result = runner.invoke(cli, ["net-worth-history", "--from", "2026-10-01", "--to", "2026-10-31"], obj=session_factory)
+
+    assert result.exit_code == 0, result.output
+    assert [ln.split()[0] for ln in result.output.splitlines()[2:]] == [
+        "2026-10-15", "2026-10-30", "2026-10-31",
+    ]
+
+
+def test_net_worth_history_month_end_keeps_the_calendar_last_day_and_ignores_state(session_factory, monkeypatch):
+    _pin_today(monkeypatch, date(2026, 11, 20))
+    runner = _ledger(session_factory)
+    args = ["net-worth-history", "--from", "2026-10-01", "--to", "2026-10-31", "--period-end", "month-end"]
+
+    plain = runner.invoke(cli, args, obj=session_factory)
+    other = runner.invoke(cli, [*args, "--state", "BE"], obj=session_factory)
+
+    assert plain.exit_code == 0, plain.output
+    assert [ln.split()[0] for ln in plain.output.splitlines()[2:]] == ["2026-10-15", "2026-10-31"]
+    assert other.output == plain.output
+
+
+def test_net_worth_history_state_changes_the_period_end(session_factory, monkeypatch):
+    _pin_today(monkeypatch, date(2029, 6, 20))
+    runner = _ledger(session_factory)
+    base = ["net-worth-history", "--from", "2029-05-01", "--to", "2029-05-31"]
+
+    by = runner.invoke(cli, base, obj=session_factory)
+    be = runner.invoke(cli, [*base, "--state", "BE"], obj=session_factory)
+
+    assert [ln.split()[0] for ln in by.output.splitlines()[2:]] == ["2029-05-15", "2029-05-30", "2029-05-31"]
+    assert [ln.split()[0] for ln in be.output.splitlines()[2:]] == ["2029-05-15", "2029-05-31"]
+
+
+@pytest.mark.parametrize("args", [["--state", "Augsburg"], ["--state", "XX"], ["--period-end", "weekly"]])
+def test_net_worth_history_unknown_state_or_period_end_is_a_usage_error_before_any_read(monkeypatch, args):
+    _pin_today(monkeypatch, date(2026, 5, 20))
+
+    result = CliRunner().invoke(cli, ["net-worth-history", *args], obj=_forbidden_factory)
+
+    assert result.exit_code == 2

@@ -50,6 +50,7 @@ from kohle.use_cases.reporting import (
     unrealised_gain,
 )
 from kohle.use_cases.rules import AddRule, ListRules, RemoveRule
+from kohle.use_cases.sampling import STATES, PeriodEnd
 from kohle.use_cases.splitting import (
     AddSplitGroup,
     PersonShare,
@@ -898,9 +899,18 @@ if __name__ == "__main__":
     "--to", "end", type=click.DateTime(formats=["%Y-%m-%d"]), default=None,
     help="Last date sampled, not after today; defaults to today",
 )
+@click.option(
+    "--period-end", "period_end", type=click.Choice([p.value for p in PeriodEnd]),
+    default=PeriodEnd.last_working_day.value, show_default=True,
+    help="The month's second sample date: the calendar last day or the last working day",
+)
+@click.option(
+    "--state", type=click.Choice(STATES), default="BY", show_default=True,
+    help="Bundesland whose public holidays are not working days; ignored with month-end",
+)
 @MAX_AGE_DAYS
 @click.pass_obj
-def net_worth_history_cmd(make_session, start, end, max_age_days: int):
+def net_worth_history_cmd(make_session, start, end, period_end: str, state: str, max_age_days: int):
     today = date.today()  # noqa: DTZ011 - the user's local date, by design
     end_date = end.date() if end is not None else today
     start_date = start.date() if start is not None else None
@@ -910,7 +920,9 @@ def net_worth_history_cmd(make_session, start, end, max_age_days: int):
         raise click.BadParameter(
             f"{start_date.isoformat()} is after the last date {end_date.isoformat()}", param_hint="--from"
         )
-    res = NetWorthHistory(make_session()).execute(start_date, end_date, max_age_days)
+    res = NetWorthHistory(make_session()).execute(
+        start_date, end_date, max_age_days, PeriodEnd(period_end), state
+    )
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
     rows = [

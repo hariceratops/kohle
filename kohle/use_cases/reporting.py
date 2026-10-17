@@ -25,7 +25,7 @@ from kohle.use_cases.journal import (
 )
 from kohle.use_cases.lots import FifoHolding, replay_ledger
 from kohle.use_cases.prices import Fresh, LatestClose, NoClose, Stale, latest_close
-from kohle.use_cases.sampling import sample_dates
+from kohle.use_cases.sampling import PeriodEnd, sample_dates
 
 
 def _market_value(quantity: Decimal, close: LatestClose | None, at_cost: Decimal) -> Decimal:
@@ -233,7 +233,12 @@ class NetWorthHistory(UnitOfWork[list[HistoryRow], ValuationError]):
     read shares the transaction."""
 
     def execute(
-        self, start: date | None, end: date, max_age_days: int
+        self,
+        start: date | None,
+        end: date,
+        max_age_days: int,
+        mode: PeriodEnd = PeriodEnd.month_end,
+        state: str = "BY",
     ) -> Result[list[HistoryRow], ValuationError]:
         def use_case(ctx: DbTransactionContext) -> Result[list[HistoryRow], ValuationError]:
             lines_res = net_worth_lines(ctx)
@@ -246,7 +251,7 @@ class NetWorthHistory(UnitOfWork[list[HistoryRow], ValuationError]):
                 first_day = min(first, end)
             else:
                 first_day = start
-            dates = sample_dates(first_day, end)
+            dates = sample_dates(first_day, end, mode, state)
 
             own = aggregate_by_unit_through(lines.own, dates)
             receivables = aggregate_by_unit_through(lines.receivables, dates)

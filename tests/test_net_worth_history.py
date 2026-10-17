@@ -16,6 +16,7 @@ from kohle.services.journal_services import LineSpec, add_journal_entry_service
 from kohle.services.unit_services import add_unit_service
 from kohle.use_cases.prices import NoClose
 from kohle.use_cases.reporting import HistoryRow, NetWorthHistory, ValuedNetWorth
+from kohle.use_cases.sampling import PeriodEnd
 
 EUR = Decimal(1)
 TODAY = date(2026, 3, 10)
@@ -136,3 +137,25 @@ def test_the_last_row_at_today_equals_valued_net_worth(session: Session, ledger:
     assert last.report.at_cost.net_worth_at_cost == now.at_cost.net_worth_at_cost
     assert last.report.net_worth_at_market == now.net_worth_at_market
     assert last.report.estimates == now.estimates
+
+
+def test_the_salary_day_row_is_dated_the_working_day_and_includes_that_days_lines(
+    session: Session, ledger: dict
+) -> None:
+    ctx = DbTransactionContext(session)
+    checking = add_account_service(ctx, "Checking2", AccountType.asset, "DE3").unwrap()
+    salary = add_account_service(ctx, "Salary2", AccountType.income).unwrap()
+    eur = add_unit_service(ctx, "EUR2", "Euro", UnitKind.currency).unwrap()
+    add_journal_entry_service(ctx, date(2026, 2, 27), "pay", "pay", [
+        LineSpec(checking.id, eur.id, Decimal(500), EUR, is_debit=True),
+        LineSpec(salary.id, eur.id, Decimal(500), EUR, is_debit=False),
+    ]).unwrap()
+    session.commit()
+
+    rows = NetWorthHistory(session).execute(
+        date(2026, 2, 1), date(2026, 2, 28), 7, PeriodEnd.last_working_day, "BY"
+    ).unwrap()
+    by_date = _by_date(rows)
+
+    assert [r.on for r in rows] == [date(2026, 2, 15), date(2026, 2, 27), date(2026, 2, 28)]
+    assert by_date[date(2026, 2, 27)].report.at_cost.net_worth_at_cost == Decimal(1500)
