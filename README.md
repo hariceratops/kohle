@@ -413,6 +413,36 @@ other than euros with a nonzero quantity (3 above), of which those with a
 `stale` or `no price (at cost)` status are estimated. It always prints, as
 `0 of M holdings estimated` when none are.
 
+### Positions and profit
+
+`realised` replays each depot's buys and sells in ledger order and lists every
+sale with its gain computed against the **oldest lots first** (FIFO, per
+depot):
+
+```bash
+kohle-cli realised
+kohle-cli realised --year 2026
+```
+
+```
+date        account    unit            quantity    proceeds    FIFO cost    gain
+----------  ---------  ------------  ----------  ----------  -----------  ------
+2026-03-10  Depot      IE00B4L5Y983       15.00     1950.00      1600.00  350.00
+
+Realised gain: 350.00
+```
+
+Proceeds are the quantity sold times the sale line's recorded unit price. The
+figures are gross, before fees and tax, so they serve as a cross-check against
+your broker's certificate, not as a tax computation. `--year` lists only sales
+dated in that year; their gains still use lots bought in earlier years.
+Without it every sale from all years is listed under one total. The `People`
+branch is excluded. `No sales` prints in place of the table when there are
+none; `Realised gain: 0.00` still closes the output.
+
+Note that `balance`'s `average cost` is a moving average, while `realised`
+uses FIFO, so the two can disagree about what a sold lot cost.
+
 ### Prices
 Current prices come from price plugins, a second plugin kind in the same
 `kohle.plugins` entry-point group as the importers. Fetching is always an

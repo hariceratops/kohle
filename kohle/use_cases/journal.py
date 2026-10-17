@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from kohle.core.result import Result
 from kohle.domain.domain_errors import (
+    AccountError,
     BalanceError,
     BaseCurrencyAsCrossUnit,
     DuplicateReferenceInStatement,
@@ -670,16 +671,16 @@ class NetWorthReport:
         return self.own_at_cost + self.receivables_at_cost
 
 
-def net_worth(ctx: DbTransactionContext) -> Result[NetWorthReport, BalanceError]:
-    """Net worth at recorded cost (design §9). Income and expense accounts
-    are excluded — every entry balances, so including them would always net
-    to exactly 0, which would look like a bug rather than a definition error
-    (design §9.2). Receivables are the People subtree, unioned in by
-    membership rather than selected by account type, so a person account
-    still counts even with the default `expense` type `add-account` gives
-    it, and nothing is double-counted since the partition is by subtree.
-    Factored out of `NetWorth` so `reporting.ValuedNetWorth` can run the same
-    partition inside its own transaction."""
+@dataclass(frozen=True, slots=True)
+class BalanceSheetAccounts:
+    own: dict[int, str]
+    people: dict[int, str]
+
+
+def balance_sheet_accounts(ctx: DbTransactionContext) -> Result[BalanceSheetAccounts, AccountError]:
+    """The net-worth partition, account id to name: asset and liability
+    accounts outside the People subtree (`own`), and the People subtree of any
+    type (`people`). Shared so "own account" has one definition."""
     people_res = get_account_by_name_service(ctx, PEOPLE_ROOT)
     if people_res.is_err:
         return Result.err(people_res.unwrap_err())
@@ -692,16 +693,36 @@ def net_worth(ctx: DbTransactionContext) -> Result[NetWorthReport, BalanceError]
     accounts_res = list_accounts_service(ctx)
     if accounts_res.is_err:
         return Result.err(accounts_res.unwrap_err())
-    balance_sheet_ids = {
-        a.id for a in accounts_res.unwrap()
-        if a.type in (AccountType.asset, AccountType.liability)
-    } | people_ids
+    accounts = accounts_res.unwrap()
+    return Result.ok(BalanceSheetAccounts(
+        own={
+            a.id: a.name for a in accounts
+            if a.type in (AccountType.asset, AccountType.liability) and a.id not in people_ids
+        },
+        people={a.id: a.name for a in accounts if a.id in people_ids},
+    ))
 
-    own_lines_res = account_lines_service(ctx, balance_sheet_ids - people_ids)
+
+def net_worth(ctx: DbTransactionContext) -> Result[NetWorthReport, BalanceError]:
+    """Net worth at recorded cost (design §9). Income and expense accounts
+    are excluded — every entry balances, so including them would always net
+    to exactly 0, which would look like a bug rather than a definition error
+    (design §9.2). Receivables are the People subtree, unioned in by
+    membership rather than selected by account type, so a person account
+    still counts even with the default `expense` type `add-account` gives
+    it, and nothing is double-counted since the partition is by subtree.
+    Factored out of `NetWorth` so `reporting.ValuedNetWorth` can run the same
+    partition inside its own transaction."""
+    accounts_res = balance_sheet_accounts(ctx)
+    if accounts_res.is_err:
+        return Result.err(accounts_res.unwrap_err())
+    accounts = accounts_res.unwrap()
+
+    own_lines_res = account_lines_service(ctx, accounts.own.keys())
     if own_lines_res.is_err:
         return Result.err(own_lines_res.unwrap_err())
 
-    receivables_lines_res = account_lines_service(ctx, people_ids)
+    receivables_lines_res = account_lines_service(ctx, accounts.people.keys())
     if receivables_lines_res.is_err:
         return Result.err(receivables_lines_res.unwrap_err())
 

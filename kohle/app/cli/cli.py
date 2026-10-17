@@ -20,6 +20,7 @@ from kohle.use_cases.journal import (
     RecordSimpleEntry,
     RecordSplitEntry,
 )
+from kohle.use_cases.lots import QueryRealised, realised_gain
 from kohle.use_cases.operations import ListOperations
 from kohle.use_cases.prices import (
     AlreadyStored,
@@ -695,6 +696,36 @@ def net_worth_cmd(make_session, max_age_days: int):
     click.echo(f"\nNet worth (at cost): {report.at_cost.net_worth_at_cost:.2f}")
     click.echo(f"Net worth (at market): {report.net_worth_at_market:.2f}")
     click.echo(_estimates_line(report.estimates))
+
+
+@cli.command()
+@click.option(
+    "--year", type=click.IntRange(min=1), default=None,
+    help="Only sales dated in this year; their cost still comes from earlier lots",
+)
+@click.pass_obj
+def realised_cmd(make_session, year: int | None):
+    res = QueryRealised(make_session()).execute(year)
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    sales = res.unwrap()
+    if not sales:
+        click.echo("No sales")
+    else:
+        rows = [
+            {
+                "date": s.entry_date,
+                "account": s.account_name,
+                "unit": s.unit_identifier,
+                "quantity": s.quantity,
+                "proceeds": s.proceeds,
+                "FIFO cost": s.fifo_cost,
+                "gain": s.gain,
+            }
+            for s in sales
+        ]
+        click.echo(tabulate(rows, headers="keys", floatfmt=".2f", missingval="-"))
+    click.echo(f"\nRealised gain: {realised_gain(sales):.2f}")
 
 
 @cli.command()

@@ -451,3 +451,10 @@ PriceRejection = MissingCloseResult | NonPositivePrice | FutureCloseDate | NonBa
 ListPriceTargetsError = BalanceError | PriceError
 
 ValuationError = BalanceError | PriceError
+
+
+class LotError(Exception):
+    pass
+
+
+RealisedError = BalanceError | LotError
