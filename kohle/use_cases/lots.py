@@ -12,7 +12,13 @@ from datetime import date
 from decimal import Decimal
 
 from kohle.core.result import Result
-from kohle.domain.domain_errors import LotError, LotShortfall, RealisedError, UnbalancedOwnMove
+from kohle.domain.domain_errors import (
+    LotError,
+    LotShortfall,
+    RealisedError,
+    SecurityMoveWithPeople,
+    UnbalancedOwnMove,
+)
 from kohle.domain.models import JournalLine, Unit, UnitKind
 from kohle.infrastructure.transaction_context import DbTransactionContext
 from kohle.infrastructure.uow import UnitOfWork
@@ -128,18 +134,35 @@ def _move(
     return None
 
 
-def replay(lines: Iterable[JournalLine], own: dict[int, str]) -> Result[LotReplay, LotError]:
+def replay(
+    lines: Iterable[JournalLine], own: dict[int, str], people: dict[int, str] | None = None
+) -> Result[LotReplay, LotError]:
     """`lines` must be in `(entry_date, line id)` order and already filtered by `_replayed`."""
+    people = people or {}
     groups: dict[tuple[int, str], list[JournalLine]] = {}
     for line in lines:
-        if line.account_id in own:
+        if line.account_id in own or line.account_id in people:
             groups.setdefault((line.entry.id, line.unit.identifier), []).append(line)
 
     queues: dict[tuple[int, str], list[Lot]] = {}
     unit_ids: dict[str, int] = {}
     sales: list[Sale] = []
 
-    for group in groups.values():
+    for entry_lines in groups.values():
+        group = [line for line in entry_lines if line.account_id in own]
+        person_line = next((line for line in entry_lines if line.account_id in people), None)
+        if person_line is not None and group:
+            return Result.err(
+                SecurityMoveWithPeople(
+                    person_line.entry.id,
+                    person_line.entry.entry_date,
+                    person_line.unit.identifier,
+                    own[group[0].account_id],
+                    people[person_line.account_id],
+                )
+            )
+        if not group:
+            continue
         identifier = group[0].unit.identifier
         unit_ids.setdefault(identifier, group[0].unit_id)
         credits = [line for line in group if not line.is_debit]
@@ -176,11 +199,11 @@ def replay_ledger(ctx: DbTransactionContext) -> Result[LotReplay, RealisedError]
         return Result.err(accounts_res.unwrap_err())
     accounts = accounts_res.unwrap()
 
-    lines_res = account_lines_service(ctx, accounts.own.keys())
+    lines_res = account_lines_service(ctx, accounts.own.keys() | accounts.people.keys())
     if lines_res.is_err:
         return Result.err(lines_res.unwrap_err())
 
-    replay_res = replay((line for line in lines_res.unwrap() if _replayed(line.unit)), accounts.own)
+    replay_res = replay((line for line in lines_res.unwrap() if _replayed(line.unit)), accounts.own, accounts.people)
     if replay_res.is_err:
         return Result.err(replay_res.unwrap_err())
     return Result.ok(replay_res.unwrap())

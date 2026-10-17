@@ -65,9 +65,25 @@ def test_oversell_exits_non_zero_with_no_table(session_factory):
     assert "Realised gain" not in result.output
 
 
-@pytest.mark.skip(reason="issues 042-043")
-def test_move_and_people_failures_exit_non_zero_with_no_table():
-    ...
+@pytest.mark.parametrize("direction", ["debit", "credit"])
+def test_security_move_with_a_people_account_exits_non_zero_with_no_table(session_factory, direction):
+    runner = _ledger(session_factory)
+    other = "credit" if direction == "debit" else "debit"
+    for args in (
+        ["add-account", "Alice", "--type", "asset", "--parent", "People"],
+        [
+            "record-split", "2026-04-01", "give away",
+            "--line", f"Depot:1:X1:1:{direction}",
+            "--line", f"Alice:1:X1:1:{other}",
+        ],
+    ):
+        assert runner.invoke(cli, args, obj=session_factory).exit_code == 0
+
+    result = runner.invoke(cli, ["realised"], obj=session_factory)
+
+    assert result.exit_code != 0
+    assert "People account 'Alice'" in result.output and "own account 'Depot'" in result.output
+    assert "Realised gain" not in result.output and "date" not in result.output.splitlines()[0]
 
 
 @pytest.mark.skip(reason="issue 044")

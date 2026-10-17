@@ -488,7 +488,26 @@ class UnbalancedOwnMove(Exception):
         )
 
 
-LotError = LotShortfall | UnbalancedOwnMove
+class SecurityMoveWithPeople(Exception):
+    def __init__(
+        self, entry_id: int, entry_date: date, unit_identifier: str, own_account: str, people_account: str
+    ) -> None:
+        super().__init__()
+        self.entry_id = entry_id
+        self.entry_date = entry_date
+        self.unit_identifier = unit_identifier
+        self.own_account = own_account
+        self.people_account = people_account
+
+    def __str__(self) -> str:
+        return (
+            f"Entry {self.entry_id} on {self.entry_date} moves {self.unit_identifier} between own account "
+            f"{self.own_account!r} and People account {self.people_account!r}; "
+            "moving securities to or from people is not supported yet"
+        )
+
+
+LotError = LotShortfall | UnbalancedOwnMove | SecurityMoveWithPeople
 
 
 RealisedError = BalanceError | LotError

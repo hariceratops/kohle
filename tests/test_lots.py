@@ -3,7 +3,11 @@ from decimal import Decimal
 
 import pytest
 
-from kohle.domain.domain_errors import LotShortfall, UnbalancedOwnMove
+from kohle.domain.domain_errors import (
+    LotShortfall,
+    SecurityMoveWithPeople,
+    UnbalancedOwnMove,
+)
 from kohle.domain.models import JournalEntry, JournalLine, Unit
 from kohle.use_cases.lots import Lot, _take, realised_gain, replay
 
@@ -134,6 +138,29 @@ def test_unbalanced_own_move_fails():
     )
 
 
-@pytest.mark.skip(reason="issue 043")
-def test_people_account_security_move_fails_naming_the_entry():
-    ...
+PERSON = 9
+
+
+@pytest.mark.parametrize("own_is_debit", [True, False])
+def test_people_account_security_move_fails_naming_the_entry(own_is_debit):
+    lines = [
+        _line(1, 1, "10", "100", is_debit=True),
+        _line(2, 2, "4", "1", is_debit=own_is_debit, entry_id=2),
+        _line(3, 2, "4", "1", is_debit=not own_is_debit, account_id=PERSON, entry_id=2),
+    ]
+
+    error = replay(lines, OWN, {PERSON: "Alice"}).unwrap_err()
+
+    assert isinstance(error, SecurityMoveWithPeople)
+    assert str(error) == (
+        "Entry 2 on 2026-01-02 moves X1 between own account 'Depot' and People account 'Alice'; "
+        "moving securities to or from people is not supported yet"
+    )
+
+
+def test_people_only_security_lines_are_ignored():
+    lines = [_line(1, 1, "4", "1", is_debit=True, account_id=PERSON)]
+
+    result = replay(lines, OWN, {PERSON: "Alice"}).unwrap()
+
+    assert result.sales == [] and result.holdings == []
