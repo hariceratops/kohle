@@ -78,5 +78,8 @@ The two stay separate.
 - Does unspent cap roll over into the next period?
 - Does the report show only finished periods, the current one so far, or both?
 - Is there a total cap across all expenses as well as per category?
+- Does the report need a cash-flow view beside the expense view? A mortgage
+  installment leaves in full while only its interest is an expense (see
+  `debts-and-liabilities`).
 - Which recurrence kinds are in the first version, and is RRULE the internal
   form shared with sampling?
