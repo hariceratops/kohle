@@ -14,6 +14,18 @@ cost a request every run.
 
 ## Considerations surfaced
 
+**Indian closes are in scope too.** `multi-currency-and-fx` settled that
+Indian stocks are held now. Per the user, Alpha Vantage already provides
+Indian prices, so it stays a source for those. The need is a complement, not a
+replacement: a second provider, or closes written by hand into a text file
+through the existing file price plugin, for what Alpha Vantage's quota or
+coverage cannot reach.
+
+**No single provider is required.** Each unit has its own price binding, so
+Xetra symbols, Indian symbols and the INR/EUR rate can come from different
+sources side by side. A free reference-rate source (the ECB publishes daily
+EUR rates) is a candidate for the rate, unverified for terms and fit.
+
 "Free and safe" is taken to mean: an official API key (not scraping), terms
 that allow personal use, a documented rate limit, and a response from which a
 finished daily close can be identified.
@@ -36,9 +48,13 @@ unit has one binding).
 
 ## Open questions
 
+- How many symbols are held, and expected, per exchange? It decides which
+  quotas fit.
+- Which units go to Alpha Vantage, which to the second source, and which to
+  the file plugin?
+
 - Which provider covers Xetra at a quota that fits the real portfolio size?
 - Does its response identify a finished daily close, or does the plugin need
   the same strictly-before-today guard as Alpha Vantage?
-- Does it quote in EUR for German listings, and does it support Indian
-  exchanges (see `multi-currency-and-fx`)?
+- Does it quote in EUR for German listings?
 - Is a batch endpoint available at all on the free tier?
