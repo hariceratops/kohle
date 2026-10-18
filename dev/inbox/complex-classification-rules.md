@@ -1,10 +1,11 @@
-# Richer classification rules, and a classifier seam for ML
+# Richer classification rules
 
 ## Goal
 
 Let a classification rule express what a person actually knows about a
-recurring payment, not just what text it contains, and leave a clear seam where
-a different kind of classifier (a learned model) can be added later.
+recurring payment — who it goes to, how much, in which direction — not just
+what text it contains, so that fewer lines fall into the unclassified buckets
+and fewer land in a plausible but wrong category.
 
 The problem behind it: a rule today is one regular expression and a target
 account. The motivating case is sending a partner money every month. One
@@ -24,58 +25,61 @@ way to require two things at once. Direction also cannot choose the target:
 the counterpart leg's sign comes from the line, so the same IBAN's incoming and
 outgoing payments cannot go to different accounts.
 
-**Rules as data.** Richer conditions are core behaviour, not an extension
-point. The open design choice is representation: more columns on the `Rule`
-row (amount range, direction, an IBAN field separate from the pattern), or a
-small expression language over the line's fields. Whatever is chosen has to
-keep first-match-wins and priority, which existing rules, `list-rules` and
-`remove-rule` depend on, and old single-pattern rules must keep working
-unchanged.
+**Conditions as columns, ANDed.** Proposed direction: a rule carries optional
+per-field conditions — a pattern on the description, a pattern on the
+counterparty name, an exact IBAN, an amount range, a direction — and matches
+when every condition it has holds. An existing rule becomes "this pattern on
+any field", today's behaviour unchanged. The partner case is two rules: the
+same IBAN with two amount ranges. Alternatives that OR conditions are already
+expressible as two priority-ordered rules.
 
-**The classifier seam.** `match_rule` is already a pure function with no
-session: a line goes in, and a rule or nothing comes out. A classifier
-interface would take the line's features (description, counterparty, amount,
-direction, date) and return a proposal (an account, plus a confidence for a
-learned model). The rules engine is the built-in implementation. This should be
-named in the design but not built as a plugin contract yet: a contract
-designed around one implementation tends to be wrong, and the price-fetcher
-plugin layer was only justified once two real sources existed. Extract the
-contract when a second classifier does.
+**First-match-wins and priority stay.** Existing rules, `list-rules` and
+`remove-rule` depend on them.
 
-**Why ML can plausibly fit.** The `Classification` table already records what
-was proposed and where the line ended up, and `reclassify` records corrections.
-Those rows are labelled data: features, proposal, and the account the user
-finally chose.
+**Rules stay immutable.** `Classification` rows record the `rule_id` that
+matched. An editable rule would leave history pointing at a rule that now
+means something else. A change is remove and add, as today.
 
-**Constraints a learned classifier must respect**
-- *Reproducibility.* Re-running an import must not change the books. Already
-  imported references are skipped and the decision is recorded in
-  `Classification`, so a retrained model cannot reclassify history. This must
-  stay true.
-- *Suggest, not post.* A model probably proposes and a person confirms through
-  `list-unclassified`. Explicit user rules take priority over a model's guess.
-- *Validation stays in core.* Any proposed account must exist and be postable
-  (leaf-only rule), as unknown instruments are refused today. A classifier
-  cannot post to a parent account.
-- *Where it runs.* A local model versus an external service is a privacy
-  question, since the input is bank data.
+**Matching stays pure.** `match_rule` is a session-free function — a line in, a
+rule or nothing out — and is called inside the import loop. Richer conditions
+keep it that way; the line's amount and direction are already known there.
+
+**The rule engine is also data collection.** A learned classifier is not part
+of this work, but is the expected later step. Every classification is recorded
+in `Classification` (what was proposed, by which rule, and where the line
+ended up), and `reclassify` records corrections. Over time that, plus manually
+tagging statements from past years, becomes labelled data for text
+classification. This is a reason to keep the classification and correction
+records complete and accurate, not a feature to build now.
+
+**The CLI shape.** `add-rule` takes a pattern and an account today. Several
+optional conditions mean several optional flags; the names fall under
+`cli-command-naming`.
 
 ## Directions rejected
 
-A plugin contract for classifiers now (see above). Solving the partner case by
-IBAN alone, which is the case this brief exists for.
+- **A small expression language for conditions**: a parser, an error-message
+  surface, and CLI quoting problems, to express ORs that two rules already
+  cover.
+- **Editable rules**: they rewrite the meaning of recorded classifications.
+- **A machine-learning classifier now**: without enough labelled data, a model
+  adds more noise than benefit, and is less accurate than explicit rules.
+  Revisit once the rule engine and manual tagging have produced enough data;
+  then it is a text-classification problem.
+- **A classifier plugin contract**: a contract designed around one
+  implementation tends to be wrong; extract it if a second classifier ever
+  exists.
+- **Solving the partner case by IBAN alone**: it is the case this brief exists
+  for, and IBAN alone cannot separate it.
 
 ## Open questions
 
-- Are conditions columns on `Rule` or an expression language? How is a rule
-  with several conditions written on the CLI (`add-rule` currently takes a
-  pattern and an account)?
-- Which conditions are first-version: amount equality, amount range, direction,
-  a separate IBAN field, day of month?
-- Should direction pick a different target account for the same pattern?
-- Do existing rules need migration, or does a plain pattern stay the
-  one-condition special case?
-- Is an unclassified line the only place a model's suggestion appears, or can it
-  also challenge a rule's match?
-- What would the training and evaluation loop look like, and who owns the
-  model's lifecycle?
+- Which conditions are in the first version: amount equality, amount range,
+  direction, separate description/counterparty/IBAN fields, day of month?
+- Is an amount range inclusive, and is it on the absolute amount with
+  direction as a separate condition?
+- Should direction alone be able to pick a different target for the same
+  counterparty?
+- Do existing rules need a migration, or is the "any field" pattern kept as a
+  distinct condition?
+- How does `list-rules` display a rule with several conditions readably?
