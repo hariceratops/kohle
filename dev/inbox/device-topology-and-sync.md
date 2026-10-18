@@ -87,10 +87,19 @@ Syncthing copies on readers are not backups: a corruption on the Pi syncs out.
 (SQLAlchemy, the price plugins, the `holidays` package) are expected to run,
 unverified. Imports and reports are small.
 
-**Reading on a phone or tablet.** Something must open the ledger there; the
-TUI does not run on a phone. What the reader is (a synced file plus a viewer,
-a read-only web view served by the Pi, a static export) is open and is a
-larger question than sync.
+**Syncthing across all devices is the base.** Agreed: the Pi, laptop, tablet
+and phone already sync other tools with Syncthing (Taskwarrior, Logseq, a
+language app), so the kohle snapshot is one more synced folder, not a separate
+mechanism. The Pi is not exposed to the internet; no VPN or tunnel service.
+
+**TUI over SSH at home.** Running the TUI on the Pi from any device's SSH
+client reads the live ledger without a copy, and is the intended way to use
+kohle interactively once `tui-wiring` lands. It works on the home network
+only; away from home, devices read their synced snapshot.
+
+**Reading on a phone or tablet away from home.** Something must open the
+synced snapshot there; the TUI does not run on a phone. What that reader is (a
+viewer app, a static export written alongside the snapshot) is open.
 
 **An ESP32 display (optional, for fun).** The read side suits an embedded
 project: an e-ink display showing net worth, or the month's spending against
@@ -108,6 +117,8 @@ each device has to fit that.
   merges.
 - **A proprietary sync protocol or merge workflow**: unnecessary with a single
   writer.
+- **A VPN or tunnel to reach the Pi from outside**: the Pi stays off the
+  internet; Syncthing covers reading away from home.
 - **Price fetching only on the laptop**: it is not always on; the Pi is.
 - **A separate closes file written by the Pi for the laptop to read**: needed
   only while the laptop was the writer.
@@ -121,7 +132,7 @@ each device has to fit that.
 
 ## Open questions
 
-- What reads the ledger on a phone or tablet?
+- What reads the synced snapshot on a phone or tablet away from home?
 - How does a reader device know it is read-only: a setting, an environment
   variable, the absence of something only the writer has?
 - Distribution: Syncthing (Send Only / Receive Only) or a scheduled `rsync`
