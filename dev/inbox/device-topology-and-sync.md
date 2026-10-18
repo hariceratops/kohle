@@ -29,6 +29,29 @@ Syncing a SQLite file is safe only with exactly one writer per file.
 With one writer and copies flowing one way, no proprietary sync protocol or
 merge workflow is needed.
 
+**Statements arrive through an inbox folder on the Pi.** Statements are
+posted (copied) into an inbox folder; the import runs either explicitly over
+SSH or from an inotify job watching the folder. Because imports are
+idempotent (deduplication by native reference per account), the inbox can
+keep filling for a long time and be re-run safely.
+
+- *The path carries the import arguments.* `import-statement` takes a plugin
+  name, a cash account and possibly instrument accounts; a file in a flat
+  folder carries none of that. Proposed: `inbox/<plugin>/<cash-account>/`,
+  so a file cannot be imported against the wrong account. Broker imports
+  with instrument accounts need a deeper path or a small manifest.
+- *Never import a half-written file.* An inotify job triggers on
+  `close_write` or `moved_to`, never `create`; uploads write under a
+  temporary name and are renamed in, which is atomic. A half file that
+  happens to parse would otherwise import silently short.
+- *Two writers on the Pi.* The price-fetch cron and an inotify import can
+  run at once. SQLite serialises them with its lock; the loser waits only
+  for its busy timeout, so a long import overlapping a fetch should retry
+  rather than fail.
+- *The inbox is also an archive.* Keeping every raw statement lets a lost
+  ledger be partly rebuilt by re-importing. Not a full backup:
+  classifications, splits and manual entries exist only in the database.
+
 **Sync a snapshot, never the live file.** At the planned time the Pi writes a
 consistent snapshot with SQLite's `VACUUM INTO 'snapshot.db'` (or the backup
 API), and only the snapshot is distributed. A snapshot cannot be caught
@@ -106,6 +129,9 @@ each device has to fit that.
 - Backup schedule and destination for the Pi's database.
 - Does the Pi run the CLI only, or also the TUI over SSH for imports and
   corrections?
-- How do statement files get to the Pi: `scp` then import, or an import
-  command that reads from stdin over SSH?
+- Explicit import over SSH, an inotify job, or both?
+- How does a broker statement name its instrument accounts in the inbox
+  layout: deeper path or manifest?
+- Does a processed file stay in place, or move to a processed folder (both
+  are safe given idempotence; the second makes re-runs cheaper)?
 - What goes into the ESP32 summary file, and in what format?
