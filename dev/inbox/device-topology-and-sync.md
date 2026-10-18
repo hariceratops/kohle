@@ -17,32 +17,45 @@ downtime. Where writes happen decides the sync mechanism.
 Syncthing produces a `.sync-conflict` copy and one side's writes are lost.
 Syncing a SQLite file is safe only with exactly one writer per file.
 
-**Agreed topology: the Raspberry Pi 3 is the single writer.**
+**Agreed topology: the Raspberry Pi 3 is the master.**
 
-- *Read-write: the Pi.* It runs the daily price fetch (cron) and the imports —
-  statements are downloaded by browsing on the Pi itself. Every write
-  (imports, fetches, corrections, settings) happens there.
-- *Read-only: every other device* — the laptop, tablet and phone receive the
-  ledger through Syncthing.
+- *The Pi holds the only writable ledger.* It runs the cron jobs (daily price
+  fetch) and every write: imports, corrections, settings.
+- *Imports are driven from the laptop over SSH.* Statements are copied to the
+  Pi and the import is run there; the laptop holds no writable ledger.
+- *Every other device reads a copy*, refreshed daily at a planned time — the
+  laptop, tablet and phone.
 
-With one writer, Syncthing needs nothing custom and no protocol of kohle's
-own is needed. An earlier idea — the Pi writing closes to a separate CSV that
-the laptop reads through the file price plugin — is unnecessary once the Pi
-writes the ledger directly.
+With one writer and copies flowing one way, no proprietary sync protocol or
+merge workflow is needed.
 
-**Readers must not write by accident.** A stray write on a reader device
-creates a conflict copy that silently diverges. kohle on a reader should open
-the database read-only (SQLite's read-only mode), so a write command fails
-there rather than forking the ledger. How a device knows it is a reader is
-open.
+**Sync a snapshot, never the live file.** At the planned time the Pi writes a
+consistent snapshot with SQLite's `VACUUM INTO 'snapshot.db'` (or the backup
+API), and only the snapshot is distributed. A snapshot cannot be caught
+halfway through a cron write, and the live file never leaves the Pi.
+Verified: `VACUUM INTO` produces a single self-contained file with no
+journal or WAL side files, so the writer's journal mode no longer matters to
+readers.
 
-**Copies in transit.** A reader may open the file while Syncthing replaces it.
-Syncthing writes a temporary file and renames it into place, so a reader sees
-the old or the new file, not a mix; confirm before relying on it. SQLite's WAL
-mode keeps extra files beside the database, which sync separately; the journal
-mode on the writer should be one that leaves a single consistent file.
+**Keeping readers read-only: three layers.** Verified on 2026-10-18 against
+kohle's SQLAlchemy setup, except the first, which is from Syncthing's
+documented behaviour.
 
-**The Pi as the only copy that matters.** The writer holds the ledger of
+1. *Copies flow one way.* Syncthing folder types: Send Only on the Pi,
+   Receive Only on readers; a reader never sends changes back, and local
+   modifications on a reader are flagged and can be reverted to the Pi's
+   version. A scheduled `rsync` pull is one-way by construction and gives the
+   same guarantee. The Pi's ledger cannot be touched from a reader.
+2. *kohle opens the copy read-only.* `sqlite:///file:<path>?mode=ro&uri=true`
+   reads normally and refuses any write with "attempt to write a readonly
+   database". A missing file is an error ("unable to open database file") and
+   no empty database is created, so a wrong path fails loudly instead of
+   showing an empty ledger. In kohle this is the engine URL in
+   `kohle/db/connection.py`, chosen by whatever marks a device as a reader.
+3. *File permissions.* A `chmod 444` snapshot also refused a write from a
+   plain (non-read-only) open. A backstop, not the guarantee.
+
+**The Pi as the only copy that matters.** The master holds the ledger of
 record on an SD card, which wears and corrupts. Backups of the Pi's database
 (the existing `kohle.db.bak-*` files are manual ones) become important.
 Syncthing copies on readers are not backups: a corruption on the Pi syncs out.
@@ -75,6 +88,10 @@ each device has to fit that.
 - **Price fetching only on the laptop**: it is not always on; the Pi is.
 - **A separate closes file written by the Pi for the laptop to read**: needed
   only while the laptop was the writer.
+- **Syncing the live database file**: a copy can catch a write in progress;
+  snapshots replace it.
+- **The laptop as a writer that imports locally**: imports run on the Pi over
+  SSH instead, keeping one writable ledger.
 - **An ESP32 as the price fetcher**: it cannot run Syncthing, so it would need
   its own channel to the writer, and unpacking a 200 KB bhavcopy is tight in
   its RAM without PSRAM.
@@ -84,7 +101,11 @@ each device has to fit that.
 - What reads the ledger on a phone or tablet?
 - How does a reader device know it is read-only: a setting, an environment
   variable, the absence of something only the writer has?
-- Which SQLite journal mode on the writer keeps the synced file consistent?
+- Distribution: Syncthing (Send Only / Receive Only) or a scheduled `rsync`
+  pull? And at what time of day, relative to the price-fetch cron?
 - Backup schedule and destination for the Pi's database.
-- Does the Pi run the CLI only, or also the TUI for imports and corrections?
+- Does the Pi run the CLI only, or also the TUI over SSH for imports and
+  corrections?
+- How do statement files get to the Pi: `scp` then import, or an import
+  command that reads from stdin over SSH?
 - What goes into the ESP32 summary file, and in what format?
