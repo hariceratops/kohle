@@ -52,15 +52,43 @@ tagging statements from past years, becomes labelled data for text
 classification. This is a reason to keep the classification and correction
 records complete and accurate, not a feature to build now.
 
-**The CLI shape.** `add-rule` takes a pattern and an account today. Several
-optional conditions mean several optional flags; the names fall under
-`cli-command-naming`.
+**Rules are edited in an editor.** Agreed direction, the primary way rules are
+entered: a `rules edit`-style command (name under `cli-command-naming`)
+renders the whole rule set to a temporary file and opens `$EDITOR`, in the
+manner of `crontab -e` or `visudo`. On save the file is parsed, validated
+(accounts exist and are leaves, patterns compile) and diffed against the
+database; on any error the editor reopens with the error shown and nothing is
+applied.
+
+- The order of rules in the file is their priority, so priority numbers leave
+  the user's view.
+- An unchanged rule keeps its id; a changed rule is retired and replaced by a
+  new one, so `Classification` rows keep pointing at the rule that actually
+  matched. Immutability holds at the storage level while editing feels
+  in-place.
+- Rendering back to text must round-trip: the same rule always renders the
+  same way and parses back to the same rule. Comments would be lost on the
+  round trip unless stored, for example as a per-rule note rendered as the
+  rule's comment.
+
+The writes that run unattended today are price fetching only; scheduled jobs
+otherwise read reports. So an interactive editor as the main entry point costs
+no automation.
+
+**How the conditions are evaluated.** Whichever format is chosen, a rule is a
+predicate over one line: each condition is evaluated and combined, children
+before parent (post-order), `and` short-circuiting on the first false. At a
+few dozen rules against a few hundred lines per import, first-match-wins by
+brute force costs microseconds; no rule-engine optimisation (Rete, compiling
+to SQL) is warranted, and classifying inside the database would give up the
+pure `match_rule`, since lines are matched before they exist as rows.
 
 ## Directions rejected
 
-- **A small expression language for conditions**: a parser, an error-message
-  surface, and CLI quoting problems, to express ORs that two rules already
-  cover.
+- **Per-condition CLI flags as the way rules are entered**: replaced by the
+  editor.
+- **Compiling rules to SQL or optimising evaluation**: no scale problem to
+  solve, and it breaks the pure matcher.
 - **Editable rules**: they rewrite the meaning of recorded classifications.
 - **A machine-learning classifier now**: without enough labelled data, a model
   adds more noise than benefit, and is less accurate than explicit rules.
@@ -74,6 +102,15 @@ optional conditions mean several optional flags; the names fall under
 
 ## Open questions
 
+- The file format in the editor: structured data (TOML-like, one table per
+  rule, mapping onto column conditions, canonical by construction) or a small
+  expression language (`iban = "DE…" and amount in 400..600 and out`; adds OR
+  and NOT within a rule, costs a parser and its error messages, and needs the
+  source text stored to round-trip). The editor removes the shell-quoting
+  argument against the language; ORs remain expressible as two rules either
+  way.
+- Is a non-interactive route (`rules apply <file>`, same parser and diff)
+  needed at all, e.g. for agents?
 - Which conditions are in the first version: amount equality, amount range,
   direction, separate description/counterparty/IBAN fields, day of month?
 - Is an amount range inclusive, and is it on the absolute amount with
