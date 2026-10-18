@@ -31,6 +31,11 @@ list of sampling rules, each one of three kinds:
 Today's behaviour becomes the default rule list rather than a special case
 (inferred from the current code, to confirm in design).
 
+**One recurrence vocabulary.** `budgeting` needs recurring periods too (every
+n days, weeks or months, yearly). The sampling rule kinds here should be part
+of one recurrence vocabulary shared with budgeting, not a separate one; that
+may revive RRULE as the internal form, with a friendlier syntax on top.
+
 **Holidays shift backward.** When a rule's day is a weekend or a holiday in
 the configured Bundesland, the sample moves to the previous working day. A
 third Friday on a holiday becomes the Thursday, which matches "the last
