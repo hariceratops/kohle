@@ -38,7 +38,11 @@ A ledger from before this change sits at `./kohle.db`. Move it once, by hand:
 ```bash
 mkdir -p ~/.local/share/kohle && mv ./kohle.db ~/.local/share/kohle/kohle.db
 kohle-cli migrate
+kohle-cli set-setting state <code>
 ```
+
+A migrated ledger has no Bundesland, and `net-worth-history` refuses without
+one.
 
 ### First run
 `kohle-cli init` creates the ledger. It takes no flags and never prompts; its
