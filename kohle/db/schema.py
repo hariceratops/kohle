@@ -8,8 +8,10 @@ import os
 import sqlite3
 import tempfile
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import quote
 
 from sqlalchemy import Connection, Engine, create_engine, pool, text
 from sqlalchemy.exc import DBAPIError
@@ -103,12 +105,34 @@ def _upgrade_to_head(staged: Path) -> str:
     return ScriptDirectory.from_config(config).get_current_head()
 
 
+@dataclass(frozen=True, slots=True)
+class Migration:
+    before: str | None
+    after: str
+
+
+def _copy_ledger(source: Path, staged: Path) -> None:
+    # The backup API gives a consistent snapshot even with a journal present,
+    # which a file copy would not.
+    src = sqlite3.connect(f"file:{quote(str(source))}?mode=rw", uri=True)
+    try:
+        dst = sqlite3.connect(staged)
+        try:
+            src.backup(dst)
+        finally:
+            dst.close()
+    finally:
+        src.close()
+
+
 def build_ledger[E](
     path: Path,
+    copy_existing: bool,
     populate: Callable[[sessionmaker[Session]], Result[Any, E]] | None,
 ) -> Result[str, LedgerError | E]:
-    """Migrate an empty staged file to head and let `populate` write into it,
-    then move it onto `path`. On any failure `path` is as it was."""
+    """Migrate a staged file to head and let `populate` write into it, then
+    move it onto `path`. The staged file starts as a copy of the ledger when
+    `copy_existing`, else empty. On any failure `path` is as it was."""
     # A symlinked ledger is replaced where it lives, not turned into a file.
     target = path.resolve()
     staged: Path | None = None
@@ -119,6 +143,8 @@ def build_ledger[E](
         fd, name = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.", suffix=".tmp")
         os.close(fd)
         staged = Path(name)
+        if copy_existing:
+            _copy_ledger(target, staged)
         head = _upgrade_to_head(staged)
         if populate is not None:
             populate_engine = make_engine(ledger_url(staged))
@@ -134,3 +160,22 @@ def build_ledger[E](
             populate_engine.dispose()
         if staged is not None:
             staged.unlink(missing_ok=True)
+
+
+def migrate_ledger(path: Path) -> Result[Migration, LedgerError]:
+    if not path.exists():
+        return Result.err(NoLedger(path))
+    # Opening read-write rolls back a hot journal, so the backup copies a clean file.
+    engine = make_engine(ledger_url(path))
+    try:
+        checked = check_schema(path, engine)
+    finally:
+        engine.dispose()
+    if checked.is_ok:
+        revision = checked.unwrap()
+        return Result.ok(Migration(revision, revision))
+    err = checked.unwrap_err()
+    if not isinstance(err, LedgerBehind):
+        return Result.err(err)
+    built = build_ledger(path, copy_existing=True, populate=None)
+    return built.map(lambda head: Migration(err.stored, head))

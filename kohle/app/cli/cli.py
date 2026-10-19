@@ -9,7 +9,7 @@ import click
 from tabulate import tabulate
 
 from kohle.db.connection import ledger_path
-from kohle.db.schema import open_ledger
+from kohle.db.schema import migrate_ledger, open_ledger
 from kohle.domain.domain_errors import AccountNotFoundError
 from kohle.domain.models import DEFAULT_RULE_PRIORITY, AccountType, UnitKind
 from kohle.plugin.plugin_manager import load_plugins, load_price_plugins
@@ -179,7 +179,7 @@ class _LedgerCommand(click.Command):
 
 class _KohleGroup(click.Group):
     # Every command declared on `cli` gets the check unless it opts out with
-    # cls=click.Command, as init does.
+    # cls=click.Command, as init and migrate do.
     command_class = _LedgerCommand
 
 
@@ -218,6 +218,19 @@ def init_cmd() -> None:
         raise click.ClickException(str(res.unwrap_err()))
     done = res.unwrap()
     click.echo(f"Initialized ledger at {done.path}, revision {done.revision}")
+
+
+@cli.command(name="migrate", cls=click.Command)
+def migrate_cmd() -> None:
+    path = ledger_path()
+    res = migrate_ledger(path)
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    m = res.unwrap()
+    if m.before == m.after:
+        click.echo(f"ledger at {path} is already at revision {m.after}")
+    else:
+        click.echo(f"Migrated ledger at {path} from revision {m.before or 'none'} to {m.after}")
 
 
 @cli.command()

@@ -32,5 +32,5 @@ def init_ledger(path: Path, settings: Mapping[str, str]) -> Result[Initialized, 
     def populate(make_session: sessionmaker[Session]) -> Result[list[Setting], SettingError]:
         return SetSettings(make_session()).execute(settings)
 
-    built = build_ledger(path, populate)
+    built = build_ledger(path, copy_existing=False, populate=populate)
     return built.map(lambda revision: Initialized(path, revision, created=True))

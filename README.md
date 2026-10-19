@@ -37,6 +37,7 @@ There is no `--db` flag; `KOHLE_DB` is the only selector.
 A ledger from before this change sits at `./kohle.db`. Move it once, by hand:
 ```bash
 mkdir -p ~/.local/share/kohle && mv ./kohle.db ~/.local/share/kohle/kohle.db
+kohle-cli migrate
 ```
 
 ### First run
@@ -65,7 +66,7 @@ shows every setting (`state = (unset)` when not set), then the ledger path and
 its schema revision.
 
 ### Schema check
-Every command except `init` and `--help` first checks the ledger's schema
+Every command except `init`, `migrate` and `--help` first checks the ledger's schema
 revision, reads and writes alike (`list-importer-plugins` included). It only
 reads; it never creates a file. Three outcomes stop the command with one line
 and a non-zero exit:
@@ -74,6 +75,21 @@ and a non-zero exit:
 - revision behind this kohle: the line names both revisions and says to run
   `kohle-cli migrate`;
 - revision ahead (a ledger from a newer kohle): the line says to upgrade kohle.
+
+### Upgrading the ledger
+`kohle-cli migrate` brings a ledger behind this kohle's revision up to it. It
+takes no flags. It copies the ledger to a hidden file beside it, applies the
+packaged migrations to the copy, and renames the copy over the ledger, so a
+failed or interrupted `migrate` leaves the ledger at its previous revision with
+its data unchanged. A hard kill can leave a stray `.kohle.db.XXXX.tmp` in the
+data directory; it is never read and may be deleted. The ledger file ends up
+mode 0600. A symlinked ledger is upgraded where it lives and stays a link.
+
+- at head: says so, exit 0;
+- no file at the path: points to `kohle-cli init`, creates nothing, exit 1;
+- revision ahead of this kohle: says to upgrade kohle, exit 1.
+
+A ledger migrated from before settings existed has `state` unset.
 
 ### Writing migrations
 The Alembic migrations ship inside the package, in `kohle/db/migrations/`.
