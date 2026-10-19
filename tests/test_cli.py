@@ -9,6 +9,7 @@ traceback, and that output renders the way the acceptance criteria describe.
 
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
@@ -35,10 +36,10 @@ from kohle.use_cases.units import AddUnit
 def test_injected_factory_is_used_and_real_db_is_untouched(
     session_factory: sessionmaker, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def forbidden_session_local():
-        raise AssertionError("session_local must not be called when a factory is injected via obj")
+    def forbidden_ledger_path():
+        raise AssertionError("ledger_path must not be called when a factory is injected via obj")
 
-    monkeypatch.setattr("kohle.app.cli.cli.session_local", forbidden_session_local)
+    monkeypatch.setattr("kohle.app.cli.cli.ledger_path", forbidden_ledger_path)
 
     runner = CliRunner()
     result = runner.invoke(cli, ["add-account", "Alice", "--type", "asset"], obj=session_factory)
@@ -54,14 +55,14 @@ def test_injected_factory_is_used_and_real_db_is_untouched(
         session.close()
 
 
-def test_default_obj_falls_back_to_session_local(monkeypatch: pytest.MonkeyPatch) -> None:
-    sentinel_factory = Mock(side_effect=lambda: Mock())
-    monkeypatch.setattr("kohle.app.cli.cli.session_local", sentinel_factory)
+def test_default_obj_opens_the_ledger_at_the_resolved_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    resolved = Mock(side_effect=lambda: Path("/nonexistent/kohle.db"))
+    monkeypatch.setattr("kohle.app.cli.cli.ledger_path", resolved)
 
     runner = CliRunner()
     runner.invoke(cli, ["list-accounts"])
 
-    assert sentinel_factory.called
+    assert resolved.called
 
 
 def test_record_posts_an_entry_and_reports_success(session_factory: sessionmaker) -> None:

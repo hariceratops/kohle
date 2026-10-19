@@ -5,7 +5,7 @@ from typing import assert_never
 import click
 from tabulate import tabulate
 
-from kohle.db.connection import session_local
+from kohle.db.connection import ledger_path, ledger_url, make_engine, make_session_factory
 from kohle.domain.domain_errors import AccountNotFoundError
 from kohle.domain.models import DEFAULT_RULE_PRIORITY, AccountType, UnitKind
 from kohle.plugin.plugin_manager import load_plugins, load_price_plugins
@@ -159,7 +159,7 @@ def _account_tree_rows(accounts: list, root_name: str | None = None) -> list[dic
 @click.group()
 @click.pass_context
 def cli(ctx):
-    ctx.obj = ctx.obj or session_local
+    ctx.obj = ctx.obj or make_session_factory(make_engine(ledger_url(ledger_path())))
 
 
 @cli.command()

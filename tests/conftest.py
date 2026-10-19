@@ -1,5 +1,6 @@
 from datetime import date as date_type
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 from sqlalchemy import create_engine
@@ -11,6 +12,18 @@ from kohle.domain.models import AccountType
 from kohle.plugin.importer_plugin import CashRow
 from kohle.use_cases.accounts import AddAccount
 from kohle.use_cases.journal import PEOPLE_ROOT
+
+
+@pytest.fixture(autouse=True)
+def _no_real_user_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep every test off the developer's real ledger and init file.
+
+    A test that forgets to inject a factory gets "no ledger at ..." instead of
+    touching the per-user path.
+    """
+    monkeypatch.setenv("KOHLE_DB", str(tmp_path / "no-ledger" / "kohle.db"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
 
 
 @pytest.fixture

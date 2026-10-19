@@ -3,6 +3,7 @@ from textual.widgets import Static, Footer
 from textual.containers import Vertical
 from textual.command import Hit, Hits, Provider
 from functools import partial
+from kohle.db.connection import ledger_path, ledger_url, make_engine, make_session_factory
 from kohle.app.tui.screens.category_screen import CategoriesScreen
 
 # from kohle.app.tui.provider import AppPalleteCommands
@@ -23,6 +24,10 @@ class AppPalleteCommands(Provider):
 class KohleApp(App):
     COMMANDS = App.COMMANDS | {AppPalleteCommands}
 
+    def __init__(self, make_session):
+        super().__init__()
+        self.make_session = make_session
+
     def compose(self):
         with Vertical():
             yield Static("Welcome to Kohle!", id="welcome", expand=True)
@@ -33,7 +38,8 @@ class KohleApp(App):
 
 
 def main():
-    KohleApp().run()
+    make_session = make_session_factory(make_engine(ledger_url(ledger_path())))
+    KohleApp(make_session).run()
 
 
 if __name__ == "__main__":

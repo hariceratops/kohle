@@ -14,8 +14,7 @@ import pytest
 from alembic.config import Config
 
 from alembic import command
-
-ROOT = Path(__file__).resolve().parents[1]
+from kohle.db.schema import alembic_config
 
 # The revision each migration under test replaced. Downgrading *to* one is what
 # undoes the migration above it, and unlike "-1" it keeps meaning that as newer
@@ -34,11 +33,11 @@ BEFORE_PRICES_UNIQUE_PER_DAY = "b3f9d2a41c70"
 
 
 @pytest.fixture
-def migrated_db(tmp_path: Path) -> Iterator[tuple[Config, Path]]:
+def migrated_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[Config, Path]]:
     db = tmp_path / "kohle.db"
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{db}")
+    db.touch()
+    monkeypatch.setenv("KOHLE_DB", str(db))
+    config = alembic_config()
     command.upgrade(config, "head")
     yield config, db
 
@@ -325,11 +324,11 @@ def test_downgrade_refuses_rather_than_dropping_lines_on_a_person_account(migrat
     )
 
 
-def test_upgrade_refuses_on_a_pre_existing_people_account(tmp_path: Path) -> None:
+def test_upgrade_refuses_on_a_pre_existing_people_account(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     db = tmp_path / "kohle.db"
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{db}")
+    db.touch()
+    monkeypatch.setenv("KOHLE_DB", str(db))
+    config = alembic_config()
     command.upgrade(config, BEFORE_PEOPLE_ROOT)
     _exec(
         db,

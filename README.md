@@ -24,6 +24,30 @@ source .venv/bin/activate
 kohle-cli
 ```
 
+### Where the ledger lives
+Every entry point (`kohle-cli`, `kohle-tui`, and the `alembic` command) finds
+the ledger the same way, whatever the working directory:
+
+1. `KOHLE_DB`, if set and non-empty;
+2. else `$XDG_DATA_HOME/kohle/kohle.db`;
+3. else `~/.local/share/kohle/kohle.db`.
+
+There is no `--db` flag; `KOHLE_DB` is the only selector.
+
+A ledger from before this change sits at `./kohle.db`. Move it once, by hand:
+```bash
+mkdir -p ~/.local/share/kohle && mv ./kohle.db ~/.local/share/kohle/kohle.db
+```
+
+### Writing migrations
+The Alembic migrations ship inside the package, in `kohle/db/migrations/`.
+From the repo root:
+```bash
+alembic revision --autogenerate -m "..."
+```
+This compares the models with the ledger at the resolved location (or
+`KOHLE_DB`). `alembic upgrade` is a developer tool.
+
 > [!NOTE]
 > `kohle-tui` is currently unwired and does not start. See
 > `dev/inbox/tui-wiring.md`.
