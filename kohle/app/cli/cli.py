@@ -217,7 +217,10 @@ def init_cmd() -> None:
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
     done = res.unwrap()
-    click.echo(f"Initialized ledger at {done.path}, revision {done.revision}")
+    if done.created:
+        click.echo(f"Initialized ledger at {done.path}, revision {done.revision}")
+    else:
+        click.echo(f"already initialized at {done.path}, revision {done.revision}")
 
 
 @cli.command(name="migrate", cls=click.Command)

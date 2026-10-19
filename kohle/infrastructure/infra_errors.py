@@ -79,14 +79,3 @@ class LedgerBuildFailed(LedgerError):
 
     def __str__(self) -> str:
         return f"building the ledger at {self.path} failed and left it as it was: {self.reason}"
-
-
-class LedgerExists(LedgerError):
-    """Interim: 051 replaces it with the existing-ledger comparison."""
-
-    def __init__(self, path: Path):
-        super().__init__()
-        self.path = path
-
-    def __str__(self) -> str:
-        return f"a ledger already exists at {self.path}"

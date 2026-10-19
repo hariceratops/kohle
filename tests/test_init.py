@@ -1,11 +1,18 @@
 import os
 from pathlib import Path
 
+import pytest
+from alembic import command
 from alembic.script import ScriptDirectory
 from click.testing import CliRunner
+from sqlalchemy import create_engine, text
 
 from kohle.app.cli.cli import cli
+from kohle.core.result import Result
+from kohle.db import schema
 from kohle.db.schema import alembic_config
+from kohle.domain.domain_errors import SettingError
+from kohle.use_cases.settings import SetSettings
 
 
 def _head() -> str:
@@ -148,13 +155,139 @@ def test_the_settings_write_is_audited(write_init_rc, run_init) -> None:
     assert rows == [["1", "settings", "1", "create"]]
 
 
-def test_init_refuses_an_existing_path(write_init_rc, run_init) -> None:
+def _snapshot(db: Path) -> tuple[bytes, int]:
+    return db.read_bytes(), db.stat().st_mtime_ns
+
+
+def _init_then(write_init_rc, run_init, state: str = "BW") -> Path:
+    write_init_rc(f'state = "{state}"\n')
+    assert run_init().exit_code == 0
+    return Path(os.environ["KOHLE_DB"])
+
+
+def test_rerun_at_head_with_the_same_state_is_already_initialized(write_init_rc, run_init) -> None:
+    db = _init_then(write_init_rc, run_init)
+    before = _snapshot(db)
+
+    result = run_init()
+
+    assert result.exit_code == 0, result.output
+    assert f"already initialized at {db}, revision {_head()}" in result.output
+    assert _snapshot(db) == before
+
+
+def test_existing_ledger_behind_points_to_migrate(write_init_rc, run_init) -> None:
     write_init_rc('state = "BW"\n')
     db = Path(os.environ["KOHLE_DB"])
     db.parent.mkdir(parents=True)
-    db.write_bytes(b"precious")
+    db.touch()
+    engine = create_engine(f"sqlite:///{db}")
+    config = alembic_config()
+    with engine.begin() as connection:
+        config.attributes["connection"] = connection
+        command.upgrade(config, "d4e7a8c15b92")
+    engine.dispose()
+    before = _snapshot(db)
 
     result = run_init()
 
     assert result.exit_code == 1
-    assert db.read_bytes() == b"precious"
+    assert "migrate" in result.output
+    assert "Traceback" not in result.output
+    assert _snapshot(db) == before
+
+
+def test_existing_ledger_with_a_different_state_points_to_set_setting(write_init_rc, run_init) -> None:
+    db = _init_then(write_init_rc, run_init, "BW")
+    write_init_rc('state = "BY"\n')
+    before = _snapshot(db)
+
+    result = run_init()
+
+    assert result.exit_code == 1
+    assert "set-setting state BY" in result.output
+    assert "state = BW" in result.output
+    assert _snapshot(db) == before
+
+
+def test_existing_ledger_with_state_unset_points_to_set_setting(write_init_rc, run_init) -> None:
+    db = _init_then(write_init_rc, run_init)
+    engine = create_engine(f"sqlite:///{db}")
+    with engine.begin() as connection:
+        connection.execute(text("DELETE FROM settings"))
+    engine.dispose()
+    before = _snapshot(db)
+
+    result = run_init()
+
+    assert result.exit_code == 1
+    assert "set-setting state BW" in result.output
+    assert _snapshot(db) == before
+
+
+def test_file_errors_read_the_same_with_or_without_a_database(write_init_rc, run_init) -> None:
+    rc = write_init_rc('state = "XX"\n')
+    without = run_init()
+    db = Path(os.environ["KOHLE_DB"])
+    write_init_rc('state = "BW"\n')
+    assert run_init().exit_code == 0
+    write_init_rc('state = "XX"\n')
+    before = _snapshot(db)
+
+    with_db = run_init()
+
+    assert with_db.exit_code == without.exit_code == 1
+    assert with_db.output == without.output
+    assert str(rc) in with_db.output
+    assert _snapshot(db) == before
+
+
+def _assert_nothing_left(db: Path) -> None:
+    assert not db.exists()
+    assert not list(db.parent.glob(f".{db.name}.*"))
+
+
+def test_failed_populate_leaves_nothing(write_init_rc, run_init, monkeypatch: pytest.MonkeyPatch) -> None:
+    write_init_rc('state = "BW"\n')
+    db = Path(os.environ["KOHLE_DB"])
+    with monkeypatch.context() as patched:
+        patched.setattr(SetSettings, "execute", lambda self, values: Result.err(SettingError("nope")))
+        result = run_init()
+
+    assert result.exit_code == 1
+    assert "nope" in result.output
+    _assert_nothing_left(db)
+    assert run_init().exit_code == 0
+
+
+def test_interrupted_populate_leaves_nothing(write_init_rc, run_init, monkeypatch: pytest.MonkeyPatch) -> None:
+    write_init_rc('state = "BW"\n')
+    db = Path(os.environ["KOHLE_DB"])
+
+    def interrupt(self, values):
+        raise KeyboardInterrupt
+
+    with monkeypatch.context() as patched:
+        patched.setattr(SetSettings, "execute", interrupt)
+        result = run_init()
+
+    assert isinstance(result.exception, KeyboardInterrupt) or result.exit_code != 0
+    _assert_nothing_left(db)
+    assert run_init().exit_code == 0
+
+
+def test_migration_refusal_is_reported_cleanly(write_init_rc, run_init, monkeypatch: pytest.MonkeyPatch) -> None:
+    write_init_rc('state = "BW"\n')
+    db = Path(os.environ["KOHLE_DB"])
+
+    def refuse(staged: Path) -> str:
+        raise RuntimeError("refused")
+
+    monkeypatch.setattr(schema, "_upgrade_to_head", refuse)
+
+    result = run_init()
+
+    assert result.exit_code == 1
+    assert "refused" in result.output
+    assert "Traceback" not in result.output
+    _assert_nothing_left(db)

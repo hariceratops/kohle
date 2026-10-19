@@ -61,7 +61,12 @@ kohle-cli list-settings
 ```
 `init` creates the ledger's directory, runs the packaged migrations and stores
 the file's values as settings. It reads the file once; editing it afterwards
-changes nothing. `init` refuses a path that already has a file. `list-settings`
+changes nothing. Run against an existing ledger, `init` never writes: at the
+current revision with the file's `state` it prints `already initialized at <path>,
+revision <rev>` and exits 0; behind, it exits non-zero and points to `migrate`; with a
+stored `state` that differs or is unset, it exits non-zero and points to
+`set-setting state <code>`. A failed or interrupted first `init` leaves no
+ledger. `list-settings`
 shows every setting (`state = (unset)` when not set), then the ledger path and
 its schema revision.
 

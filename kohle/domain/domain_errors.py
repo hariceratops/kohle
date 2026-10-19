@@ -1,5 +1,6 @@
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
 
 
 class AccountError(Exception):
@@ -547,3 +548,21 @@ class MissingSettings(SettingError):
 
     def __str__(self) -> str:
         return f"missing {', '.join(self.keys)}"
+
+
+class SettingDiffers(SettingError):
+    def __init__(self, path: Path, key: str, stored: str | None, wanted: str) -> None:
+        super().__init__()
+        self.path = path
+        self.key = key
+        self.stored = stored
+        self.wanted = wanted
+
+    def __str__(self) -> str:
+        setter = f"`kohle-cli set-setting {self.key} {self.wanted}`"
+        if self.stored is None:
+            return f"ledger at {self.path} has no {self.key}; set it with {setter}"
+        return (
+            f"ledger at {self.path} has {self.key} = {self.stored} but init.rc says {self.wanted}; "
+            f"init never changes an existing ledger, {setter} does"
+        )
