@@ -56,7 +56,7 @@ from kohle.use_cases.reporting import (
 )
 from kohle.use_cases.rules import AddRule, ListRules, RemoveRule
 from kohle.use_cases.sampling import STATES, PeriodEnd
-from kohle.use_cases.settings import ListSettings, validate_init_settings
+from kohle.use_cases.settings import ListSettings, SetSettings, validate_init_settings
 from kohle.use_cases.splitting import (
     AddSplitGroup,
     PersonShare,
@@ -248,6 +248,17 @@ def list_settings_cmd(make_session):
     click.echo()
     click.echo(f"ledger:   {report.ledger or '(in memory)'}")
     click.echo(f"revision: {report.revision or '(none)'}")
+
+
+@cli.command()
+@click.argument("key")
+@click.argument("value")
+@click.pass_obj
+def set_setting_cmd(make_session, key: str, value: str):
+    res = SetSettings(make_session()).execute({key: value})
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    click.echo(f"Set {key} to {value}")
 
 
 @cli.command()

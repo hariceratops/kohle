@@ -70,6 +70,16 @@ ledger. `list-settings`
 shows every setting (`state = (unset)` when not set), then the ledger path and
 its schema revision.
 
+```bash
+kohle-cli set-setting state HE
+```
+`set-setting <key> <value>` changes a setting after `init`, with the same keys
+and validation as the init file. An unknown key lists the known keys and an
+invalid value lists the valid ones; either exits non-zero and writes nothing.
+Each change is recorded as an operation (`settings`, `create` the first time,
+`update` after) and shows in `list-operations`; setting the current value again
+changes nothing and records nothing.
+
 ### Schema check
 Every command except `init`, `migrate` and `--help` first checks the ledger's schema
 revision, reads and writes alike (`list-importer-plugins` included). It only
