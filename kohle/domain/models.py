@@ -373,3 +373,18 @@ class PriceBinding(base):
     symbol: Mapped[str] = mapped_column(String, nullable=False)
 
     __table_args__ = (UniqueConstraint("unit_id", name="uq_price_binding_unit"),)
+
+
+class Setting(base):
+    """One ledger-wide setting. Keys come from SETTINGS in
+    kohle/use_cases/settings.py; value is the validator's canonical string."""
+
+    __tablename__ = "settings"
+
+    # An integer id, not the key, as primary key: the crud decorators record
+    # entity.id into Operation.entity_id, an Integer.
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    key: Mapped[str] = mapped_column(String, nullable=False)
+    value: Mapped[str] = mapped_column(String, nullable=False)
+
+    __table_args__ = (UniqueConstraint("key", name="uq_setting_key"),)

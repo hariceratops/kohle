@@ -39,6 +39,31 @@ A ledger from before this change sits at `./kohle.db`. Move it once, by hand:
 mkdir -p ~/.local/share/kohle && mv ./kohle.db ~/.local/share/kohle/kohle.db
 ```
 
+### First run
+`kohle-cli init` creates the ledger. It takes no flags and never prompts; its
+only input is the init file, `$XDG_CONFIG_HOME/kohle/init.rc`, or
+`~/.config/kohle/init.rc` when `XDG_CONFIG_HOME` is unset. No other file is
+read.
+
+The file is TOML. The only key is `state`, your Bundesland, whose public
+holidays are not working days:
+```toml
+state = "BW"
+```
+The valid codes are `BB BE BW BY HB HE HH MV NI NW RP SH SL SN ST TH`. An
+unknown key, an invalid `state`, a missing file or a file without `state` makes
+`init` exit non-zero and create nothing.
+
+```bash
+kohle-cli init
+kohle-cli list-settings
+```
+`init` creates the ledger's directory, runs the packaged migrations and stores
+the file's values as settings. It reads the file once; editing it afterwards
+changes nothing. `init` refuses a path that already has a file. `list-settings`
+shows every setting (`state = (unset)` when not set), then the ledger path and
+its schema revision.
+
 ### Writing migrations
 The Alembic migrations ship inside the package, in `kohle/db/migrations/`.
 From the repo root:

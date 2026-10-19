@@ -30,6 +30,7 @@ BEFORE_SPLITS = "TODO"
 BEFORE_SPLIT_GROUPS = "TODO"
 BEFORE_PRICE_BINDINGS = "a1cebfe54f33"
 BEFORE_PRICES_UNIQUE_PER_DAY = "b3f9d2a41c70"
+BEFORE_SETTINGS = "d4e7a8c15b92"
 
 
 @pytest.fixture
@@ -393,3 +394,27 @@ def test_prices_are_unique_per_unit_and_day_whatever_the_source(migrated_db) -> 
     command.upgrade(config, "head")
     with pytest.raises(sqlite3.IntegrityError, match="UNIQUE constraint failed"):
         _insert_price(db, "2026-03-02", "alphavantage")
+
+
+def test_settings_round_trips_when_empty(migrated_db) -> None:
+    config, db = migrated_db
+    assert "settings" in _tables(db)
+    conn = sqlite3.connect(db)
+    assert conn.execute("SELECT COUNT(*) FROM settings").fetchone() == (0,)
+    conn.close()
+
+    command.downgrade(config, BEFORE_SETTINGS)
+    assert "settings" not in _tables(db)
+
+    command.upgrade(config, "head")
+    assert "settings" in _tables(db)
+
+
+def test_downgrade_refuses_rather_than_dropping_a_setting(migrated_db) -> None:
+    config, db = migrated_db
+    _exec(db, "INSERT INTO settings (key, value) VALUES ('state', 'BW')")
+
+    with pytest.raises(RuntimeError) as exc_info:
+        command.downgrade(config, BEFORE_SETTINGS)
+    assert "1 setting" in str(exc_info.value)
+    assert "settings" in _tables(db), "refusal must leave the schema untouched"

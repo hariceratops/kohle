@@ -1,5 +1,8 @@
+import os
+import tomllib
 from datetime import date
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from typing import assert_never
 
 import click
@@ -20,6 +23,7 @@ from kohle.use_cases.journal import (
     RecordSimpleEntry,
     RecordSplitEntry,
 )
+from kohle.use_cases.ledger import init_ledger
 from kohle.use_cases.lots import QueryRealised, realised_gain
 from kohle.use_cases.operations import ListOperations
 from kohle.use_cases.prices import (
@@ -51,6 +55,7 @@ from kohle.use_cases.reporting import (
 )
 from kohle.use_cases.rules import AddRule, ListRules, RemoveRule
 from kohle.use_cases.sampling import STATES, PeriodEnd
+from kohle.use_cases.settings import ListSettings, validate_init_settings
 from kohle.use_cases.splitting import (
     AddSplitGroup,
     PersonShare,
@@ -160,6 +165,52 @@ def _account_tree_rows(accounts: list, root_name: str | None = None) -> list[dic
 @click.pass_context
 def cli(ctx):
     ctx.obj = ctx.obj or make_session_factory(make_engine(ledger_url(ledger_path())))
+
+
+def _init_file_path() -> Path:
+    config_home = os.environ.get("XDG_CONFIG_HOME")
+    config_dir = Path(config_home) if config_home else Path.home() / ".config"
+    return config_dir / "kohle" / "init.rc"
+
+
+def _read_init_file(path: Path) -> dict[str, object]:
+    try:
+        with path.open("rb") as f:
+            return tomllib.load(f)
+    except FileNotFoundError:
+        raise click.ClickException(
+            f'no init file at {path}; create it with a line such as state = "BW"'
+        ) from None
+    except tomllib.TOMLDecodeError as e:
+        raise click.ClickException(f"{path}: {e}") from None
+
+
+@cli.command(name="init")
+def init_cmd() -> None:
+    rc = _init_file_path()
+    raw = _read_init_file(rc)
+    validated = validate_init_settings(raw)
+    if validated.is_err:
+        raise click.ClickException(f"{rc}: {validated.unwrap_err()}")
+    res = init_ledger(ledger_path(), validated.unwrap())
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    done = res.unwrap()
+    click.echo(f"Initialized ledger at {done.path}, revision {done.revision}")
+
+
+@cli.command()
+@click.pass_obj
+def list_settings_cmd(make_session):
+    res = ListSettings(make_session()).execute()
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    report = res.unwrap()
+    for key, value in report.values.items():
+        click.echo(f"{key} = {'(unset)' if value is None else value}")
+    click.echo()
+    click.echo(f"ledger:   {report.ledger or '(in memory)'}")
+    click.echo(f"revision: {report.revision or '(none)'}")
 
 
 @cli.command()

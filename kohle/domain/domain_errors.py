@@ -513,3 +513,37 @@ LotError = LotShortfall | UnbalancedOwnMove | SecurityMoveWithPeople
 RealisedError = BalanceError | LotError
 
 PositionsError = BalanceError | LotError | PriceError
+
+
+class SettingError(Exception):
+    pass
+
+
+class UnknownSetting(SettingError):
+    def __init__(self, key: str, known: list[str]) -> None:
+        super().__init__()
+        self.key = key
+        self.known = known
+
+    def __str__(self) -> str:
+        return f"unknown setting {self.key!r}; known settings: {', '.join(self.known)}"
+
+
+class InvalidSettingValue(SettingError):
+    def __init__(self, key: str, value: object, expected: str) -> None:
+        super().__init__()
+        self.key = key
+        self.value = value
+        self.expected = expected
+
+    def __str__(self) -> str:
+        return f"invalid {self.key} {self.value!r}; expected {self.expected}"
+
+
+class MissingSettings(SettingError):
+    def __init__(self, keys: list[str]) -> None:
+        super().__init__()
+        self.keys = keys
+
+    def __str__(self) -> str:
+        return f"missing {', '.join(self.keys)}"

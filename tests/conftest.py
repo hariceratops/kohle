@@ -1,12 +1,15 @@
+from collections.abc import Callable
 from datetime import date as date_type
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from click.testing import CliRunner, Result as CliResult
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from kohle.app.cli.cli import cli
 from kohle.db.connection import base
 from kohle.domain.models import AccountType
 from kohle.plugin.importer_plugin import CashRow
@@ -24,6 +27,25 @@ def _no_real_user_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setenv("KOHLE_DB", str(tmp_path / "no-ledger" / "kohle.db"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
+
+
+@pytest.fixture
+def write_init_rc(tmp_path: Path):
+    """Write `$XDG_CONFIG_HOME/kohle/init.rc`; return the file's path."""
+
+    def write(content: str) -> Path:
+        rc = tmp_path / "xdg-config" / "kohle" / "init.rc"
+        rc.parent.mkdir(parents=True, exist_ok=True)
+        rc.write_text(content)
+        return rc
+
+    return write
+
+
+@pytest.fixture
+def run_init() -> Callable[[], CliResult]:
+    """Run `kohle-cli init` with no injected factory, against `KOHLE_DB`."""
+    return lambda: CliRunner().invoke(cli, ["init"])
 
 
 @pytest.fixture
