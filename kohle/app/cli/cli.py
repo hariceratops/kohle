@@ -163,8 +163,7 @@ def _account_tree_rows(accounts: list, root_name: str | None = None) -> list[dic
 
 
 class _LedgerCommand(click.Command):
-    """Opens and checks the ledger before the command body runs. It sits in
-    invoke because Click runs the group callback before parsing the
+    """Sits in invoke because Click runs the group callback before parsing the
     subcommand's arguments, and `<command> --help` must work with no ledger.
     A factory injected through obj (tests) is the caller's schema, unchecked."""
 
@@ -178,8 +177,6 @@ class _LedgerCommand(click.Command):
 
 
 class _KohleGroup(click.Group):
-    # Every command declared on `cli` gets the check unless it opts out with
-    # cls=click.Command, as init and migrate do.
     command_class = _LedgerCommand
 
 

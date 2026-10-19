@@ -27,8 +27,6 @@ def _bundesland(value: object) -> Result[str, InvalidSettingValue]:
     return Result.err(InvalidSettingValue("state", value, f"one of {', '.join(STATES)}"))
 
 
-# The keys init.rc and set-setting accept, in listing order. A later feature
-# adds its key here, and init.rc, set-setting and list-settings follow.
 SETTINGS: dict[str, Validator] = {"state": _bundesland}
 
 

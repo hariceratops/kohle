@@ -52,8 +52,7 @@ def _update_setting_service(
 def set_setting_service(
     ctx: DbTransactionContext, key: str, value: str
 ) -> Result[Setting, SettingError]:
-    """Create the key's row the first time, update it after. An identical
-    value writes nothing, so a replay leaves no OperationGroup."""
+    """An identical value writes nothing, so a replay leaves no OperationGroup."""
     listed = list_settings_service(ctx)
     if listed.is_err:
         return Result.err(listed.unwrap_err())
@@ -68,7 +67,6 @@ def set_setting_service(
 @crud_retrieve
 def ledger_info_service(ctx: DbTransactionContext) -> Result[LedgerInfo, SettingError]:
     def op(session: Session) -> LedgerInfo:
-        # The file SQLite actually opened ('' for an in-memory database).
         rows = session.execute(text("PRAGMA database_list")).all()
         path = next(row[2] for row in rows if row[1] == "main")
         return LedgerInfo(path, stored_revision(session.connection()))

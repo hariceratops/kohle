@@ -130,9 +130,7 @@ def build_ledger[E](
     copy_existing: bool,
     populate: Callable[[sessionmaker[Session]], Result[Any, E]] | None,
 ) -> Result[str, LedgerError | E]:
-    """Migrate a staged file to head and let `populate` write into it, then
-    move it onto `path`. The staged file starts as a copy of the ledger when
-    `copy_existing`, else empty. On any failure `path` is as it was."""
+    """On any failure `path` is as it was."""
     # A symlinked ledger is replaced where it lives, not turned into a file.
     target = path.resolve()
     staged: Path | None = None

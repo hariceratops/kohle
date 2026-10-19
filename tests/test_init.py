@@ -19,7 +19,7 @@ def _head() -> str:
     return ScriptDirectory.from_config(alembic_config()).get_current_head()
 
 
-def test_init_then_list_accounts_and_list_settings(write_init_rc, run_init, tmp_path: Path) -> None:
+def test_init_then_list_accounts_and_list_settings(write_init_rc, run_init) -> None:
     write_init_rc('state = "BW"\n')
     db = Path(os.environ["KOHLE_DB"])
 
@@ -271,7 +271,8 @@ def test_interrupted_populate_leaves_nothing(write_init_rc, run_init, monkeypatc
         patched.setattr(SetSettings, "execute", interrupt)
         result = run_init()
 
-    assert isinstance(result.exception, KeyboardInterrupt) or result.exit_code != 0
+    assert result.exit_code == 1
+    assert "Aborted" in result.output
     _assert_nothing_left(db)
     assert run_init().exit_code == 0
 

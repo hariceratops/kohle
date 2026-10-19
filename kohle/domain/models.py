@@ -376,9 +376,6 @@ class PriceBinding(base):
 
 
 class Setting(base):
-    """One ledger-wide setting. Keys come from SETTINGS in
-    kohle/use_cases/settings.py; value is the validator's canonical string."""
-
     __tablename__ = "settings"
 
     # An integer id, not the key, as primary key: the crud decorators record
