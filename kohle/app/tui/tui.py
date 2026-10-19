@@ -1,9 +1,11 @@
+import sys
 from textual.app import App
 from textual.widgets import Static, Footer
 from textual.containers import Vertical
 from textual.command import Hit, Hits, Provider
 from functools import partial
-from kohle.db.connection import ledger_path, ledger_url, make_engine, make_session_factory
+from kohle.db.connection import ledger_path
+from kohle.db.schema import open_ledger
 from kohle.app.tui.screens.category_screen import CategoriesScreen
 
 # from kohle.app.tui.provider import AppPalleteCommands
@@ -38,8 +40,10 @@ class KohleApp(App):
 
 
 def main():
-    make_session = make_session_factory(make_engine(ledger_url(ledger_path())))
-    KohleApp(make_session).run()
+    opened = open_ledger(ledger_path())
+    if opened.is_err:
+        sys.exit(str(opened.unwrap_err()))
+    KohleApp(opened.unwrap()).run()
 
 
 if __name__ == "__main__":

@@ -28,6 +28,49 @@ class LedgerError(Exception):
     pass
 
 
+class NoLedger(LedgerError):
+    def __init__(self, path: Path):
+        super().__init__()
+        self.path = path
+
+    def __str__(self) -> str:
+        return f"no ledger at {self.path}; run `kohle-cli init`"
+
+
+class LedgerBehind(LedgerError):
+    def __init__(self, path: Path, stored: str | None, head: str):
+        super().__init__()
+        self.path = path
+        self.stored = stored
+        self.head = head
+
+    def __str__(self) -> str:
+        return (
+            f"ledger at {self.path} is at revision {self.stored or 'none'}, "
+            f"this kohle needs {self.head}; run `kohle-cli migrate`"
+        )
+
+
+class LedgerAhead(LedgerError):
+    def __init__(self, path: Path, stored: str):
+        super().__init__()
+        self.path = path
+        self.stored = stored
+
+    def __str__(self) -> str:
+        return f"ledger at {self.path} is at revision {self.stored}, which this kohle does not know; upgrade kohle"
+
+
+class LedgerUnreadable(LedgerError):
+    def __init__(self, path: Path, reason: str):
+        super().__init__()
+        self.path = path
+        self.reason = reason
+
+    def __str__(self) -> str:
+        return f"cannot read ledger at {self.path}: {self.reason}"
+
+
 class LedgerBuildFailed(LedgerError):
     def __init__(self, path: Path, reason: str):
         super().__init__()

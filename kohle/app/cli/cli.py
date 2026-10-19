@@ -8,7 +8,8 @@ from typing import assert_never
 import click
 from tabulate import tabulate
 
-from kohle.db.connection import ledger_path, ledger_url, make_engine, make_session_factory
+from kohle.db.connection import ledger_path
+from kohle.db.schema import open_ledger
 from kohle.domain.domain_errors import AccountNotFoundError
 from kohle.domain.models import DEFAULT_RULE_PRIORITY, AccountType, UnitKind
 from kohle.plugin.plugin_manager import load_plugins, load_price_plugins
@@ -161,10 +162,30 @@ def _account_tree_rows(accounts: list, root_name: str | None = None) -> list[dic
     return rows
 
 
-@click.group()
-@click.pass_context
-def cli(ctx):
-    ctx.obj = ctx.obj or make_session_factory(make_engine(ledger_url(ledger_path())))
+class _LedgerCommand(click.Command):
+    """Opens and checks the ledger before the command body runs. It sits in
+    invoke because Click runs the group callback before parsing the
+    subcommand's arguments, and `<command> --help` must work with no ledger.
+    A factory injected through obj (tests) is the caller's schema, unchecked."""
+
+    def invoke(self, ctx: click.Context) -> object:
+        if ctx.obj is None:
+            opened = open_ledger(ledger_path())
+            if opened.is_err:
+                raise click.ClickException(str(opened.unwrap_err()))
+            ctx.obj = opened.unwrap()
+        return super().invoke(ctx)
+
+
+class _KohleGroup(click.Group):
+    # Every command declared on `cli` gets the check unless it opts out with
+    # cls=click.Command, as init does.
+    command_class = _LedgerCommand
+
+
+@click.group(cls=_KohleGroup)
+def cli() -> None:
+    pass
 
 
 def _init_file_path() -> Path:
@@ -185,7 +206,7 @@ def _read_init_file(path: Path) -> dict[str, object]:
         raise click.ClickException(f"{path}: {e}") from None
 
 
-@cli.command(name="init")
+@cli.command(name="init", cls=click.Command)
 def init_cmd() -> None:
     rc = _init_file_path()
     raw = _read_init_file(rc)

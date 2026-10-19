@@ -64,6 +64,17 @@ changes nothing. `init` refuses a path that already has a file. `list-settings`
 shows every setting (`state = (unset)` when not set), then the ledger path and
 its schema revision.
 
+### Schema check
+Every command except `init` and `--help` first checks the ledger's schema
+revision, reads and writes alike (`list-importer-plugins` included). It only
+reads; it never creates a file. Three outcomes stop the command with one line
+and a non-zero exit:
+
+- no file at the path: ``no ledger at <path>; run `kohle-cli init` ``;
+- revision behind this kohle: the line names both revisions and says to run
+  `kohle-cli migrate`;
+- revision ahead (a ledger from a newer kohle): the line says to upgrade kohle.
+
 ### Writing migrations
 The Alembic migrations ship inside the package, in `kohle/db/migrations/`.
 From the repo root:

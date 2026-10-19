@@ -11,18 +11,30 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Connection, create_engine, pool, text
+from sqlalchemy import Connection, Engine, create_engine, pool, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session, sessionmaker
 
 from kohle.core.result import Result
 from kohle.db.connection import ledger_url, make_engine, make_session_factory
-from kohle.infrastructure.infra_errors import LedgerBuildFailed, LedgerError
+from kohle.infrastructure.infra_errors import (
+    LedgerAhead,
+    LedgerBehind,
+    LedgerBuildFailed,
+    LedgerError,
+    LedgerUnreadable,
+    NoLedger,
+)
 
 if TYPE_CHECKING:
     from alembic.config import Config
 
 SCRIPT_LOCATION = "kohle.db:migrations"
+
+# The packaged head, so the check on every command can compare without
+# importing Alembic. tests/test_schema_check.py pins it to Alembic's head; a
+# stale value only sends the check down the slow path, it never misclassifies.
+HEAD_REVISION = "e5a1c3b7d902"
 
 
 def alembic_config() -> "Config":
@@ -40,6 +52,38 @@ def stored_revision(connection: Connection) -> str | None:
     if found is None:
         return None
     return connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one_or_none()
+
+
+def _classify(path: Path, stored: str | None) -> Result[str, LedgerError]:
+    if stored == HEAD_REVISION:
+        return Result.ok(HEAD_REVISION)
+    from alembic.script import ScriptDirectory
+
+    script = ScriptDirectory.from_config(alembic_config())
+    head = script.get_current_head()
+    if stored == head:
+        return Result.ok(head)
+    # History is linear, so any known revision other than head is an ancestor.
+    if stored is None or stored in {s.revision for s in script.walk_revisions()}:
+        return Result.err(LedgerBehind(path, stored, head))
+    return Result.err(LedgerAhead(path, stored))
+
+
+def check_schema(path: Path, engine: Engine) -> Result[str, LedgerError]:
+    """Ok(revision) when the ledger is at the packaged head. Reads only."""
+    try:
+        with engine.connect() as connection:
+            stored = stored_revision(connection)
+    except DBAPIError as e:
+        return Result.err(LedgerUnreadable(path, str(e.orig)))
+    return _classify(path, stored)
+
+
+def open_ledger(path: Path) -> Result[sessionmaker[Session], LedgerError]:
+    if not path.exists():
+        return Result.err(NoLedger(path))
+    engine = make_engine(ledger_url(path))
+    return check_schema(path, engine).map(lambda _: make_session_factory(engine))
 
 
 def _upgrade_to_head(staged: Path) -> str:
