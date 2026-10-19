@@ -266,6 +266,7 @@ def test_new_reports_leave_prices_operations_and_groups_untouched(session_factor
         ["add-unit", "X1", "Thing", "--kind", "security"],
         ["record", "2026-01-02", "buy", "10", "--from", "Cash", "--to", "Depot", "--to-unit", "X1", "--to-price", "5"],
         ["record", "2026-01-03", "sell", "4", "--from", "Depot", "--to", "Cash", "--from-unit", "X1", "--from-price", "6"],
+        ["set-setting", "state", "BY"],
     ]
     for args in setup:
         result = runner.invoke(cli, args, obj=session_factory)

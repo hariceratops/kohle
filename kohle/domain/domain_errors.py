@@ -566,3 +566,8 @@ class SettingDiffers(SettingError):
             f"ledger at {self.path} has {self.key} = {self.stored} but init.rc says {self.wanted}; "
             f"init never changes an existing ledger, {setter} does"
         )
+
+
+class StateNotSet(SettingError):
+    def __str__(self) -> str:
+        return "no state set for this ledger; set it with `kohle-cli set-setting state <code>` or pass --state"

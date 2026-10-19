@@ -10,7 +10,7 @@ from tabulate import tabulate
 
 from kohle.db.connection import ledger_path
 from kohle.db.schema import migrate_ledger, open_ledger
-from kohle.domain.domain_errors import AccountNotFoundError
+from kohle.domain.domain_errors import AccountNotFoundError, StateNotSet
 from kohle.domain.models import DEFAULT_RULE_PRIORITY, AccountType, UnitKind
 from kohle.plugin.plugin_manager import load_plugins, load_price_plugins
 from kohle.use_cases.accounts import AddAccount, ListAccount, ListChildAccounts
@@ -1000,12 +1000,13 @@ def fetch_prices_cmd(make_session):
     help="The month's second sample date: the calendar last day or the last working day",
 )
 @click.option(
-    "--state", type=click.Choice(STATES), default="BY", show_default=True,
-    help="Bundesland whose public holidays are not working days; ignored with month-end",
+    "--state", type=click.Choice(STATES), default=None,
+    help="Bundesland whose public holidays are not working days, for this run only; "
+    "defaults to the ledger's state setting; ignored with month-end",
 )
 @MAX_AGE_DAYS
 @click.pass_obj
-def net_worth_history_cmd(make_session, start, end, period_end: str, state: str, max_age_days: int):
+def net_worth_history_cmd(make_session, start, end, period_end: str, state: str | None, max_age_days: int):
     today = date.today()  # noqa: DTZ011 - the user's local date, by design
     end_date = end.date() if end is not None else today
     start_date = start.date() if start is not None else None
@@ -1015,6 +1016,13 @@ def net_worth_history_cmd(make_session, start, end, period_end: str, state: str,
         raise click.BadParameter(
             f"{start_date.isoformat()} is after the last date {end_date.isoformat()}", param_hint="--from"
         )
+    if state is None:
+        listed = ListSettings(make_session()).execute()
+        if listed.is_err:
+            raise click.ClickException(str(listed.unwrap_err()))
+        state = listed.unwrap().values["state"]
+        if state is None:
+            raise click.ClickException(str(StateNotSet()))
     res = NetWorthHistory(make_session()).execute(
         start_date, end_date, max_age_days, PeriodEnd(period_end), state
     )
