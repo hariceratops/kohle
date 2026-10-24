@@ -1,12 +1,16 @@
+import os
+import tomllib
 from datetime import date
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from typing import assert_never
 
 import click
 from tabulate import tabulate
 
-from kohle.db.connection import session_local
-from kohle.domain.domain_errors import AccountNotFoundError
+from kohle.db.connection import ledger_path
+from kohle.db.schema import migrate_ledger, open_ledger
+from kohle.domain.domain_errors import AccountNotFoundError, StateNotSet
 from kohle.domain.models import DEFAULT_RULE_PRIORITY, AccountType, UnitKind
 from kohle.plugin.plugin_manager import load_plugins, load_price_plugins
 from kohle.use_cases.accounts import AddAccount, ListAccount, ListChildAccounts
@@ -20,6 +24,7 @@ from kohle.use_cases.journal import (
     RecordSimpleEntry,
     RecordSplitEntry,
 )
+from kohle.use_cases.ledger import init_ledger
 from kohle.use_cases.lots import QueryRealised, realised_gain
 from kohle.use_cases.operations import ListOperations
 from kohle.use_cases.prices import (
@@ -51,6 +56,7 @@ from kohle.use_cases.reporting import (
 )
 from kohle.use_cases.rules import AddRule, ListRules, RemoveRule
 from kohle.use_cases.sampling import STATES, PeriodEnd
+from kohle.use_cases.settings import ListSettings, SetSettings, validate_init_settings
 from kohle.use_cases.splitting import (
     AddSplitGroup,
     PersonShare,
@@ -156,10 +162,100 @@ def _account_tree_rows(accounts: list, root_name: str | None = None) -> list[dic
     return rows
 
 
-@click.group()
-@click.pass_context
-def cli(ctx):
-    ctx.obj = ctx.obj or session_local
+class _LedgerCommand(click.Command):
+    """Sits in invoke because Click runs the group callback before parsing the
+    subcommand's arguments, and `<command> --help` must work with no ledger.
+    A factory injected through obj (tests) is the caller's schema, unchecked."""
+
+    def invoke(self, ctx: click.Context) -> object:
+        if ctx.obj is None:
+            opened = open_ledger(ledger_path())
+            if opened.is_err:
+                raise click.ClickException(str(opened.unwrap_err()))
+            ctx.obj = opened.unwrap()
+        return super().invoke(ctx)
+
+
+class _KohleGroup(click.Group):
+    command_class = _LedgerCommand
+
+
+@click.group(cls=_KohleGroup)
+def cli() -> None:
+    pass
+
+
+def _init_file_path() -> Path:
+    config_home = os.environ.get("XDG_CONFIG_HOME")
+    config_dir = Path(config_home) if config_home else Path.home() / ".config"
+    return config_dir / "kohle" / "init.rc"
+
+
+def _read_init_file(path: Path) -> dict[str, object]:
+    try:
+        with path.open("rb") as f:
+            return tomllib.load(f)
+    except FileNotFoundError:
+        raise click.ClickException(
+            f'no init file at {path}; create it with a line such as state = "BW"'
+        ) from None
+    except tomllib.TOMLDecodeError as e:
+        raise click.ClickException(f"{path}: {e}") from None
+
+
+@cli.command(name="init", cls=click.Command)
+def init_cmd() -> None:
+    rc = _init_file_path()
+    raw = _read_init_file(rc)
+    validated = validate_init_settings(raw)
+    if validated.is_err:
+        raise click.ClickException(f"{rc}: {validated.unwrap_err()}")
+    res = init_ledger(ledger_path(), validated.unwrap())
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    done = res.unwrap()
+    if done.created:
+        click.echo(f"Initialized ledger at {done.path}, revision {done.revision}")
+    else:
+        click.echo(f"already initialized at {done.path}, revision {done.revision}")
+
+
+@cli.command(name="migrate", cls=click.Command)
+def migrate_cmd() -> None:
+    path = ledger_path()
+    res = migrate_ledger(path)
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    m = res.unwrap()
+    if m.before == m.after:
+        click.echo(f"ledger at {path} is already at revision {m.after}")
+    else:
+        click.echo(f"Migrated ledger at {path} from revision {m.before or 'none'} to {m.after}")
+
+
+@cli.command()
+@click.pass_obj
+def list_settings_cmd(make_session):
+    res = ListSettings(make_session()).execute()
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    report = res.unwrap()
+    for key, value in report.values.items():
+        click.echo(f"{key} = {'(unset)' if value is None else value}")
+    click.echo()
+    click.echo(f"ledger:   {report.ledger or '(in memory)'}")
+    click.echo(f"revision: {report.revision or '(none)'}")
+
+
+@cli.command()
+@click.argument("key")
+@click.argument("value")
+@click.pass_obj
+def set_setting_cmd(make_session, key: str, value: str):
+    res = SetSettings(make_session()).execute({key: value})
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    click.echo(f"Set {key} to {value}")
 
 
 @cli.command()
@@ -901,12 +997,13 @@ def fetch_prices_cmd(make_session):
     help="The month's second sample date: the calendar last day or the last working day",
 )
 @click.option(
-    "--state", type=click.Choice(STATES), default="BY", show_default=True,
-    help="Bundesland whose public holidays are not working days; ignored with month-end",
+    "--state", type=click.Choice(STATES), default=None,
+    help="Bundesland whose public holidays are not working days, for this run only; "
+    "defaults to the ledger's state setting; ignored with month-end",
 )
 @MAX_AGE_DAYS
 @click.pass_obj
-def net_worth_history_cmd(make_session, start, end, period_end: str, state: str, max_age_days: int):
+def net_worth_history_cmd(make_session, start, end, period_end: str, state: str | None, max_age_days: int):
     today = date.today()  # noqa: DTZ011 - the user's local date, by design
     end_date = end.date() if end is not None else today
     start_date = start.date() if start is not None else None
@@ -916,6 +1013,13 @@ def net_worth_history_cmd(make_session, start, end, period_end: str, state: str,
         raise click.BadParameter(
             f"{start_date.isoformat()} is after the last date {end_date.isoformat()}", param_hint="--from"
         )
+    if state is None:
+        listed = ListSettings(make_session()).execute()
+        if listed.is_err:
+            raise click.ClickException(str(listed.unwrap_err()))
+        state = listed.unwrap().values["state"]
+        if state is None:
+            raise click.ClickException(str(StateNotSet()))
     res = NetWorthHistory(make_session()).execute(
         start_date, end_date, max_age_days, PeriodEnd(period_end), state
     )

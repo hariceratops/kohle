@@ -5,7 +5,6 @@ from typing import Generic, TypeVar
 from sqlalchemy.orm import Session
 
 from kohle.core.result import Result
-from kohle.db.connection import session_local
 from kohle.infrastructure.transaction_context import DbTransactionContext
 
 T = TypeVar("T")
@@ -35,15 +34,6 @@ class DbTransaction(Generic[T, E]):
             return Result.err(e)
         finally:
             self.session.close()
-
-
-def unit_of_work(
-    fn: Callable[..., Callable[[DbTransactionContext], Result[T, Exception]]]
-) -> Callable[..., Result[T, Exception]]:
-    def wrapper(*args, **kwargs):
-        tx = DbTransaction(session_local())
-        return tx.execute(lambda ctx: fn(*args, **kwargs)(ctx))
-    return wrapper
 
 
 class UnitOfWork(Generic[T, E]):

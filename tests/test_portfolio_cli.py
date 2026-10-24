@@ -5,10 +5,10 @@ from decimal import Decimal
 
 import pytest
 from click.testing import CliRunner
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from kohle.app.cli.cli import cli
-from kohle.domain.models import Price, Unit
+from kohle.domain.models import OperationGroup, Price, Unit
 
 _SETUP = [
     ["add-account", "Depot", "--type", "asset"],
@@ -20,6 +20,7 @@ _SETUP = [
     ["record", "2026-01-05", "buy", "10", "--from", "Cash", "--to", "Depot", "--to-unit", "X1", "--to-price", "120"],
     ["record", "2025-09-01", "sell", "5", "--from", "Depot", "--to", "Cash", "--from-unit", "X1", "--from-price", "130"],
     ["record", "2026-03-10", "sell", "15", "--from", "Depot", "--to", "Cash", "--from-unit", "X1", "--from-price", "130"],
+    ["set-setting", "state", "BY"],
 ]
 
 
@@ -182,7 +183,7 @@ def test_net_worth_history_usage_errors_exit_2_without_opening_a_session(monkeyp
     assert "--to" in result.output or "--from" in result.output
 
 
-def test_net_worth_history_defaults_to_last_working_day_in_bavaria(session_factory, monkeypatch):
+def test_net_worth_history_uses_the_stored_state(session_factory, monkeypatch):
     _pin_today(monkeypatch, date(2026, 11, 20))
     runner = _ledger(session_factory)
 
@@ -192,6 +193,61 @@ def test_net_worth_history_defaults_to_last_working_day_in_bavaria(session_facto
     assert [ln.split()[0] for ln in result.output.splitlines()[2:]] == [
         "2026-10-15", "2026-10-30", "2026-10-31",
     ]
+
+
+def _unset_state_ledger(session_factory) -> CliRunner:
+    runner = CliRunner()
+    for args in _SETUP[:-1]:
+        assert runner.invoke(cli, args, obj=session_factory).exit_code == 0
+    return runner
+
+
+_HISTORY_OCT = ["net-worth-history", "--from", "2026-10-01", "--to", "2026-10-31"]
+
+
+def test_net_worth_history_without_a_state_refuses_and_points_to_the_setter(session_factory, monkeypatch):
+    _pin_today(monkeypatch, date(2026, 11, 20))
+    runner = _unset_state_ledger(session_factory)
+
+    result = runner.invoke(cli, _HISTORY_OCT, obj=session_factory)
+
+    assert result.exit_code == 1
+    assert "set-setting state <code>" in result.output
+
+
+def test_net_worth_history_without_a_state_also_refuses_with_month_end(session_factory, monkeypatch):
+    _pin_today(monkeypatch, date(2026, 11, 20))
+    runner = _unset_state_ledger(session_factory)
+
+    result = runner.invoke(cli, [*_HISTORY_OCT, "--period-end", "month-end"], obj=session_factory)
+
+    assert result.exit_code == 1
+    assert "set-setting state <code>" in result.output
+
+
+def test_net_worth_history_state_flag_runs_on_an_unset_ledger(session_factory, monkeypatch):
+    _pin_today(monkeypatch, date(2026, 11, 20))
+    runner = _unset_state_ledger(session_factory)
+
+    result = runner.invoke(cli, [*_HISTORY_OCT, "--state", "HE"], obj=session_factory)
+
+    assert result.exit_code == 0, result.output
+
+
+def test_net_worth_history_uses_a_stored_state_and_leaves_no_group(session_factory, monkeypatch):
+    _pin_today(monkeypatch, date(2029, 6, 20))
+    runner = _unset_state_ledger(session_factory)
+    assert runner.invoke(cli, ["set-setting", "state", "BE"], obj=session_factory).exit_code == 0
+    with session_factory() as session:
+        groups = session.scalar(select(func.count()).select_from(OperationGroup))
+
+    result = runner.invoke(
+        cli, ["net-worth-history", "--from", "2029-05-01", "--to", "2029-05-31"], obj=session_factory
+    )
+
+    assert [ln.split()[0] for ln in result.output.splitlines()[2:]] == ["2029-05-15", "2029-05-31"]
+    with session_factory() as session:
+        assert session.scalar(select(func.count()).select_from(OperationGroup)) == groups
 
 
 def test_net_worth_history_month_end_keeps_the_calendar_last_day_and_ignores_state(session_factory, monkeypatch):

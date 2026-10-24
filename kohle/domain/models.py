@@ -373,3 +373,15 @@ class PriceBinding(base):
     symbol: Mapped[str] = mapped_column(String, nullable=False)
 
     __table_args__ = (UniqueConstraint("unit_id", name="uq_price_binding_unit"),)
+
+
+class Setting(base):
+    __tablename__ = "settings"
+
+    # An integer id, not the key, as primary key: the crud decorators record
+    # entity.id into Operation.entity_id, an Integer.
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    key: Mapped[str] = mapped_column(String, nullable=False)
+    value: Mapped[str] = mapped_column(String, nullable=False)
+
+    __table_args__ = (UniqueConstraint("key", name="uq_setting_key"),)

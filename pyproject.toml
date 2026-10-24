@@ -67,7 +67,7 @@ alphavantage = "kohle.app.plugins.kohle_alphavantage_price_fetcher:AlphaVantageP
 # Set packages to include
 [tool.setuptools.packages.find]
 where = ["."]
-exclude = ["tests*","archive*"]
+exclude = ["tests*","archive*","dev*","docs*"]
 
 [tool.ruff.lint.per-file-ignores]
 # assert is how pytest expresses assertions

@@ -1,5 +1,6 @@
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
 
 
 class AccountError(Exception):
@@ -513,3 +514,60 @@ LotError = LotShortfall | UnbalancedOwnMove | SecurityMoveWithPeople
 RealisedError = BalanceError | LotError
 
 PositionsError = BalanceError | LotError | PriceError
+
+
+class SettingError(Exception):
+    pass
+
+
+class UnknownSetting(SettingError):
+    def __init__(self, key: str, known: list[str]) -> None:
+        super().__init__()
+        self.key = key
+        self.known = known
+
+    def __str__(self) -> str:
+        return f"unknown setting {self.key!r}; known settings: {', '.join(self.known)}"
+
+
+class InvalidSettingValue(SettingError):
+    def __init__(self, key: str, value: object, expected: str) -> None:
+        super().__init__()
+        self.key = key
+        self.value = value
+        self.expected = expected
+
+    def __str__(self) -> str:
+        return f"invalid {self.key} {self.value!r}; expected {self.expected}"
+
+
+class MissingSettings(SettingError):
+    def __init__(self, keys: list[str]) -> None:
+        super().__init__()
+        self.keys = keys
+
+    def __str__(self) -> str:
+        return f"missing {', '.join(self.keys)}"
+
+
+class SettingDiffers(SettingError):
+    def __init__(self, path: Path, key: str, stored: str | None, wanted: str) -> None:
+        super().__init__()
+        self.path = path
+        self.key = key
+        self.stored = stored
+        self.wanted = wanted
+
+    def __str__(self) -> str:
+        setter = f"`kohle-cli set-setting {self.key} {self.wanted}`"
+        if self.stored is None:
+            return f"ledger at {self.path} has no {self.key}; set it with {setter}"
+        return (
+            f"ledger at {self.path} has {self.key} = {self.stored} but init.rc says {self.wanted}; "
+            f"init never changes an existing ledger, {setter} does"
+        )
+
+
+class StateNotSet(SettingError):
+    def __str__(self) -> str:
+        return "no state set for this ledger; set it with `kohle-cli set-setting state <code>` or pass --state"

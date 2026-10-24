@@ -1,3 +1,4 @@
+from sqlalchemy.orm import Session
 from typing import Type, Callable, List, Dict, Any
 from kohle.core.result import Result
 from kohle.core.option import Option
@@ -10,7 +11,6 @@ from kohle.infrastructure.model_serde import (
     SerdePolicy
 )
 from kohle.infrastructure.uow import UnitOfWork
-from kohle.db.connection import session_local
 from kohle.app.tui.widgets.table_editor.table_edit_policy import EditPolicy
 from kohle.app.tui.widgets.table_editor.row_adder import RowAdder
 from kohle.app.tui.widgets.table_editor.column_editor import ColumnEditor
@@ -26,7 +26,8 @@ class TableController[T, E]:
                  serde_policy: SerdePolicy[T],
                  list_use_case: Callable[[UnitOfWork], Result[list[T], E]],
                  add_use_case: RowAdder,
-                 edit_use_case: Dict[str, ColumnEditor]
+                 edit_use_case: Dict[str, ColumnEditor],
+                 make_session: Callable[[], Session]
                 ) \
             -> None:
         self.model_cls = model_cls
@@ -34,13 +35,14 @@ class TableController[T, E]:
         self.list_use_case = list_use_case
         self.add_use_case = add_use_case
         self.edit_use_case = edit_use_case
+        self.make_session = make_session
 
     def populate_columns(self) -> List[dict[str, str]]:
         cols_list = flattened_columns(self.model_cls, self.serde_policy)
         return [{ "key": col for col in cols_list }]
 
     def populate_rows(self) -> Result[list[Record], E]:
-        with UnitOfWork(session_local()) as uow:
+        with UnitOfWork(self.make_session()) as uow:
             rows = self.list_use_case(uow)
             if rows.is_err:
                 return Result.err(rows)
@@ -50,7 +52,7 @@ class TableController[T, E]:
             return Result.ok([RecordFlattener.flatten(s) for s in serialized])
 
     def request_add(self, record: Record) -> Result[str, E]:
-        with UnitOfWork(session_local()) as uow:
+        with UnitOfWork(self.make_session()) as uow:
             res = self.add_use_case.invoke(uow, record)
             if res.is_err:
                 return Result.err(res.unwrap_err())
@@ -62,7 +64,7 @@ class TableController[T, E]:
         raise NotImplementedError()
 
     def request_edit(self, row_key: str, column_key: str, value: str) -> Result[str, E]:
-        with UnitOfWork(session_local()) as uow:
+        with UnitOfWork(self.make_session()) as uow:
             res = self.edit_use_case[column_key].invoke(uow, row_key, value)
             if res.is_err:
                 return Result.err(res.unwrap_err())
@@ -125,7 +127,7 @@ class TableControllerBuilder:
         self.column_editors[column] = use_case.unwrap()
         return self
 
-    def build(self) -> Result[TableController, TableEditorBuildError]:
+    def build(self, make_session: Callable[[], Session]) -> Result[TableController, TableEditorBuildError]:
         if self.error.is_some:
             return Result.err(self.error.unwrap())
         return Result.ok(
@@ -134,7 +136,8 @@ class TableControllerBuilder:
                 self.serde_policy.unwrap(),
                 self.list_use_case.unwrap(),
                 self.row_adder.unwrap(),
-                self.column_editors
+                self.column_editors,
+                make_session,
             )
         )
 

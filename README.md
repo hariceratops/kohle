@@ -24,6 +24,101 @@ source .venv/bin/activate
 kohle-cli
 ```
 
+### Where the ledger lives
+Every entry point (`kohle-cli`, `kohle-tui`, and the `alembic` command) finds
+the ledger the same way, whatever the working directory:
+
+1. `KOHLE_DB`, if set and non-empty;
+2. else `$XDG_DATA_HOME/kohle/kohle.db`;
+3. else `~/.local/share/kohle/kohle.db`.
+
+There is no `--db` flag; `KOHLE_DB` is the only selector.
+
+A ledger from before this change sits at `./kohle.db`. Move it once, by hand:
+```bash
+mkdir -p ~/.local/share/kohle && mv ./kohle.db ~/.local/share/kohle/kohle.db
+kohle-cli migrate
+kohle-cli set-setting state <code>
+```
+
+A migrated ledger has no Bundesland, and `net-worth-history` refuses without
+one.
+
+### First run
+`kohle-cli init` creates the ledger. It takes no flags and never prompts; its
+only input is the init file, `$XDG_CONFIG_HOME/kohle/init.rc`, or
+`~/.config/kohle/init.rc` when `XDG_CONFIG_HOME` is unset. No other file is
+read.
+
+The file is TOML. The only key is `state`, your Bundesland, whose public
+holidays are not working days:
+```toml
+state = "BW"
+```
+The valid codes are `BB BE BW BY HB HE HH MV NI NW RP SH SL SN ST TH`. An
+unknown key, an invalid `state`, a missing file or a file without `state` makes
+`init` exit non-zero and create nothing.
+
+```bash
+kohle-cli init
+kohle-cli list-settings
+```
+`init` creates the ledger's directory, runs the packaged migrations and stores
+the file's values as settings. It reads the file once; editing it afterwards
+changes nothing. Run against an existing ledger, `init` never writes: at the
+current revision with the file's `state` it prints `already initialized at <path>,
+revision <rev>` and exits 0; behind, it exits non-zero and points to `migrate`; with a
+stored `state` that differs or is unset, it exits non-zero and points to
+`set-setting state <code>`. A failed or interrupted first `init` leaves no
+ledger. `list-settings`
+shows every setting (`state = (unset)` when not set), then the ledger path and
+its schema revision.
+
+```bash
+kohle-cli set-setting state HE
+```
+`set-setting <key> <value>` changes a setting after `init`, with the same keys
+and validation as the init file. An unknown key lists the known keys and an
+invalid value lists the valid ones; either exits non-zero and writes nothing.
+Each change is recorded as an operation (`settings`, `create` the first time,
+`update` after) and shows in `list-operations`; setting the current value again
+changes nothing and records nothing.
+
+### Schema check
+Every command except `init`, `migrate` and `--help` first checks the ledger's schema
+revision, reads and writes alike (`list-importer-plugins` included). It only
+reads; it never creates a file. Three outcomes stop the command with one line
+and a non-zero exit:
+
+- no file at the path: ``no ledger at <path>; run `kohle-cli init` ``;
+- revision behind this kohle: the line names both revisions and says to run
+  `kohle-cli migrate`;
+- revision ahead (a ledger from a newer kohle): the line says to upgrade kohle.
+
+### Upgrading the ledger
+`kohle-cli migrate` brings a ledger behind this kohle's revision up to it. It
+takes no flags. It copies the ledger to a hidden file beside it, applies the
+packaged migrations to the copy, and renames the copy over the ledger, so a
+failed or interrupted `migrate` leaves the ledger at its previous revision with
+its data unchanged. A hard kill can leave a stray `.kohle.db.XXXX.tmp` in the
+data directory; it is never read and may be deleted. The ledger file ends up
+mode 0600. A symlinked ledger is upgraded where it lives and stays a link.
+
+- at head: says so, exit 0;
+- no file at the path: points to `kohle-cli init`, creates nothing, exit 1;
+- revision ahead of this kohle: says to upgrade kohle, exit 1.
+
+A ledger migrated from before settings existed has `state` unset.
+
+### Writing migrations
+The Alembic migrations ship inside the package, in `kohle/db/migrations/`.
+From the repo root:
+```bash
+alembic revision --autogenerate -m "..."
+```
+This compares the models with the ledger at the resolved location (or
+`KOHLE_DB`). `alembic upgrade` is a developer tool.
+
 > [!NOTE]
 > `kohle-tui` is currently unwired and does not start. See
 > `dev/inbox/tui-wiring.md`.
@@ -520,12 +615,15 @@ as in `net-worth`'s last line.
 
 `--period-end last-working-day` (the default) samples each month's second date
 on its last working day: Monday to Friday, not a public holiday of the
-`--state` Bundesland (default `BY`, a two-letter code such as `BE` or `NW`), and
+`--state` Bundesland (a two-letter code such as `BE` or `NW`; it defaults to the
+ledger's `state` setting, and `--state` overrides it for one run), and
 never 24 or 31 December. A month ending on a Saturday or a holiday therefore
 samples the working day before it, and December is 30 December when that is a
 weekday (2028: Friday 29 December). The 15th never moves. The row is dated that
 day and includes its lines. `--period-end month-end` keeps the calendar last
 day, and then `--state` has no effect. An unknown `--state` is a usage error.
+On a ledger whose `state` is unset, the command without `--state` exits non-zero
+and points to `set-setting state <code>`, in `month-end` mode too.
 Holidays come from the pinned `holidays` package, so a deliberate upgrade of it
 can move a date.
 
