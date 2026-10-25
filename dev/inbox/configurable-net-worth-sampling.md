@@ -46,6 +46,15 @@ default to `month-end` and `BY`, while the CLI defaults to `last-working-day`.
 The CLI always passes both explicitly, so nothing is wrong now; the stored
 setting should leave exactly one place where defaults live.
 
+**Residence changes over time.** `state` is a single value today, so after
+`set-setting state` every past month is sampled with the new state's holidays
+and past sample dates and net-worth points can shift. The Bundesland should be
+effective-dated: a list of "state X from date D" entries, each sample date
+using the state in force then. `set-setting state` stays as a correction;
+recording a move is a separate action. It is ledger data and travels with the
+snapshot, so it does not belong to `device-config`. This feature owns it
+because it is the only consumer of the holiday calendar.
+
 **Ledgers without a Bundesland.** A ledger created before the settings table
 has no state. `net-worth-history` refuses and points to the setter instead of
 assuming `BY` (see `app-initialization`).
@@ -69,3 +78,8 @@ assuming `BY` (see `app-initialization`).
 - Do two rules landing on the same date collapse to one sample?
 - Is there one rule list for everything, or separate salary-day and
   period-end roles that reports treat differently?
+- Effective-dated state: what is the command for recording a move, and what
+  happens to samples before the first entry (the `init` state applies from
+  the ledger's start)?
+- Do `init.toml` and `init` stay the single entry for the first state, with
+  later entries appended by the move action?
