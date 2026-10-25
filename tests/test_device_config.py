@@ -1,17 +1,21 @@
 """Issues 055 and 056: the device config file and its `ledger.path` key."""
 
+import os
 from pathlib import Path
 
 import pytest
 from alembic import command
 from alembic.util import CommandError
 from click.testing import CliRunner
+from sqlalchemy import select
 
-from kohle.app.cli.cli import cli
+from kohle.app.cli.cli import _KohleCommand, cli
 from kohle.db.connection import ledger_path
 from kohle.db.schema import alembic_config
+from kohle.domain.models import Account, OperationGroup
 from kohle.infrastructure.device_config import DEVICE_KEYS, load_device_config
 
+BEHIND = "d4e7a8c15b92"
 EXPECTED = "an absolute path, or one starting with ~"
 
 
@@ -137,34 +141,98 @@ def test_alembic_env_uses_ledger_path_and_names_the_file_on_a_bad_value(
     assert "ledger.path" in str(raised.value)
 
 
-@pytest.mark.skip(reason="056: not implemented")
-def test_unknown_key_stops_commands_but_not_help() -> None:
-    # TODO(056): ledgr.path -> list-accounts exits non-zero naming the file and
-    # ledger.path; --help and `list-accounts --help` exit 0 (design 15.3).
-    ...
+def test_unknown_key_stops_commands_but_not_help(write_config) -> None:
+    config = write_config('ledgr.path = "/x"\n')
+    runner = CliRunner()
+
+    result = runner.invoke(cli, ["list-accounts"])
+
+    assert result.exit_code == 1
+    assert result.output == (
+        f"Error: {config}: unknown device key 'ledgr.path'; known device keys: ledger.path\n"
+    )
+    for args in (["--help"], ["list-accounts", "--help"]):
+        assert runner.invoke(cli, args).exit_code == 0
 
 
-@pytest.mark.skip(reason="056: not implemented")
-def test_unreadable_or_malformed_file_gives_one_line_without_traceback() -> None:
-    # TODO(056): invalid value, TOML syntax error, non-UTF-8, directory at path.
-    ...
+def _one_line_error(result, config: Path, *fragments: str) -> None:
+    assert result.exit_code == 1
+    assert result.output.count("\n") == 1
+    assert result.output.startswith(f"Error: {config}: ")
+    assert "Traceback" not in result.output
+    for fragment in fragments:
+        assert fragment in result.output
 
 
-@pytest.mark.skip(reason="056: not implemented")
-def test_key_flattening_edge_cases() -> None:
-    # TODO(056): quoted "ledger.path" unknown; {} and [ledger.path] invalid;
-    # empty [ledger] gives defaults.
-    ...
+def test_unreadable_or_malformed_file_gives_one_line_without_traceback(write_config) -> None:
+    runner = CliRunner()
+
+    config = write_config('ledger.path = "kohle.db"\n')
+    _one_line_error(runner.invoke(cli, ["list-accounts"]), config, "ledger.path", EXPECTED)
+
+    config = write_config("ledger.path =\n")
+    _one_line_error(runner.invoke(cli, ["list-accounts"]), config, "line 1")
+
+    config.write_bytes(b'ledger.path = "\xe9"\n')
+    _one_line_error(runner.invoke(cli, ["list-accounts"]), config)
+
+    config.unlink()
+    config.mkdir()
+    _one_line_error(runner.invoke(cli, ["list-accounts"]), config, "directory")
 
 
-@pytest.mark.skip(reason="056: not implemented")
-def test_bad_config_stops_init_and_migrate_before_any_write() -> None:
-    # TODO(056): no file or parent dir at KOHLE_DB after init; ledger bytes
-    # unchanged after migrate; zero rows with an injected factory.
-    ...
+def test_key_flattening_edge_cases(write_config) -> None:
+    runner = CliRunner()
+
+    config = write_config('"ledger.path" = "/x"\n')
+    result = runner.invoke(cli, ["list-accounts"])
+    _one_line_error(result, config, "unknown device key '\"ledger.path\"'")
+
+    for content, bad in (("ledger.path = {}\n", "{}"), ("[ledger.path]\n", "{}")):
+        config = write_config(content)
+        _one_line_error(runner.invoke(cli, ["list-accounts"]), config, f"invalid ledger.path {bad}", EXPECTED)
+
+    write_config("[ledger]\n")
+    assert load_device_config().unwrap().values == {}
+    result = runner.invoke(cli, ["list-accounts"])
+    assert "no ledger at" in result.output
 
 
-@pytest.mark.skip(reason="056: not implemented")
+def test_bad_config_stops_init_and_migrate_before_any_write(
+    write_config, write_init_rc, session_factory
+) -> None:
+    runner = CliRunner()
+    db = Path(os.environ["KOHLE_DB"])
+    write_init_rc('state = "BW"\n')
+    write_config('ledgr.path = "/x"\n')
+
+    result = runner.invoke(cli, ["init"])
+
+    assert result.exit_code == 1
+    assert "unknown device key" in result.output
+    assert not db.exists()
+    assert not db.parent.exists()
+
+    write_config("")
+    db.parent.mkdir(parents=True)
+    db.touch()
+    command.upgrade(alembic_config(), BEHIND)
+    before = db.read_bytes()
+    write_config('ledgr.path = "/x"\n')
+
+    result = runner.invoke(cli, ["migrate"])
+
+    assert result.exit_code == 1
+    assert "unknown device key" in result.output
+    assert db.read_bytes() == before
+
+    result = runner.invoke(cli, ["add-account", "Cash", "--type", "asset"], obj=session_factory)
+
+    assert result.exit_code == 1
+    with session_factory() as session:
+        assert session.scalars(select(Account)).all() == []
+        assert session.scalars(select(OperationGroup)).all() == []
+
+
 def test_every_cli_command_is_a_kohle_command() -> None:
-    # TODO(056): structural, every value in cli.commands is a _KohleCommand.
-    ...
+    assert all(isinstance(c, _KohleCommand) for c in cli.commands.values())

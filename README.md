@@ -72,6 +72,10 @@ and `set-setting` (and the init file, once). Device settings live in the file
 and stay on the machine. Keep secrets out of the file; plugin variables such as
 `KOHLE_ALPHAVANTAGE_KEY` stay environment variables.
 
+An unknown key, an invalid value, a TOML syntax error or an unreadable file
+stops every command, `init` and `migrate` included, with one line naming the
+file. Only `--help` still works.
+
 ### First run
 `kohle-cli init` creates the ledger. It takes no flags and never prompts; its
 only input is the init file, `$XDG_CONFIG_HOME/kohle/init.rc`, or

@@ -588,8 +588,18 @@ class InvalidDeviceValue(DeviceConfigError):
         return f"invalid {self.key} {self.value!r}; expected {self.expected}"
 
 
+class UnknownDeviceKey(DeviceConfigError):
+    def __init__(self, key: str, known: list[str]) -> None:
+        super().__init__()
+        self.key = key
+        self.known = known
+
+    def __str__(self) -> str:
+        return f"unknown device key {self.key!r}; known device keys: {', '.join(self.known)}"
+
+
 class BadConfigFile(DeviceConfigError):
-    def __init__(self, path: Path, reason: str | InvalidDeviceValue) -> None:
+    def __init__(self, path: Path, reason: str | UnknownDeviceKey | InvalidDeviceValue) -> None:
         super().__init__()
         self.path = path
         self.reason = reason

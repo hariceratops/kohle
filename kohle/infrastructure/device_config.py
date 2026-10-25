@@ -13,7 +13,11 @@ from pathlib import Path
 from typing import Literal
 
 from kohle.core.result import Result
-from kohle.domain.domain_errors import BadConfigFile, InvalidDeviceValue
+from kohle.domain.domain_errors import (
+    BadConfigFile,
+    InvalidDeviceValue,
+    UnknownDeviceKey,
+)
 
 
 def config_dir() -> Path:
@@ -69,11 +73,11 @@ def _flatten(table: Mapping[str, object], prefix: str = "") -> Iterator[tuple[st
             yield key, value
 
 
-def validate_device_config(raw: Mapping[str, object]) -> Result[dict[str, object], InvalidDeviceValue]:
+def validate_device_config(raw: Mapping[str, object]) -> Result[dict[str, object], UnknownDeviceKey | InvalidDeviceValue]:
     values: dict[str, object] = {}
     for key, value in _flatten(raw):
         if key not in DEVICE_KEYS:
-            continue  # 055 only; 056 rejects unknown keys
+            return Result.err(UnknownDeviceKey(key, list(DEVICE_KEYS)))
         validated = DEVICE_KEYS[key].validate(value)
         if validated.is_err:
             return Result.err(validated.unwrap_err())
@@ -94,8 +98,10 @@ def load_device_config() -> Result[DeviceConfig, BadConfigFile]:
             raw = tomllib.load(f)
     except FileNotFoundError:
         return Result.ok(DeviceConfig(path, {}))
-    # 055 only: a syntax error, a decode error or another OSError still
-    # raises; 056 turns them into BadConfigFile.
+    except (tomllib.TOMLDecodeError, UnicodeDecodeError) as e:
+        return Result.err(BadConfigFile(path, str(e)))
+    except OSError as e:
+        return Result.err(BadConfigFile(path, e.strerror or str(e)))
     return (
         validate_device_config(raw)
         .map(lambda values: DeviceConfig(path, values))
