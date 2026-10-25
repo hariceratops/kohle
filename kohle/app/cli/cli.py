@@ -9,11 +9,17 @@ from tabulate import tabulate
 
 from kohle.db.connection import ledger_path
 from kohle.db.schema import migrate_ledger, open_ledger
-from kohle.domain.domain_errors import AccountNotFoundError, StateNotSet
+from kohle.domain.domain_errors import (
+    AccountNotFoundError,
+    StateNotSet,
+    UnknownDeviceKey,
+)
 from kohle.domain.models import DEFAULT_RULE_PRIORITY, AccountType, UnitKind
 from kohle.infrastructure.device_config import (
+    DEVICE_KEYS,
     DeviceConfig,
     config_dir,
+    effective,
     load_device_config,
 )
 from kohle.plugin.plugin_manager import load_plugins, load_price_plugins
@@ -255,6 +261,29 @@ def migrate_cmd(config: DeviceConfig) -> None:
         click.echo(f"ledger at {path} is already at revision {m.after}")
     else:
         click.echo(f"Migrated ledger at {path} from revision {m.before or 'none'} to {m.after}")
+
+
+def _with_source(value: object, source: str) -> str:
+    return f"{value}  ({source})"
+
+
+@cli.command(opens_ledger=False)
+@pass_device_config
+def list_config_cmd(config: DeviceConfig) -> None:
+    for key in DEVICE_KEYS:
+        e = effective(config, key)
+        click.echo(f"{key} = {_with_source(e.value, e.source)}")
+    click.echo()
+    click.echo(f"file: {config.path}{'' if config.found else ' (not found)'}")
+
+
+@cli.command(opens_ledger=False)
+@click.argument("key")
+@pass_device_config
+def get_config_cmd(config: DeviceConfig, key: str) -> None:
+    if key not in DEVICE_KEYS:
+        raise click.ClickException(str(UnknownDeviceKey(key, list(DEVICE_KEYS))))
+    click.echo(str(effective(config, key).value))
 
 
 @cli.command()

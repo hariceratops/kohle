@@ -88,6 +88,7 @@ def validate_device_config(raw: Mapping[str, object]) -> Result[dict[str, object
 @dataclass(frozen=True, slots=True)
 class DeviceConfig:
     path: Path  # the file read, or looked for
+    found: bool
     values: dict[str, object]  # validated values set in the file; absent keys take their default
 
 
@@ -97,14 +98,14 @@ def load_device_config() -> Result[DeviceConfig, BadConfigFile]:
         with path.open("rb") as f:
             raw = tomllib.load(f)
     except FileNotFoundError:
-        return Result.ok(DeviceConfig(path, {}))
+        return Result.ok(DeviceConfig(path, found=False, values={}))
     except (tomllib.TOMLDecodeError, UnicodeDecodeError) as e:
         return Result.err(BadConfigFile(path, str(e)))
     except OSError as e:
         return Result.err(BadConfigFile(path, e.strerror or str(e)))
     return (
         validate_device_config(raw)
-        .map(lambda values: DeviceConfig(path, values))
+        .map(lambda values: DeviceConfig(path, found=True, values=values))
         .map_err(lambda err: BadConfigFile(path, err))
     )
 

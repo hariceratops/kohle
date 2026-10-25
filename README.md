@@ -76,6 +76,18 @@ An unknown key, an invalid value, a TOML syntax error or an unreadable file
 stops every command, `init` and `migrate` included, with one line naming the
 file. Only `--help` still works.
 
+`kohle-cli list-config` prints every device key with its effective value and
+where it came from (`default`, `file` or `KOHLE_DB`), then the config file it
+read:
+```
+ledger.path = /home/hari/.local/share/kohle/kohle.db  (default)
+
+file: /home/hari/.config/kohle/config.toml (not found)
+```
+`kohle-cli get-config ledger.path` prints just the value, for scripts. Neither
+opens the ledger, so they work when it is missing or out of date: they are the
+way to debug a wrong `ledger.path`.
+
 ### First run
 `kohle-cli init` creates the ledger. It takes no flags and never prompts; its
 only input is the init file, `$XDG_CONFIG_HOME/kohle/init.rc`, or

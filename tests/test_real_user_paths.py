@@ -5,7 +5,6 @@ import sys
 from pathlib import Path
 from urllib.parse import unquote
 
-import pytest
 from click.testing import CliRunner
 
 from kohle.app.cli.cli import cli
@@ -44,7 +43,7 @@ def _audit(event: str, args: tuple) -> None:
 sys.addaudithook(_audit)
 
 
-def _record_invocations(write_init_rc) -> list[Path]:
+def _record_invocations(write_init_rc, *extra: str) -> list[Path]:
     global _recorded
     write_init_rc('state = "BW"\n')
     runner = CliRunner()
@@ -53,6 +52,8 @@ def _record_invocations(write_init_rc) -> list[Path]:
         runner.invoke(cli, ["init"])
         runner.invoke(cli, ["list-accounts"])
         runner.invoke(cli, ["--help"])
+        for command in extra:
+            runner.invoke(cli, [command])
         return _recorded
     finally:
         _recorded = None
@@ -76,7 +77,12 @@ def test_temp_config_toml_is_among_the_recorded_opens(write_init_rc, tmp_path: P
     assert tmp_path / "xdg-config" / "kohle" / "config.toml" in recorded
 
 
-@pytest.mark.skip(reason="057: not implemented")
-def test_list_config_never_touches_the_real_kohle_directories() -> None:
-    # TODO(057): add list-config to the invocations (design 15.1).
-    ...
+def test_list_config_never_touches_the_real_kohle_directories(write_init_rc) -> None:
+    recorded = _record_invocations(write_init_rc, "list-config")
+
+    real = [
+        path
+        for path in recorded
+        if any(path.absolute().is_relative_to(directory) for directory in _REAL_DIRS)
+    ]
+    assert real == []
