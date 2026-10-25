@@ -11,19 +11,23 @@ year.
 
 1. `app-initialization` — per-user database, settings table, `init`. Sampling
    and budgeting need its settings mechanism.
-2. `device-topology-and-sync` — Pi as master, statement inbox, daily snapshot
-   synced read-only.
-3. `configurable-net-worth-sampling` — designs the recurrence vocabulary that
+2. `device-config` — a user-editable per-device config file (like git
+   config), separate from ledger settings. Split out of
+   `device-topology-and-sync`; sampling, budgeting and topology need it.
+3. `device-topology-and-sync` — reader/writer guardrails, `snapshot` and
+   `backup`; built on `device-config`. The Pi and the transport are the
+   user's side.
+4. `configurable-net-worth-sampling` — designs the recurrence vocabulary that
    budgeting reuses.
-4. `cli-command-naming` — a short Q&A; done before budgeting so its commands
+5. `cli-command-naming` — a short Q&A; done before budgeting so its commands
    get the new names from the start.
-5. `budgeting` — needed going into the new year.
-6. `multi-currency-and-fx` with `eu-price-provider` — INR lots and the NSE
+6. `budgeting` — needed going into the new year.
+7. `multi-currency-and-fx` with `eu-price-provider` — INR lots and the NSE
    bhavcopy plugin; net worth is wrong for the Indian holdings until these
    land.
-7. `complex-classification-rules` — editor-driven rules with column
+8. `complex-classification-rules` — editor-driven rules with column
    conditions.
-8. `cli-documentation` — first to slip into January if time runs short; the
+9. `cli-documentation` — first to slip into January if time runs short; the
    README works until then.
 
 ## Early 2027
