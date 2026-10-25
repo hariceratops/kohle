@@ -29,10 +29,11 @@ Every entry point (`kohle-cli`, `kohle-tui`, and the `alembic` command) finds
 the ledger the same way, whatever the working directory:
 
 1. `KOHLE_DB`, if set and non-empty;
-2. else `$XDG_DATA_HOME/kohle/kohle.db`;
-3. else `~/.local/share/kohle/kohle.db`.
+2. else `ledger.path` in the [device config](#device-config);
+3. else `$XDG_DATA_HOME/kohle/kohle.db`;
+4. else `~/.local/share/kohle/kohle.db`.
 
-There is no `--db` flag; `KOHLE_DB` is the only selector.
+There is no `--db` flag.
 
 A ledger from before this change sits at `./kohle.db`. Move it once, by hand:
 ```bash
@@ -43,6 +44,33 @@ kohle-cli set-setting state <code>
 
 A migrated ledger has no Bundesland, and `net-worth-history` refuses without
 one.
+
+### Device config
+Settings that describe one machine live in
+`$XDG_CONFIG_HOME/kohle/config.toml`, or `~/.config/kohle/config.toml` when
+`XDG_CONFIG_HOME` is unset. kohle reads the file once per command and never
+writes it; a missing file means every key takes its default.
+
+The file is TOML. `[ledger]` with `path = "..."` and `ledger.path = "..."` are
+equivalent. The only key is:
+
+- `ledger.path`: where the ledger is, an absolute path or one starting with
+  `~`. The value is checked for form only; a path with no ledger behind it
+  still gives "no ledger at <path>". `KOHLE_DB` overrides it.
+
+```toml
+[ledger]
+path = "~/books/kohle.db"
+```
+
+Precedence for a key is the built-in default, then the file, then `KOHLE_DB`
+(for `ledger.path` only; there are no other environment overrides).
+
+There are two scopes of setting. Ledger settings (`state`) live in the
+`settings` table, travel with the ledger and are managed with `list-settings`
+and `set-setting` (and the init file, once). Device settings live in the file
+and stay on the machine. Keep secrets out of the file; plugin variables such as
+`KOHLE_ALPHAVANTAGE_KEY` stay environment variables.
 
 ### First run
 `kohle-cli init` creates the ledger. It takes no flags and never prompts; its

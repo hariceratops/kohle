@@ -6,6 +6,7 @@ from textual.command import Hit, Hits, Provider
 from functools import partial
 from kohle.db.connection import ledger_path
 from kohle.db.schema import open_ledger
+from kohle.infrastructure.device_config import load_device_config
 from kohle.app.tui.screens.category_screen import CategoriesScreen
 
 # from kohle.app.tui.provider import AppPalleteCommands
@@ -40,7 +41,10 @@ class KohleApp(App):
 
 
 def main():
-    opened = open_ledger(ledger_path())
+    loaded = load_device_config()
+    if loaded.is_err:
+        sys.exit(str(loaded.unwrap_err()))
+    opened = open_ledger(ledger_path(loaded.unwrap()))
     if opened.is_err:
         sys.exit(str(opened.unwrap_err()))
     KohleApp(opened.unwrap()).run()

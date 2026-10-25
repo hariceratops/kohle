@@ -1,44 +1,140 @@
 """Issues 055 and 056: the device config file and its `ledger.path` key."""
 
+from pathlib import Path
+
 import pytest
+from alembic import command
+from alembic.util import CommandError
+from click.testing import CliRunner
+
+from kohle.app.cli.cli import cli
+from kohle.db.connection import ledger_path
+from kohle.db.schema import alembic_config
+from kohle.infrastructure.device_config import DEVICE_KEYS, load_device_config
+
+EXPECTED = "an absolute path, or one starting with ~"
 
 
-@pytest.mark.skip(reason="055: not implemented")
-def test_ledger_path_validator_accepts_expands_and_rejects() -> None:
-    # TODO(055): /abs/kohle.db accepted; ~/k.db expanded; kohle.db, "", 1, {}
-    # and ~nosuchuser/k.db rejected with the expected text (design 15.2).
-    ...
+def _resolved() -> Path:
+    return ledger_path(load_device_config().unwrap())
 
 
-@pytest.mark.skip(reason="055: not implemented")
-def test_table_form_and_dotted_form_load_equal() -> None:
-    # TODO(055): [ledger] path = "/x" and ledger.path = "/x" give equal values.
-    ...
+def test_ledger_path_validator_accepts_expands_and_rejects(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "h"))
+    validate = DEVICE_KEYS["ledger.path"].validate
+
+    assert validate("/abs/kohle.db").unwrap() == Path("/abs/kohle.db")
+    assert validate("~/k.db").unwrap() == tmp_path / "h" / "k.db"
+    for bad in ("kohle.db", "", 1, {}, "~nosuchuser/k.db"):
+        err = validate(bad).unwrap_err()
+        assert str(err) == f"invalid ledger.path {bad!r}; expected {EXPECTED}"
 
 
-@pytest.mark.skip(reason="055: not implemented")
-def test_ledger_resolution_order_end_to_end() -> None:
-    # TODO(055): file only uses the file; KOHLE_DB wins over the file; neither
-    # uses the XDG default; KOHLE_DB="" counts as unset (design 15.2).
-    ...
+def test_table_form_and_dotted_form_load_equal(write_config) -> None:
+    write_config('[ledger]\npath = "/x"\n')
+    table_form = load_device_config().unwrap().values
+    write_config('ledger.path = "/x"\n')
+    dotted_form = load_device_config().unwrap().values
+
+    assert table_form == dotted_form == {"ledger.path": Path("/x")}
 
 
-@pytest.mark.skip(reason="055: not implemented")
-def test_missing_config_file_runs_with_defaults() -> None:
-    # TODO(055)
-    ...
+def _init_at(runner: CliRunner, write_init_rc) -> None:
+    write_init_rc('state = "BW"\n')
+    result = runner.invoke(cli, ["init"])
+    assert result.exit_code == 0, result.output
 
 
-@pytest.mark.skip(reason="055: not implemented")
-def test_ledger_path_naming_a_missing_file_gives_the_no_ledger_error() -> None:
-    # TODO(055)
-    ...
+def test_ledger_resolution_order_end_to_end(write_config, write_init_rc, tmp_path: Path, monkeypatch) -> None:
+    runner = CliRunner()
+    from_file = tmp_path / "from-file" / "kohle.db"
+    from_env = tmp_path / "from-env" / "kohle.db"
+    default = tmp_path / "xdg-data" / "kohle" / "kohle.db"
+    write_config(f'ledger.path = "{from_file}"\n')
+
+    # ledger.path only
+    monkeypatch.delenv("KOHLE_DB")
+    assert _resolved() == from_file
+    _init_at(runner, write_init_rc)
+    assert from_file.exists()
+    result = runner.invoke(cli, ["list-settings"])
+    assert result.exit_code == 0, result.output
+    assert str(from_file) in result.output
+
+    # KOHLE_DB wins over the file
+    monkeypatch.setenv("KOHLE_DB", str(from_env))
+    assert _resolved() == from_env
+    _init_at(runner, write_init_rc)
+    assert from_env.exists()
+    assert str(from_env) in runner.invoke(cli, ["list-settings"]).output
+
+    # KOHLE_DB="" counts as unset
+    monkeypatch.setenv("KOHLE_DB", "")
+    assert _resolved() == from_file
+
+    # neither
+    write_config("")
+    monkeypatch.delenv("KOHLE_DB")
+    assert _resolved() == default
+    _init_at(runner, write_init_rc)
+    assert default.exists()
+    assert str(default) in runner.invoke(cli, ["list-settings"]).output
 
 
-@pytest.mark.skip(reason="055: not implemented")
-def test_alembic_env_uses_ledger_path_and_names_the_file_on_a_bad_value() -> None:
-    # TODO(055): command.upgrade at ledger.path; invalid path -> CommandError.
-    ...
+def test_relative_ledger_path_is_refused_naming_the_file(write_config) -> None:
+    config = write_config('ledger.path = "kohle.db"\n')
+
+    result = CliRunner().invoke(cli, ["list-accounts"])
+
+    assert result.exit_code == 1
+    assert str(config) in result.output
+    assert "ledger.path" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_missing_config_file_runs_with_defaults(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("KOHLE_DB")
+
+    loaded = load_device_config().unwrap()
+    assert loaded.values == {}
+    assert loaded.path == tmp_path / "xdg-config" / "kohle" / "config.toml"
+    assert not loaded.path.exists()
+    assert _resolved() == tmp_path / "xdg-data" / "kohle" / "kohle.db"
+
+    result = CliRunner().invoke(cli, ["list-accounts"])
+
+    assert "no ledger at" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_ledger_path_naming_a_missing_file_gives_the_no_ledger_error(write_config, tmp_path: Path, monkeypatch) -> None:
+    missing = tmp_path / "nowhere" / "kohle.db"
+    write_config(f'ledger.path = "{missing}"\n')
+    monkeypatch.delenv("KOHLE_DB")
+
+    result = CliRunner().invoke(cli, ["list-accounts"])
+
+    assert result.exit_code == 1
+    assert f"no ledger at {missing}; run `kohle-cli init`" in result.output
+
+
+def test_alembic_env_uses_ledger_path_and_names_the_file_on_a_bad_value(
+    write_config, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("KOHLE_DB")
+    db = tmp_path / "alembic.db"
+    db.touch()
+    write_config(f'ledger.path = "{db}"\n')
+
+    command.upgrade(alembic_config(), "head")
+
+    assert db.stat().st_size > 0
+
+    config = write_config('ledger.path = "kohle.db"\n')
+    with pytest.raises(CommandError) as raised:
+        command.upgrade(alembic_config(), "head")
+    assert str(config) in str(raised.value)
+    assert "ledger.path" in str(raised.value)
 
 
 @pytest.mark.skip(reason="056: not implemented")

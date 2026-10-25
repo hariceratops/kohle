@@ -1,10 +1,13 @@
 from logging.config import fileConfig
+from pathlib import Path
 
 from sqlalchemy import create_engine, pool
 
 from alembic import context
 import kohle.domain.models  # noqa: F401  registers every table on base.metadata for autogenerate
+from alembic.util import CommandError
 from kohle.db.connection import base, ledger_path, ledger_url
+from kohle.infrastructure.device_config import load_device_config
 
 config = context.config
 if config.config_file_name is not None:
@@ -12,10 +15,19 @@ if config.config_file_name is not None:
 target_metadata = base.metadata
 
 
+def _ledger() -> Path:
+    # Alembic's own clean failure: its command line prints "FAILED: <line>"
+    # and exits 1, instead of a traceback.
+    loaded = load_device_config()
+    if loaded.is_err:
+        raise CommandError(str(loaded.unwrap_err()))
+    return ledger_path(loaded.unwrap())
+
+
 def run_migrations_offline() -> None:
     # The URL only picks the dialect here.
     context.configure(
-        url=ledger_url(ledger_path()),
+        url=ledger_url(_ledger()),
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
@@ -38,7 +50,7 @@ def run_migrations_online() -> None:
     if connection is not None:
         _run(connection)
         return
-    engine = create_engine(ledger_url(ledger_path()), poolclass=pool.NullPool)
+    engine = create_engine(ledger_url(_ledger()), poolclass=pool.NullPool)
     with engine.connect() as connection:
         _run(connection)
 

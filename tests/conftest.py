@@ -31,6 +31,19 @@ def _no_real_user_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
 
 
 @pytest.fixture
+def write_config(tmp_path: Path):
+    """Write `$XDG_CONFIG_HOME/kohle/config.toml`; return the file's path."""
+
+    def write(content: str) -> Path:
+        config = tmp_path / "xdg-config" / "kohle" / "config.toml"
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text(content)
+        return config
+
+    return write
+
+
+@pytest.fixture
 def write_init_rc(tmp_path: Path):
     """Write `$XDG_CONFIG_HOME/kohle/init.rc`; return the file's path."""
 

@@ -36,7 +36,7 @@ from kohle.use_cases.units import AddUnit
 def test_injected_factory_is_used_and_real_db_is_untouched(
     session_factory: sessionmaker, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def forbidden_ledger_path():
+    def forbidden_ledger_path(*_):
         raise AssertionError("ledger_path must not be called when a factory is injected via obj")
 
     monkeypatch.setattr("kohle.app.cli.cli.ledger_path", forbidden_ledger_path)
@@ -56,7 +56,7 @@ def test_injected_factory_is_used_and_real_db_is_untouched(
 
 
 def test_default_obj_opens_the_ledger_at_the_resolved_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    resolved = Mock(side_effect=lambda: Path("/nonexistent/kohle.db"))
+    resolved = Mock(side_effect=lambda _config: Path("/nonexistent/kohle.db"))
     monkeypatch.setattr("kohle.app.cli.cli.ledger_path", resolved)
 
     runner = CliRunner()

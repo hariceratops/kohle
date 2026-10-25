@@ -44,7 +44,7 @@ def _audit(event: str, args: tuple) -> None:
 sys.addaudithook(_audit)
 
 
-def test_commands_never_touch_the_real_kohle_directories(write_init_rc) -> None:
+def _record_invocations(write_init_rc) -> list[Path]:
     global _recorded
     write_init_rc('state = "BW"\n')
     runner = CliRunner()
@@ -53,9 +53,13 @@ def test_commands_never_touch_the_real_kohle_directories(write_init_rc) -> None:
         runner.invoke(cli, ["init"])
         runner.invoke(cli, ["list-accounts"])
         runner.invoke(cli, ["--help"])
-        recorded = _recorded
+        return _recorded
     finally:
         _recorded = None
+
+
+def test_commands_never_touch_the_real_kohle_directories(write_init_rc) -> None:
+    recorded = _record_invocations(write_init_rc)
 
     assert recorded
     real = [
@@ -66,10 +70,10 @@ def test_commands_never_touch_the_real_kohle_directories(write_init_rc) -> None:
     assert real == []
 
 
-@pytest.mark.skip(reason="055: not implemented")
-def test_temp_config_toml_is_among_the_recorded_opens() -> None:
-    # TODO(055): positive assertion that the redirect is used (design 15.1).
-    ...
+def test_temp_config_toml_is_among_the_recorded_opens(write_init_rc, tmp_path: Path) -> None:
+    recorded = _record_invocations(write_init_rc)
+
+    assert tmp_path / "xdg-config" / "kohle" / "config.toml" in recorded
 
 
 @pytest.mark.skip(reason="057: not implemented")

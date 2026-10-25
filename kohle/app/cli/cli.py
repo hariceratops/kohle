@@ -1,4 +1,3 @@
-import os
 import tomllib
 from datetime import date
 from decimal import Decimal, InvalidOperation
@@ -12,6 +11,11 @@ from kohle.db.connection import ledger_path
 from kohle.db.schema import migrate_ledger, open_ledger
 from kohle.domain.domain_errors import AccountNotFoundError, StateNotSet
 from kohle.domain.models import DEFAULT_RULE_PRIORITY, AccountType, UnitKind
+from kohle.infrastructure.device_config import (
+    DeviceConfig,
+    config_dir,
+    load_device_config,
+)
 from kohle.plugin.plugin_manager import load_plugins, load_price_plugins
 from kohle.use_cases.accounts import AddAccount, ListAccount, ListChildAccounts
 from kohle.use_cases.classification import ListUnclassified, Reclassify
@@ -162,14 +166,32 @@ def _account_tree_rows(accounts: list, root_name: str | None = None) -> list[dic
     return rows
 
 
-class _LedgerCommand(click.Command):
-    """Sits in invoke because Click runs the group callback before parsing the
-    subcommand's arguments, and `<command> --help` must work with no ledger.
-    A factory injected through obj (tests) is the caller's schema, unchecked."""
+_DEVICE_CONFIG = "kohle.device_config"
+pass_device_config = click.decorators.pass_meta_key(
+    _DEVICE_CONFIG, doc_description="the device config read for this command"
+)
+
+
+class _KohleCommand(click.Command):
+    """Reads config.toml, then opens and checks the ledger, before the body
+    runs. Both happen in invoke because Click runs the group callback before
+    parsing the subcommand's arguments, and `<command> --help` must work with
+    a bad config file or no ledger. opens_ledger=False skips only the ledger.
+    A factory injected through obj (tests) is the caller's schema, unchecked;
+    the config file is read regardless."""
+
+    def __init__(self, *args, opens_ledger: bool = True, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.opens_ledger = opens_ledger
 
     def invoke(self, ctx: click.Context) -> object:
-        if ctx.obj is None:
-            opened = open_ledger(ledger_path())
+        loaded = load_device_config()
+        if loaded.is_err:
+            raise click.ClickException(str(loaded.unwrap_err()))
+        config = loaded.unwrap()
+        ctx.meta[_DEVICE_CONFIG] = config
+        if self.opens_ledger and ctx.obj is None:
+            opened = open_ledger(ledger_path(config))
             if opened.is_err:
                 raise click.ClickException(str(opened.unwrap_err()))
             ctx.obj = opened.unwrap()
@@ -177,7 +199,9 @@ class _LedgerCommand(click.Command):
 
 
 class _KohleGroup(click.Group):
-    command_class = _LedgerCommand
+    # Every command declared on `cli` reads the config and, unless it passes
+    # opens_ledger=False, opens the ledger. Nothing passes cls=.
+    command_class = _KohleCommand
 
 
 @click.group(cls=_KohleGroup)
@@ -186,9 +210,7 @@ def cli() -> None:
 
 
 def _init_file_path() -> Path:
-    config_home = os.environ.get("XDG_CONFIG_HOME")
-    config_dir = Path(config_home) if config_home else Path.home() / ".config"
-    return config_dir / "kohle" / "init.rc"
+    return config_dir() / "init.rc"
 
 
 def _read_init_file(path: Path) -> dict[str, object]:
@@ -203,14 +225,15 @@ def _read_init_file(path: Path) -> dict[str, object]:
         raise click.ClickException(f"{path}: {e}") from None
 
 
-@cli.command(name="init", cls=click.Command)
-def init_cmd() -> None:
+@cli.command(name="init", opens_ledger=False)
+@pass_device_config
+def init_cmd(config: DeviceConfig) -> None:
     rc = _init_file_path()
     raw = _read_init_file(rc)
     validated = validate_init_settings(raw)
     if validated.is_err:
         raise click.ClickException(f"{rc}: {validated.unwrap_err()}")
-    res = init_ledger(ledger_path(), validated.unwrap())
+    res = init_ledger(ledger_path(config), validated.unwrap())
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
     done = res.unwrap()
@@ -220,9 +243,10 @@ def init_cmd() -> None:
         click.echo(f"already initialized at {done.path}, revision {done.revision}")
 
 
-@cli.command(name="migrate", cls=click.Command)
-def migrate_cmd() -> None:
-    path = ledger_path()
+@cli.command(name="migrate", opens_ledger=False)
+@pass_device_config
+def migrate_cmd(config: DeviceConfig) -> None:
+    path = ledger_path(config)
     res = migrate_ledger(path)
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))

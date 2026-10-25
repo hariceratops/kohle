@@ -1,19 +1,18 @@
-import os
 from pathlib import Path
+from typing import cast
 from urllib.parse import quote
 
 from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
+from kohle.infrastructure.device_config import DeviceConfig, effective
+
 base = declarative_base()
 
 
-def ledger_path() -> Path:
-    if db := os.environ.get("KOHLE_DB"):
-        return Path(db)
-    data_home = os.environ.get("XDG_DATA_HOME")
-    data_dir = Path(data_home) if data_home else Path.home() / ".local" / "share"
-    return data_dir / "kohle" / "kohle.db"
+def ledger_path(config: DeviceConfig) -> Path:
+    # The registry's validator, default and KOHLE_DB all give a Path.
+    return cast(Path, effective(config, "ledger.path").value)
 
 
 def ledger_url(path: Path) -> str:
