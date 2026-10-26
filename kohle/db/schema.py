@@ -1,4 +1,5 @@
-"""Schema lifecycle for the ledger.
+"""The ledger file's lifecycle: opening and checking it, building and
+migrating it, and copying it.
 
 Alembic is imported only inside the functions that need it: importing it costs
 a noticeable fraction of every command's start-up.
@@ -26,6 +27,8 @@ from kohle.infrastructure.infra_errors import (
     LedgerError,
     LedgerUnreadable,
     NoLedger,
+    SnapshotExists,
+    SnapshotFailed,
 )
 
 if TYPE_CHECKING:
@@ -81,11 +84,20 @@ def check_schema(path: Path, engine: Engine) -> Result[str, LedgerError]:
     return _classify(path, stored)
 
 
-def open_ledger(path: Path) -> Result[sessionmaker[Session], LedgerError]:
+def _open_checked(path: Path) -> Result[Engine, LedgerError]:
+    """An engine on an existing, current ledger. The caller disposes of it."""
     if not path.exists():
         return Result.err(NoLedger(path))
     engine = make_engine(ledger_url(path))
-    return check_schema(path, engine).map(lambda _: make_session_factory(engine))
+    checked = check_schema(path, engine)
+    if checked.is_err:
+        engine.dispose()
+        return Result.err(checked.unwrap_err())
+    return Result.ok(engine)
+
+
+def open_ledger(path: Path) -> Result[sessionmaker[Session], LedgerError]:
+    return _open_checked(path).map(make_session_factory)
 
 
 def _upgrade_to_head(staged: Path) -> str:
@@ -177,3 +189,42 @@ def migrate_ledger(path: Path) -> Result[Migration, LedgerError]:
         return Result.err(err)
     built = build_ledger(path, copy_existing=True, populate=None)
     return built.map(lambda head: Migration(err.stored, head))
+
+
+def snapshot_ledger(path: Path, dest: Path) -> Result[Path, LedgerError]:
+    """Write a consistent, self-contained copy of the ledger to `dest`, which
+    must not exist. Reads the ledger only."""
+    opened = _open_checked(path)
+    if opened.is_err:
+        return Result.err(opened.unwrap_err())
+    engine = opened.unwrap()
+    staged: Path | None = None
+    try:
+        # A symlink, dangling or not, is an existing path; os.replace would
+        # replace the link.
+        if dest.exists(follow_symlinks=False):
+            return Result.err(SnapshotExists(dest))
+        # Beside dest so the rename is atomic: whatever watches dest sees no
+        # file or a whole snapshot, never a half-written one.
+        fd, name = tempfile.mkstemp(dir=dest.parent, prefix=f".{dest.name}.", suffix=".tmp")
+        os.close(fd)
+        staged = Path(name)
+        with engine.connect() as connection:
+            connection.exec_driver_sql("VACUUM INTO ?", (str(staged),))
+        # VACUUM INTO does not fsync its output; without this a power cut
+        # after the rename can leave a torn file at dest.
+        fd = os.open(staged, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.replace(staged, dest)
+        return Result.ok(dest)
+    except DBAPIError as e:
+        return Result.err(SnapshotFailed(dest, str(e.orig)))
+    except OSError as e:
+        return Result.err(SnapshotFailed(dest, e.strerror or str(e)))
+    finally:
+        engine.dispose()
+        if staged is not None:
+            staged.unlink(missing_ok=True)

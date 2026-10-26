@@ -8,7 +8,7 @@ import click
 from tabulate import tabulate
 
 from kohle.db.connection import ledger_path
-from kohle.db.schema import migrate_ledger, open_ledger
+from kohle.db.schema import migrate_ledger, open_ledger, snapshot_ledger
 from kohle.domain.domain_errors import (
     AccountNotFoundError,
     DeviceKeyNotASetting,
@@ -183,7 +183,9 @@ class _KohleCommand(click.Command):
     """Reads config.toml, then opens and checks the ledger, before the body
     runs. Both happen in invoke because Click runs the group callback before
     parsing the subcommand's arguments, and `<command> --help` must work with
-    a bad config file or no ledger. opens_ledger=False skips only the ledger.
+    a bad config file or no ledger. opens_ledger=False means the hook does not
+    open the ledger: the command either needs none (list-config, get-config) or
+    opens it through kohle/db (init, migrate, snapshot).
     A factory injected through obj (tests) is the caller's schema, unchecked;
     the config file is read regardless."""
 
@@ -260,6 +262,17 @@ def migrate_cmd(config: DeviceConfig) -> None:
         click.echo(f"ledger at {path} is already at revision {m.after}")
     else:
         click.echo(f"Migrated ledger at {path} from revision {m.before or 'none'} to {m.after}")
+
+
+@cli.command(name="snapshot", opens_ledger=False)
+@click.argument("dest", type=click.Path(path_type=Path))
+@pass_device_config
+def snapshot_cmd(config: DeviceConfig, dest: Path) -> None:
+    path = ledger_path(config)
+    res = snapshot_ledger(path, dest)
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    click.echo(f"Wrote a snapshot of {path} to {dest}")
 
 
 def _with_source(value: object, source: str) -> str:

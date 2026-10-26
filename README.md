@@ -828,3 +828,17 @@ the cash account, so re-importing a file posts nothing.
 kohle-cli add-unit DE0005190003 BMW
 kohle-cli import-statement kohle-simple-broker "Broker Cash" Depot statement.csv
 ```
+
+### Snapshots
+`kohle-cli snapshot <path>` writes a consistent, self-contained copy of the
+ledger to `<path>` and exits zero. The copy opens as an ordinary ledger, with no
+journal or WAL file beside it. The ledger is only read: nothing is changed and
+no operation is recorded. It gets the same schema check as other commands, so a
+missing, behind or ahead ledger stops it with the usual line.
+
+`<path>` may be anywhere and must not exist: a file (even an empty one), a
+directory or a symlink is refused with a message and a non-zero exit, and
+nothing is overwritten. Its parent directory must exist. The copy is written to
+a hidden `.<name>.XXXX.tmp` beside `<path>` and renamed into place, so `<path>`
+is never half-written; a hard kill can leave that temporary file, which is never
+read and may be deleted. The snapshot file is mode 0600.

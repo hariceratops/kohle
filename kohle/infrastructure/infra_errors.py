@@ -79,3 +79,22 @@ class LedgerBuildFailed(LedgerError):
 
     def __str__(self) -> str:
         return f"building the ledger at {self.path} failed and left it as it was: {self.reason}"
+
+
+class SnapshotExists(LedgerError):
+    def __init__(self, dest: Path):
+        super().__init__()
+        self.dest = dest
+
+    def __str__(self) -> str:
+        return f"{self.dest} already exists; snapshot never overwrites a file"
+
+
+class SnapshotFailed(LedgerError):
+    def __init__(self, dest: Path, reason: str):
+        super().__init__()
+        self.dest = dest
+        self.reason = reason
+
+    def __str__(self) -> str:
+        return f"writing a snapshot to {self.dest} failed: {self.reason}"
