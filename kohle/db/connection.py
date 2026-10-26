@@ -5,7 +5,7 @@ from urllib.parse import quote
 from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
-from kohle.infrastructure.device_config import DeviceConfig, effective
+from kohle.infrastructure.device_config import DeviceConfig, LedgerMode, effective
 
 base = declarative_base()
 
@@ -15,12 +15,17 @@ def ledger_path(config: DeviceConfig) -> Path:
     return cast(Path, effective(config, "ledger.path").value)
 
 
-def ledger_url(path: Path) -> str:
-    # mode=rw opens an existing file read-write and never creates one, so no
-    # command can leave an empty kohle.db behind. Quoted because SQLite URIs
+def ledger_mode(config: DeviceConfig) -> LedgerMode:
+    return cast(LedgerMode, effective(config, "ledger.mode").value)
+
+
+def ledger_url(path: Path, mode: LedgerMode) -> str:
+    # Neither mode creates a file, so no command can leave an empty kohle.db
+    # behind; mode=ro also refuses every write. Quoted because SQLite URIs
     # give '?', '#' and '%' meaning, and an unquoted '?' in a directory name
     # silently opens a different file.
-    return f"sqlite:///file:{quote(str(path))}?mode=rw&uri=true"
+    sqlite_mode = "ro" if mode == "reader" else "rw"
+    return f"sqlite:///file:{quote(str(path))}?mode={sqlite_mode}&uri=true"
 
 
 def _enable_foreign_keys(dbapi_connection, _) -> None:

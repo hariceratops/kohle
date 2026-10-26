@@ -52,15 +52,23 @@ Settings that describe one machine live in
 writes it; a missing file means every key takes its default.
 
 The file is TOML. `[ledger]` with `path = "..."` and `ledger.path = "..."` are
-equivalent. The only key is:
+equivalent. The keys are:
 
 - `ledger.path`: where the ledger is, an absolute path or one starting with
   `~`. The value is checked for form only; a path with no ledger behind it
   still gives "no ledger at <path>". `KOHLE_DB` overrides it.
+- `ledger.mode`: `writer` (the default) or `reader`, case-sensitive. On a
+  `reader` the ledger file is opened read-only, so `balance`, `list-accounts`
+  and the reports work normally and SQLite refuses any write. This depends only
+  on the key: any ledger file can be opened read-only, whether or not it came
+  from `snapshot`. A reader never creates a file: a missing one gives "no
+  ledger at <path>; this device is configured as a reader and never creates
+  one". There is no environment override.
 
 ```toml
 [ledger]
 path = "~/books/kohle.db"
+mode = "reader"
 ```
 
 Precedence for a key is the built-in default, then the file, then `KOHLE_DB`
@@ -81,6 +89,7 @@ where it came from (`default`, `file` or `KOHLE_DB`), then the config file it
 read:
 ```
 ledger.path = /home/hari/.local/share/kohle/kohle.db  (default)
+ledger.mode = writer  (default)
 
 file: /home/hari/.config/kohle/config.toml (not found)
 ```

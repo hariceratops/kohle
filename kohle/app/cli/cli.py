@@ -7,7 +7,7 @@ from typing import assert_never
 import click
 from tabulate import tabulate
 
-from kohle.db.connection import ledger_path
+from kohle.db.connection import ledger_mode, ledger_path
 from kohle.db.schema import migrate_ledger, open_ledger, snapshot_ledger
 from kohle.domain.domain_errors import (
     AccountNotFoundError,
@@ -200,7 +200,7 @@ class _KohleCommand(click.Command):
         config = loaded.unwrap()
         ctx.meta[_DEVICE_CONFIG] = config
         if self.opens_ledger and ctx.obj is None:
-            opened = open_ledger(ledger_path(config))
+            opened = open_ledger(ledger_path(config), ledger_mode(config))
             if opened.is_err:
                 raise click.ClickException(str(opened.unwrap_err()))
             ctx.obj = opened.unwrap()
@@ -269,7 +269,7 @@ def migrate_cmd(config: DeviceConfig) -> None:
 @pass_device_config
 def snapshot_cmd(config: DeviceConfig, dest: Path) -> None:
     path = ledger_path(config)
-    res = snapshot_ledger(path, dest)
+    res = snapshot_ledger(path, ledger_mode(config), dest)
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
     click.echo(f"Wrote a snapshot of {path} to {dest}")

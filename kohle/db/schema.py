@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from kohle.core.result import Result
 from kohle.db.connection import ledger_url, make_engine, make_session_factory
+from kohle.infrastructure.device_config import LedgerMode
 from kohle.infrastructure.infra_errors import (
     LedgerAhead,
     LedgerBehind,
@@ -84,11 +85,11 @@ def check_schema(path: Path, engine: Engine) -> Result[str, LedgerError]:
     return _classify(path, stored)
 
 
-def _open_checked(path: Path) -> Result[Engine, LedgerError]:
+def _open_checked(path: Path, mode: LedgerMode) -> Result[Engine, LedgerError]:
     """An engine on an existing, current ledger. The caller disposes of it."""
     if not path.exists():
-        return Result.err(NoLedger(path))
-    engine = make_engine(ledger_url(path))
+        return Result.err(NoLedger(path, mode))
+    engine = make_engine(ledger_url(path, mode))
     checked = check_schema(path, engine)
     if checked.is_err:
         engine.dispose()
@@ -96,8 +97,8 @@ def _open_checked(path: Path) -> Result[Engine, LedgerError]:
     return Result.ok(engine)
 
 
-def open_ledger(path: Path) -> Result[sessionmaker[Session], LedgerError]:
-    return _open_checked(path).map(make_session_factory)
+def open_ledger(path: Path, mode: LedgerMode) -> Result[sessionmaker[Session], LedgerError]:
+    return _open_checked(path, mode).map(make_session_factory)
 
 
 def _upgrade_to_head(staged: Path) -> str:
@@ -107,7 +108,7 @@ def _upgrade_to_head(staged: Path) -> str:
     config = alembic_config()
     # NullPool and no foreign-key pragma: batch_alter_table copies and drops
     # tables, and relies on foreign keys being off.
-    engine = create_engine(ledger_url(staged), poolclass=pool.NullPool)
+    engine = create_engine(ledger_url(staged, "writer"), poolclass=pool.NullPool)
     try:
         with engine.begin() as connection:
             config.attributes["connection"] = connection
@@ -157,7 +158,7 @@ def build_ledger[E](
             _copy_ledger(target, staged)
         head = _upgrade_to_head(staged)
         if populate is not None:
-            populate_engine = make_engine(ledger_url(staged))
+            populate_engine = make_engine(ledger_url(staged, "writer"))
             populated = populate(make_session_factory(populate_engine))
             if populated.is_err:
                 return Result.err(populated.unwrap_err())
@@ -174,9 +175,9 @@ def build_ledger[E](
 
 def migrate_ledger(path: Path) -> Result[Migration, LedgerError]:
     if not path.exists():
-        return Result.err(NoLedger(path))
+        return Result.err(NoLedger(path, "writer"))
     # Opening read-write rolls back a hot journal, so the backup copies a clean file.
-    engine = make_engine(ledger_url(path))
+    engine = make_engine(ledger_url(path, "writer"))
     try:
         checked = check_schema(path, engine)
     finally:
@@ -191,10 +192,10 @@ def migrate_ledger(path: Path) -> Result[Migration, LedgerError]:
     return built.map(lambda head: Migration(err.stored, head))
 
 
-def snapshot_ledger(path: Path, dest: Path) -> Result[Path, LedgerError]:
+def snapshot_ledger(path: Path, mode: LedgerMode, dest: Path) -> Result[Path, LedgerError]:
     """Write a consistent, self-contained copy of the ledger to `dest`, which
     must not exist. Reads the ledger only."""
-    opened = _open_checked(path)
+    opened = _open_checked(path, mode)
     if opened.is_err:
         return Result.err(opened.unwrap_err())
     engine = opened.unwrap()

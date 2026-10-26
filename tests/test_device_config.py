@@ -146,7 +146,7 @@ def test_unknown_key_stops_commands_but_not_help(write_config) -> None:
 
     assert result.exit_code == 1
     assert result.output == (
-        f"Error: {config}: unknown device key 'ledgr.path'; known device keys: ledger.path\n"
+        f"Error: {config}: unknown device key 'ledgr.path'; known device keys: ledger.path, ledger.mode\n"
     )
     for args in (["--help"], ["list-accounts", "--help"]):
         assert runner.invoke(cli, args).exit_code == 0

@@ -1,5 +1,7 @@
 from pathlib import Path
 
+from kohle.infrastructure.device_config import LedgerMode
+
 
 class InfrastructureError(Exception):
     pass
@@ -29,11 +31,14 @@ class LedgerError(Exception):
 
 
 class NoLedger(LedgerError):
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, mode: LedgerMode):
         super().__init__()
         self.path = path
+        self.mode = mode
 
     def __str__(self) -> str:
+        if self.mode == "reader":
+            return f"no ledger at {self.path}; this device is configured as a reader and never creates one"
         return f"no ledger at {self.path}; run `kohle-cli init`"
 
 
