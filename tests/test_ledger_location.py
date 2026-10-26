@@ -11,6 +11,7 @@ from alembic import command
 from kohle.app.cli.cli import cli
 from kohle.db.connection import ledger_path
 from kohle.db.schema import SCRIPT_LOCATION, alembic_config
+from kohle.infrastructure.device_config import load_device_config
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -19,7 +20,7 @@ def test_kohle_db_wins_over_xdg_data_home(tmp_path: Path, monkeypatch: pytest.Mo
     monkeypatch.setenv("KOHLE_DB", str(tmp_path / "chosen.db"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
 
-    assert ledger_path() == tmp_path / "chosen.db"
+    assert ledger_path(load_device_config().unwrap()) == tmp_path / "chosen.db"
 
 
 @pytest.mark.parametrize("kohle_db", [None, ""])
@@ -32,7 +33,7 @@ def test_xdg_data_home_is_used_when_kohle_db_is_unset_or_empty(
         monkeypatch.setenv("KOHLE_DB", kohle_db)
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
 
-    assert ledger_path() == tmp_path / "xdg" / "kohle" / "kohle.db"
+    assert ledger_path(load_device_config().unwrap()) == tmp_path / "xdg" / "kohle" / "kohle.db"
 
 
 @pytest.mark.parametrize("xdg", [None, ""])
@@ -46,7 +47,7 @@ def test_home_local_share_is_the_fallback(
         monkeypatch.setenv("XDG_DATA_HOME", xdg)
     monkeypatch.setenv("HOME", str(tmp_path))
 
-    assert ledger_path() == tmp_path / ".local" / "share" / "kohle" / "kohle.db"
+    assert ledger_path(load_device_config().unwrap()) == tmp_path / ".local" / "share" / "kohle" / "kohle.db"
 
 
 def test_two_working_directories_read_the_same_ledger(
@@ -54,7 +55,7 @@ def test_two_working_directories_read_the_same_ledger(
 ) -> None:
     monkeypatch.delenv("KOHLE_DB")
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
-    db = ledger_path()
+    db = ledger_path(load_device_config().unwrap())
     db.parent.mkdir(parents=True)
     db.touch()
     command.upgrade(alembic_config(), "head")

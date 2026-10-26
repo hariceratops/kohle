@@ -20,6 +20,7 @@ from kohle.infrastructure.model_serde import Record, SerdePolicy
 from kohle.app.tui.widgets.table_editor.table_controller import TableControllerBuilder, TableController
 from kohle.db.connection import ledger_path
 from kohle.db.schema import open_ledger
+from kohle.infrastructure.device_config import load_device_config
 from kohle.domain.models import DebitCategory
 from kohle.use_cases.debit_categories import add_debit_category, list_debit_categories
 from textual.logging import TextualHandler
@@ -266,7 +267,7 @@ class DemoApp(App):
             .edit_policy(edit_policy)
             .lister(list_debit_categories)
             .adder(add_use_case)
-            .build(open_ledger(ledger_path()).unwrap())
+            .build(open_ledger(ledger_path(load_device_config().unwrap())).unwrap())
         )
 
         yield Header()

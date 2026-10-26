@@ -12,12 +12,15 @@ reference, scoped to the cash account. `kohle-cli` is the primary frontend;
 `kohle-tui` is a Textual application intended as a second frontend over the
 same use cases, and is currently unwired.
 
-The ledger lives at `KOHLE_DB` or `$XDG_DATA_HOME/kohle/kohle.db`; its schema
+The ledger lives at `KOHLE_DB`, else `ledger.path` in `config.toml`, else
+`$XDG_DATA_HOME/kohle/kohle.db`; its schema
 is created and upgraded only by `kohle-cli init` and `migrate`, from the
 Alembic migrations packaged in `kohle/db/migrations/`, and every other command
 checks its revision first. Ledger-wide settings live in the `settings` table,
 keyed by the registry in `kohle/use_cases/settings.py`, never in environment
-variables.
+variables. Device settings live in `$XDG_CONFIG_HOME/kohle/config.toml`, keyed
+by the separate registry in `kohle/infrastructure/device_config.py`; kohle
+never writes that file.
 
 The ledger is multi-unit: every journal line carries a quantity, the unit it
 is denominated in, and the price that unit had at the time of the

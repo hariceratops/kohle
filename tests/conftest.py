@@ -19,7 +19,7 @@ from kohle.use_cases.journal import PEOPLE_ROOT
 
 @pytest.fixture(autouse=True)
 def _no_real_user_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep every test off the developer's real ledger and init file.
+    """Keep every test off the developer's real ledger and config files.
 
     A test that forgets to inject a factory gets "no ledger at ..." instead of
     touching the per-user path.
@@ -27,6 +27,20 @@ def _no_real_user_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setenv("KOHLE_DB", str(tmp_path / "no-ledger" / "kohle.db"))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+
+@pytest.fixture
+def write_config(tmp_path: Path):
+    """Write `$XDG_CONFIG_HOME/kohle/config.toml`; return the file's path."""
+
+    def write(content: str) -> Path:
+        config = tmp_path / "xdg-config" / "kohle" / "config.toml"
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text(content)
+        return config
+
+    return write
 
 
 @pytest.fixture

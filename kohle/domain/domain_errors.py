@@ -571,3 +571,48 @@ class SettingDiffers(SettingError):
 class StateNotSet(SettingError):
     def __str__(self) -> str:
         return "no state set for this ledger; set it with `kohle-cli set-setting state <code>` or pass --state"
+
+
+class DeviceKeyNotASetting(SettingError):
+    def __init__(self, key: str, config_path: Path) -> None:
+        super().__init__()
+        self.key = key
+        self.config_path = config_path
+
+    def __str__(self) -> str:
+        return f"`{self.key}` is a device key; edit {self.config_path}"
+
+
+class DeviceConfigError(Exception):
+    pass
+
+
+class InvalidDeviceValue(DeviceConfigError):
+    def __init__(self, key: str, value: object, expected: str) -> None:
+        super().__init__()
+        self.key = key
+        self.value = value
+        self.expected = expected
+
+    def __str__(self) -> str:
+        return f"invalid {self.key} {self.value!r}; expected {self.expected}"
+
+
+class UnknownDeviceKey(DeviceConfigError):
+    def __init__(self, key: str, known: list[str]) -> None:
+        super().__init__()
+        self.key = key
+        self.known = known
+
+    def __str__(self) -> str:
+        return f"unknown device key {self.key!r}; known device keys: {', '.join(self.known)}"
+
+
+class BadConfigFile(DeviceConfigError):
+    def __init__(self, path: Path, reason: str | UnknownDeviceKey | InvalidDeviceValue) -> None:
+        super().__init__()
+        self.path = path
+        self.reason = reason
+
+    def __str__(self) -> str:
+        return f"{self.path}: {self.reason}"

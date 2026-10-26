@@ -17,28 +17,31 @@ This feature adds:
   database gives one clear message instead of a stack trace;
 - a settings table in the ledger. Its first setting is the Bundesland, which
   `init` requires;
-- a per-user init file, `init.rc`, which is `init`'s only input. `init`
+- a per-user init file, `init.toml`, which is `init`'s only input. `init`
   copies its values into the settings table once, and nothing reads the file
   after that.
 
-`configurable-net-worth-sampling` and `budgeting` build on this settings
-mechanism and must not invent a second one.
+Ledger settings live in this settings table; device settings live in
+`config.toml`, defined by `device-config`. `configurable-net-worth-sampling`
+and `budgeting` build on these two and must not invent a third mechanism.
 
 ## Goals
 
 - **One database location, independent of the working directory.** The path
-  is `KOHLE_DB` if set. Otherwise it is `$XDG_DATA_HOME/kohle/kohle.db`,
+  is `KOHLE_DB` if set, else `ledger.path` from `config.toml`
+  (`device-config`). Otherwise it is `$XDG_DATA_HOME/kohle/kohle.db`,
   falling back to `~/.local/share/kohle/kohle.db` when `XDG_DATA_HOME` is
   unset. There is no `--db` flag. `KOHLE_DB` is the only environment
   variable that selects the database. `XDG_CONFIG_HOME` and `HOME` are read
-  only to find the init file, and no environment variable supplies a setting.
+  only to find the init file and `config.toml`, and no environment variable
+  supplies a setting.
   Plugin variables (`KOHLE_PRICE_FILE`, `KOHLE_ALPHAVANTAGE_KEY`) are
   unaffected. The same
   path resolution is used by `kohle-cli`, `kohle-tui`, and the repo's Alembic
   environment, so `alembic revision --autogenerate` still works for writing
-  migrations. Testable: with `KOHLE_DB` unset and `XDG_DATA_HOME` pointing at
-  a temp dir, commands run from two different working directories read the
-  same ledger.
+  migrations. Testable: with `KOHLE_DB` unset and `XDG_DATA_HOME` and
+  `XDG_CONFIG_HOME` pointing at temp dirs, commands run from two different
+  working directories read the same ledger.
 - **Migrations ship with the package.** An installed `kohle-cli` can run
   `init` and `migrate` outside a checkout. They run the packaged migrations
   in code, never by shelling out to `alembic`. A database is valid only
@@ -47,8 +50,8 @@ mechanism and must not invent a second one.
   after `init`, the recorded Alembic revision equals the code's head.
 - **`init` reads its input from an init file.** `init` takes no flags and
   never prompts.
-  - Its only input is `$XDG_CONFIG_HOME/kohle/init.rc`, falling back to
-    `~/.config/kohle/init.rc` when `XDG_CONFIG_HOME` is unset. No other file
+  - Its only input is `$XDG_CONFIG_HOME/kohle/init.toml`, falling back to
+    `~/.config/kohle/init.toml` when `XDG_CONFIG_HOME` is unset. No other file
     is looked at (no `./.kohlerc`), and nothing is merged.
   - The file is TOML. The only key now is `state`, for example
     `state = "BW"`. Settings that a later feature requires at init are added
@@ -71,11 +74,11 @@ mechanism and must not invent a second one.
 
   Testable, with `KOHLE_DB` pointing at a fresh temp path and
   `XDG_CONFIG_HOME` at a temp dir:
-  - with `kohle/init.rc` containing `state = "BW"`, `init` followed by
+  - with `kohle/init.toml` containing `state = "BW"`, `init` followed by
     `list-accounts` shows the `People` root, and the settings listing shows
     `state = BW`;
-  - with no `kohle/init.rc`, `init` exits non-zero naming
-    `<XDG_CONFIG_HOME>/kohle/init.rc`, and no file exists at `KOHLE_DB`;
+  - with no `kohle/init.toml`, `init` exits non-zero naming
+    `<XDG_CONFIG_HOME>/kohle/init.toml`, and no file exists at `KOHLE_DB`;
   - with `state = "XX"`, or with an extra unknown key, `init` exits non-zero
     with the matching message, and no file exists at `KOHLE_DB`.
 - **`init` on an existing database never writes to it.** The file's `state`
@@ -106,8 +109,9 @@ mechanism and must not invent a second one.
   only makes sure nothing it adds stands in its way. Testable: the check
   succeeds against a `sqlite:///file:<path>?mode=ro&uri=true` URL of an
   up-to-date ledger.
-- **Settings live in the ledger.** Settings are stored in a table in the
-  database, never in environment variables.
+- **Ledger settings live in the ledger.** Ledger settings are stored in a
+  table in the database, never in environment variables. Device settings
+  live in `config.toml` instead (`device-config`).
   - Keys come from a fixed list in the code, and each key has its own value
     validator. The only key now is `state`. Sampling and budgeting add
     theirs later.
