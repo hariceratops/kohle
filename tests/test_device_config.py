@@ -56,7 +56,6 @@ def test_ledger_resolution_order_end_to_end(write_config, write_init_rc, tmp_pat
     default = tmp_path / "xdg-data" / "kohle" / "kohle.db"
     write_config(f'ledger.path = "{from_file}"\n')
 
-    # ledger.path only
     monkeypatch.delenv("KOHLE_DB")
     assert _resolved() == from_file
     _init_at(runner, write_init_rc)
@@ -65,7 +64,6 @@ def test_ledger_resolution_order_end_to_end(write_config, write_init_rc, tmp_pat
     assert result.exit_code == 0, result.output
     assert str(from_file) in result.output
 
-    # KOHLE_DB wins over the file
     monkeypatch.setenv("KOHLE_DB", str(from_env))
     assert _resolved() == from_env
     _init_at(runner, write_init_rc)
@@ -76,7 +74,6 @@ def test_ledger_resolution_order_end_to_end(write_config, write_init_rc, tmp_pat
     monkeypatch.setenv("KOHLE_DB", "")
     assert _resolved() == from_file
 
-    # neither
     write_config("")
     monkeypatch.delenv("KOHLE_DB")
     assert _resolved() == default

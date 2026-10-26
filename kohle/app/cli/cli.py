@@ -206,8 +206,6 @@ class _KohleCommand(click.Command):
 
 
 class _KohleGroup(click.Group):
-    # Every command declared on `cli` reads the config and, unless it passes
-    # opens_ledger=False, opens the ledger. Nothing passes cls=.
     command_class = _KohleCommand
 
 

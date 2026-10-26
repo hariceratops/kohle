@@ -51,9 +51,7 @@ def _default_ledger_path() -> Path:
     return data_dir / "kohle" / "kohle.db"
 
 
-# Device keys, in listing order. A later feature adds its key here, and the
-# file follows. Ledger settings are SETTINGS in kohle/use_cases/settings.py, a
-# separate registry.
+# Separate from the ledger SETTINGS in kohle/use_cases/settings.py.
 DEVICE_KEYS: dict[str, DeviceKey] = {
     "ledger.path": DeviceKey(_ledger_path_value, _default_ledger_path),
 }
@@ -87,9 +85,9 @@ def validate_device_config(raw: Mapping[str, object]) -> Result[dict[str, object
 
 @dataclass(frozen=True, slots=True)
 class DeviceConfig:
-    path: Path  # the file read, or looked for
+    path: Path
     found: bool
-    values: dict[str, object]  # validated values set in the file; absent keys take their default
+    values: dict[str, object]
 
 
 def load_device_config() -> Result[DeviceConfig, BadConfigFile]:
