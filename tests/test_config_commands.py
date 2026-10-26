@@ -8,6 +8,7 @@ import pytest
 from click.testing import CliRunner
 
 from kohle.app.cli.cli import cli
+from kohle.domain.models import Operation, OperationGroup, Setting
 
 from .test_schema_check import BEHIND, _build, _set_revision
 
@@ -94,21 +95,64 @@ def test_config_commands_fail_on_a_bad_config(command: list[str], write_config) 
     assert "ledgr.path" in result.output
 
 
-@pytest.mark.skip(reason="058: not implemented")
-def test_list_settings_ledger_line_shows_its_source() -> None:
-    # TODO(058): (KOHLE_DB) / (file) / (default); exactly `ledger:   (in memory)`
-    # with an injected factory (design 15.5).
-    ...
+def test_list_settings_ledger_line_shows_its_source(
+    write_config, run_init, write_init_rc, tmp_path: Path, monkeypatch
+) -> None:
+    write_init_rc('state = "BW"\n')
+    db = tmp_path / "books" / "kohle.db"
+    monkeypatch.setenv("KOHLE_DB", str(db))
+    assert run_init().exit_code == 0
+
+    result = CliRunner().invoke(cli, ["list-settings"])
+    assert f"ledger:   {db.resolve()}  (KOHLE_DB)\n" in result.output
+
+    monkeypatch.delenv("KOHLE_DB")
+    write_config(f'ledger.path = "{db}"\n')
+    result = CliRunner().invoke(cli, ["list-settings"])
+    assert f"ledger:   {db.resolve()}  (file)\n" in result.output
+
+    default = _default_path(tmp_path)
+    default.parent.mkdir(parents=True)
+    db.rename(default)
+    write_config("")
+    result = CliRunner().invoke(cli, ["list-settings"])
+    assert f"ledger:   {default.resolve()}  (default)\n" in result.output
 
 
-@pytest.mark.skip(reason="058: not implemented")
-def test_set_setting_refuses_device_keys_and_writes_nothing() -> None:
-    # TODO(058): exit 1, message names the config path, Setting / Operation /
-    # OperationGroup counts unchanged.
-    ...
+def test_list_settings_in_memory_has_no_source(session_factory) -> None:
+    result = CliRunner().invoke(cli, ["list-settings"], obj=session_factory)
+
+    assert result.exit_code == 0, result.output
+    assert "ledger:   (in memory)\n" in result.output
 
 
-@pytest.mark.skip(reason="058: not implemented")
-def test_set_setting_for_ledger_keys_is_unchanged() -> None:
-    # TODO(058): `set-setting foo x` lists state; `set-setting state HE` works.
-    ...
+def _counts(session_factory) -> tuple[int, int, int]:
+    with session_factory() as s:
+        return tuple(
+            s.query(model).count() for model in (Setting, Operation, OperationGroup)
+        )  # type: ignore[return-value]
+
+
+def test_set_setting_refuses_device_keys_and_writes_nothing(
+    session_factory, write_config
+) -> None:
+    config = write_config("")
+    before = _counts(session_factory)
+
+    args = ["set-setting", "ledger.path", "/x"]
+    result = CliRunner().invoke(cli, args, obj=session_factory)
+
+    assert result.exit_code == 1
+    assert f"`ledger.path` is a device key; edit {config}" in result.output
+    assert _counts(session_factory) == before
+
+
+def test_set_setting_for_ledger_keys_is_unchanged(session_factory) -> None:
+    result = CliRunner().invoke(cli, ["set-setting", "foo", "x"], obj=session_factory)
+    assert result.exit_code == 1
+    assert "unknown setting 'foo'; known settings: state" in result.output
+
+    args = ["set-setting", "state", "HE"]
+    result = CliRunner().invoke(cli, args, obj=session_factory)
+    assert result.exit_code == 0, result.output
+    assert "Set state to HE" in result.output

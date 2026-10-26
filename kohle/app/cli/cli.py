@@ -11,6 +11,7 @@ from kohle.db.connection import ledger_path
 from kohle.db.schema import migrate_ledger, open_ledger
 from kohle.domain.domain_errors import (
     AccountNotFoundError,
+    DeviceKeyNotASetting,
     StateNotSet,
     UnknownDeviceKey,
 )
@@ -287,8 +288,9 @@ def get_config_cmd(config: DeviceConfig, key: str) -> None:
 
 
 @cli.command()
+@pass_device_config
 @click.pass_obj
-def list_settings_cmd(make_session):
+def list_settings_cmd(make_session, config: DeviceConfig):
     res = ListSettings(make_session()).execute()
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
@@ -296,15 +298,19 @@ def list_settings_cmd(make_session):
     for key, value in report.values.items():
         click.echo(f"{key} = {'(unset)' if value is None else value}")
     click.echo()
-    click.echo(f"ledger:   {report.ledger or '(in memory)'}")
+    ledger = report.ledger and _with_source(report.ledger, effective(config, "ledger.path").source)
+    click.echo(f"ledger:   {ledger or '(in memory)'}")
     click.echo(f"revision: {report.revision or '(none)'}")
 
 
 @cli.command()
 @click.argument("key")
 @click.argument("value")
+@pass_device_config
 @click.pass_obj
-def set_setting_cmd(make_session, key: str, value: str):
+def set_setting_cmd(make_session, config: DeviceConfig, key: str, value: str):
+    if key in DEVICE_KEYS:
+        raise click.ClickException(str(DeviceKeyNotASetting(key, config.path)))
     res = SetSettings(make_session()).execute({key: value})
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))

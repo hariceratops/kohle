@@ -115,8 +115,8 @@ revision <rev>` and exits 0; behind, it exits non-zero and points to `migrate`; 
 stored `state` that differs or is unset, it exits non-zero and points to
 `set-setting state <code>`. A failed or interrupted first `init` leaves no
 ledger. `list-settings`
-shows every setting (`state = (unset)` when not set), then the ledger path and
-its schema revision.
+shows every setting (`state = (unset)` when not set), then the ledger path, with
+how it was chosen (`default`, `file` or `KOHLE_DB`), and its schema revision.
 
 ```bash
 kohle-cli set-setting state HE
@@ -126,7 +126,8 @@ and validation as the init file. An unknown key lists the known keys and an
 invalid value lists the valid ones; either exits non-zero and writes nothing.
 Each change is recorded as an operation (`settings`, `create` the first time,
 `update` after) and shows in `list-operations`; setting the current value again
-changes nothing and records nothing.
+changes nothing and records nothing. A device key such as `ledger.path` is
+refused with a pointer to the config file; edit that file instead.
 
 ### Schema check
 Every command except `init`, `migrate` and `--help` first checks the ledger's schema

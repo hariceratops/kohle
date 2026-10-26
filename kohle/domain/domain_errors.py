@@ -573,6 +573,16 @@ class StateNotSet(SettingError):
         return "no state set for this ledger; set it with `kohle-cli set-setting state <code>` or pass --state"
 
 
+class DeviceKeyNotASetting(SettingError):
+    def __init__(self, key: str, config_path: Path) -> None:
+        super().__init__()
+        self.key = key
+        self.config_path = config_path
+
+    def __str__(self) -> str:
+        return f"`{self.key}` is a device key; edit {self.config_path}"
+
+
 class DeviceConfigError(Exception):
     pass
 
