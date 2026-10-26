@@ -63,7 +63,9 @@ equivalent. The keys are:
   on the key: any ledger file can be opened read-only, whether or not it came
   from `snapshot`. A reader never creates a file: a missing one gives "no
   ledger at <path>; this device is configured as a reader and never creates
-  one". There is no environment override.
+  one". Commands that write the ledger (`init`, `migrate`, `record`, the
+  imports, `set-setting`, `fetch-prices` and the rest) refuse on a reader before
+  doing anything, naming the config file. There is no environment override.
 
 ```toml
 [ledger]

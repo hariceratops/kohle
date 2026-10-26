@@ -11,6 +11,7 @@ from kohle.db.connection import ledger_mode, ledger_path
 from kohle.db.schema import migrate_ledger, open_ledger, snapshot_ledger
 from kohle.domain.domain_errors import (
     AccountNotFoundError,
+    DeviceIsReader,
     DeviceKeyNotASetting,
     StateNotSet,
     UnknownDeviceKey,
@@ -187,10 +188,13 @@ class _KohleCommand(click.Command):
     open the ledger: the command either needs none (list-config, get-config) or
     opens it through kohle/db (init, migrate, snapshot).
     A factory injected through obj (tests) is the caller's schema, unchecked;
-    the config file is read regardless."""
+    the config file is read regardless. `writes` is required so that no command
+    is classified by default; a writes=True command is refused on a reader
+    before its body (and so before any plugin or network call) runs."""
 
-    def __init__(self, *args, opens_ledger: bool = True, **kwargs) -> None:
+    def __init__(self, *args, writes: bool, opens_ledger: bool = True, **kwargs) -> None:
         super().__init__(*args, **kwargs)
+        self.writes = writes
         self.opens_ledger = opens_ledger
 
     def invoke(self, ctx: click.Context) -> object:
@@ -199,8 +203,11 @@ class _KohleCommand(click.Command):
             raise click.ClickException(str(loaded.unwrap_err()))
         config = loaded.unwrap()
         ctx.meta[_DEVICE_CONFIG] = config
+        mode = ledger_mode(config)
+        if self.writes and mode == "reader":
+            raise click.ClickException(str(DeviceIsReader(config.path)))
         if self.opens_ledger and ctx.obj is None:
-            opened = open_ledger(ledger_path(config), ledger_mode(config))
+            opened = open_ledger(ledger_path(config), mode)
             if opened.is_err:
                 raise click.ClickException(str(opened.unwrap_err()))
             ctx.obj = opened.unwrap()
@@ -232,7 +239,7 @@ def _read_init_file(path: Path) -> dict[str, object]:
         raise click.ClickException(f"{path}: {e}") from None
 
 
-@cli.command(name="init", opens_ledger=False)
+@cli.command(name="init", opens_ledger=False, writes=True)
 @pass_device_config
 def init_cmd(config: DeviceConfig) -> None:
     rc = _init_file_path()
@@ -250,7 +257,7 @@ def init_cmd(config: DeviceConfig) -> None:
         click.echo(f"already initialized at {done.path}, revision {done.revision}")
 
 
-@cli.command(name="migrate", opens_ledger=False)
+@cli.command(name="migrate", opens_ledger=False, writes=True)
 @pass_device_config
 def migrate_cmd(config: DeviceConfig) -> None:
     path = ledger_path(config)
@@ -264,7 +271,7 @@ def migrate_cmd(config: DeviceConfig) -> None:
         click.echo(f"Migrated ledger at {path} from revision {m.before or 'none'} to {m.after}")
 
 
-@cli.command(name="snapshot", opens_ledger=False)
+@cli.command(name="snapshot", opens_ledger=False, writes=False)
 @click.argument("dest", type=click.Path(path_type=Path))
 @pass_device_config
 def snapshot_cmd(config: DeviceConfig, dest: Path) -> None:
@@ -279,7 +286,7 @@ def _with_source(value: object, source: str) -> str:
     return f"{value}  ({source})"
 
 
-@cli.command(opens_ledger=False)
+@cli.command(opens_ledger=False, writes=False)
 @pass_device_config
 def list_config_cmd(config: DeviceConfig) -> None:
     for key in DEVICE_KEYS:
@@ -289,7 +296,7 @@ def list_config_cmd(config: DeviceConfig) -> None:
     click.echo(f"file: {config.path}{'' if config.found else ' (not found)'}")
 
 
-@cli.command(opens_ledger=False)
+@cli.command(opens_ledger=False, writes=False)
 @click.argument("key")
 @pass_device_config
 def get_config_cmd(config: DeviceConfig, key: str) -> None:
@@ -298,7 +305,7 @@ def get_config_cmd(config: DeviceConfig, key: str) -> None:
     click.echo(str(effective(config, key).value))
 
 
-@cli.command()
+@cli.command(writes=False)
 @pass_device_config
 @click.pass_obj
 def list_settings_cmd(make_session, config: DeviceConfig):
@@ -314,7 +321,7 @@ def list_settings_cmd(make_session, config: DeviceConfig):
     click.echo(f"revision: {report.revision or '(none)'}")
 
 
-@cli.command()
+@cli.command(writes=True)
 @click.argument("key")
 @click.argument("value")
 @pass_device_config
@@ -328,7 +335,7 @@ def set_setting_cmd(make_session, config: DeviceConfig, key: str, value: str):
     click.echo(f"Set {key} to {value}")
 
 
-@cli.command()
+@cli.command(writes=True)
 @click.argument("name")
 @click.option("--type", "account_type", type=click.Choice([t.name for t in AccountType]), default="expense")
 @click.option("--iban", default=None)
@@ -342,7 +349,7 @@ def add_account_cmd(make_session, name: str, account_type: str, iban: str | None
     click.echo(f"Added account {name} ({account_type}) with id {res.unwrap().id}")
 
 
-@cli.command()
+@cli.command(writes=False)
 @click.argument("account", required=False)
 @click.pass_obj
 def list_accounts_cmd(make_session, account: str | None):
@@ -362,7 +369,7 @@ def list_accounts_cmd(make_session, account: str | None):
     click.echo(tabulate(rows, headers="keys"))
 
 
-@cli.command()
+@cli.command(writes=False)
 @click.argument("parent_name")
 @click.pass_obj
 def list_child_accounts_cmd(make_session, parent_name: str):
@@ -374,7 +381,7 @@ def list_child_accounts_cmd(make_session, parent_name: str):
         click.echo(f"{a.id}: name={a.name}, type={a.type.name}")
 
 
-@cli.command()
+@cli.command(writes=True)
 @click.argument("identifier")
 @click.argument("name")
 @click.option("--kind", type=click.Choice([k.name for k in UnitKind]), default="security")
@@ -387,7 +394,7 @@ def add_unit_cmd(make_session, identifier: str, name: str, kind: str):
     click.echo(f"Added unit {identifier} ({kind}) with id {res.unwrap().id}")
 
 
-@cli.command()
+@cli.command(writes=False)
 @click.pass_obj
 def list_units_cmd(make_session):
     list_units = ListUnits(make_session())
@@ -398,7 +405,7 @@ def list_units_cmd(make_session):
         click.echo(f"{u.id}: {u.identifier} ({u.kind.name}) {u.name}")
 
 
-@cli.command()
+@cli.command(writes=False)
 def list_importer_plugins():
     plugins = load_plugins()
 
@@ -409,7 +416,7 @@ def list_importer_plugins():
         click.echo(name)
 
 
-@cli.command()
+@cli.command(writes=True)
 @click.argument("plugin_name", required=True)
 @click.argument("cash_account")
 @click.argument("instrument_account", nargs=-1, metavar="[INSTRUMENT_ACCOUNT]")
@@ -438,7 +445,7 @@ def import_statement(
     click.echo(f"Import succeded, {res.unwrap()} entries imported")
 
 
-@cli.command()
+@cli.command(writes=True)
 @click.argument("entry_date", type=click.DateTime(formats=["%Y-%m-%d"]))
 @click.argument("description")
 @click.argument("quantity", type=DECIMAL)
@@ -491,7 +498,7 @@ def record_cmd(
         )
 
 
-@cli.command()
+@cli.command(writes=True)
 @click.argument("entry_date", type=click.DateTime(formats=["%Y-%m-%d"]))
 @click.argument("description")
 @click.option(
@@ -511,7 +518,7 @@ def record_split_cmd(make_session, entry_date, description: str, lines: list[Lin
     click.echo(f"Recorded entry with {len(entry.lines)} lines")
 
 
-@cli.command()
+@cli.command(writes=False)
 @click.argument('account_name')
 @click.argument("start")
 @click.argument("end")
@@ -541,7 +548,7 @@ def entries_in_period(make_session, account_name, start, end):
     click.echo(tabulate(rows, headers="keys", floatfmt=".2f"))
 
 
-@cli.command()
+@cli.command(writes=False)
 @click.argument("account_name")
 @MAX_AGE_DAYS
 @click.pass_obj
@@ -583,7 +590,7 @@ def balance_cmd(make_session, account_name: str, max_age_days: int):
         click.echo(_estimates_line(summary))
 
 
-@cli.command()
+@cli.command(writes=False)
 @click.pass_obj
 def list_operations_cmd(make_session):
     list_operations = ListOperations(make_session())
@@ -605,7 +612,7 @@ def list_operations_cmd(make_session):
     click.echo(tabulate(rows, headers="keys"))
 
 
-@cli.command()
+@cli.command(writes=True)
 @click.argument("pattern")
 @click.argument("account")
 @click.option(
@@ -623,7 +630,7 @@ def add_rule_cmd(make_session, pattern: str, account: str, priority: int):
     click.echo(f"Added rule {res.unwrap().id}: {pattern} -> {account} (priority {priority})")
 
 
-@cli.command()
+@cli.command(writes=False)
 @click.pass_obj
 def list_rules_cmd(make_session):
     list_rules = ListRules(make_session())
@@ -648,7 +655,7 @@ def list_rules_cmd(make_session):
     click.echo(tabulate(rows, headers="keys"))
 
 
-@cli.command()
+@cli.command(writes=True)
 @click.argument("rule_id", type=int)
 @click.pass_obj
 def remove_rule_cmd(make_session, rule_id: int):
@@ -659,7 +666,7 @@ def remove_rule_cmd(make_session, rule_id: int):
     click.echo(f"Removed rule {rule_id}")
 
 
-@cli.command()
+@cli.command(writes=False)
 @click.pass_obj
 def list_unclassified_cmd(make_session):
     list_unclassified = ListUnclassified(make_session())
@@ -686,7 +693,7 @@ def list_unclassified_cmd(make_session):
     click.echo(tabulate(rows, headers="keys", floatfmt=".2f"))
 
 
-@cli.command()
+@cli.command(writes=True)
 @click.argument("entry_id", type=int)
 @click.argument("account")
 @click.pass_obj
@@ -698,7 +705,7 @@ def reclassify_cmd(make_session, entry_id: int, account: str):
     click.echo(f"Reclassified entry {entry_id} to {account}")
 
 
-@cli.command()
+@cli.command(writes=True)
 @click.argument("name")
 @click.pass_obj
 def add_group_cmd(make_session, name: str):
@@ -709,7 +716,7 @@ def add_group_cmd(make_session, name: str):
     click.echo(f"Added split group {name} with id {res.unwrap().id}")
 
 
-@cli.command()
+@cli.command(writes=True)
 @click.argument("entry_id", type=int)
 @click.option("--mine", "own_share", type=DECIMAL, required=True, help="Your own share of the line")
 @click.option(
@@ -735,7 +742,7 @@ def split_line_cmd(
     click.echo(f"Split entry {entry_id}: {own_share} own, " + ", ".join(f"{s.person_name} {s.quantity}" for s in shares))
 
 
-@cli.command()
+@cli.command(writes=True)
 @click.argument("entry_id", type=int)
 @click.pass_obj
 def unsplit_line_cmd(make_session, entry_id: int):
@@ -746,7 +753,7 @@ def unsplit_line_cmd(make_session, entry_id: int):
     click.echo(f"Undid the split of entry {entry_id}")
 
 
-@cli.command()
+@cli.command(writes=False)
 @click.option("--by-group", is_flag=True, default=False, help="Break the view down per group instead")
 @click.pass_obj
 def who_owes_what_cmd(make_session, by_group: bool):
@@ -850,7 +857,7 @@ def _estimates_line(summary: EstimateSummary) -> str:
     )
 
 
-@cli.command()
+@cli.command(writes=False)
 @MAX_AGE_DAYS
 @click.pass_obj
 def net_worth_cmd(make_session, max_age_days: int):
@@ -870,7 +877,7 @@ def net_worth_cmd(make_session, max_age_days: int):
     click.echo(_estimates_line(report.estimates))
 
 
-@cli.command()
+@cli.command(writes=False)
 @MAX_AGE_DAYS
 @click.pass_obj
 def positions_cmd(make_session, max_age_days: int):
@@ -898,7 +905,7 @@ def positions_cmd(make_session, max_age_days: int):
     click.echo(_estimates_line(summarise(positions)))
 
 
-@cli.command()
+@cli.command(writes=False)
 @click.option(
     "--year", type=click.IntRange(min=1), default=None,
     help="Only sales dated in this year; their cost still comes from earlier lots",
@@ -928,7 +935,7 @@ def realised_cmd(make_session, year: int | None):
     click.echo(f"\nRealised gain: {realised_gain(sales):.2f}")
 
 
-@cli.command()
+@cli.command(writes=False)
 @click.option(
     "--group", "group_name", default=None,
     help="Restrict to one group's participants, keeping their full balances (design §8.2)",
@@ -968,7 +975,7 @@ def settle_up_cmd(make_session, group_name: str | None):
         )
 
 
-@cli.command()
+@cli.command(writes=True)
 @click.argument("unit")
 @click.argument("plugin")
 @click.argument("symbol")
@@ -1025,7 +1032,7 @@ def _fetch_row(outcome: FetchOutcome) -> dict[str, str]:
             assert_never(outcome)
 
 
-@cli.command()
+@cli.command(writes=True)
 @click.pass_obj
 def fetch_prices_cmd(make_session):
     targets_res = ListPriceTargets(make_session()).execute()
@@ -1052,7 +1059,7 @@ def fetch_prices_cmd(make_session):
         raise click.ClickException(f"{unpriced} held securities unpriced")
 
 
-@cli.command()
+@cli.command(writes=False)
 @click.option(
     "--from", "start", type=click.DateTime(formats=["%Y-%m-%d"]), default=None,
     help="First date sampled; defaults to the earliest ledger entry",
