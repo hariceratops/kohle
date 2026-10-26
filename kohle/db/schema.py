@@ -19,12 +19,13 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session, sessionmaker
 
 from kohle.core.result import Result
-from kohle.db.connection import ledger_url, make_engine, make_session_factory
+from kohle.db.connection import is_busy, ledger_url, make_engine, make_session_factory
 from kohle.infrastructure.device_config import LedgerMode
 from kohle.infrastructure.infra_errors import (
     LedgerAhead,
     LedgerBehind,
     LedgerBuildFailed,
+    LedgerBusy,
     LedgerError,
     LedgerUnreadable,
     NoLedger,
@@ -81,7 +82,7 @@ def check_schema(path: Path, engine: Engine) -> Result[str, LedgerError]:
         with engine.connect() as connection:
             stored = stored_revision(connection)
     except DBAPIError as e:
-        return Result.err(LedgerUnreadable(path, str(e.orig)))
+        return Result.err(LedgerBusy() if is_busy(e) else LedgerUnreadable(path, str(e.orig)))
     return _classify(path, stored)
 
 
@@ -222,7 +223,7 @@ def snapshot_ledger(path: Path, mode: LedgerMode, dest: Path) -> Result[Path, Le
         os.replace(staged, dest)
         return Result.ok(dest)
     except DBAPIError as e:
-        return Result.err(SnapshotFailed(dest, str(e.orig)))
+        return Result.err(LedgerBusy() if is_busy(e) else SnapshotFailed(dest, str(e.orig)))
     except OSError as e:
         return Result.err(SnapshotFailed(dest, e.strerror or str(e)))
     finally:

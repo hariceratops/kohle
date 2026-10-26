@@ -103,3 +103,8 @@ class SnapshotFailed(LedgerError):
 
     def __str__(self) -> str:
         return f"writing a snapshot to {self.dest} failed: {self.reason}"
+
+
+class LedgerBusy(LedgerError):
+    def __str__(self) -> str:
+        return "the ledger stayed locked by another process; nothing was changed, try again"
