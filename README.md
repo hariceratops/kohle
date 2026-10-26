@@ -66,6 +66,7 @@ equivalent. The keys are:
   one". Commands that write the ledger (`init`, `migrate`, `record`, the
   imports, `set-setting`, `fetch-prices` and the rest) refuse on a reader before
   doing anything, naming the config file. There is no environment override.
+  See [Several devices](#several-devices).
 
 ```toml
 [ledger]
@@ -150,6 +151,12 @@ and a non-zero exit:
 - revision behind this kohle: the line names both revisions and says to run
   `kohle-cli migrate`;
 - revision ahead (a ledger from a newer kohle): the line says to upgrade kohle.
+
+Several kohle processes on one machine (a scheduled `fetch-prices` and an
+import, say) are serialised by SQLite. A command that finds the ledger locked
+by another writer waits up to 30 seconds for it. If the lock is still held, the
+command stops with `the ledger stayed locked by another process; nothing was
+changed, try again` and a non-zero exit. This applies in both modes.
 
 ### Upgrading the ledger
 `kohle-cli migrate` brings a ledger behind this kohle's revision up to it. It
@@ -840,7 +847,44 @@ kohle-cli add-unit DE0005190003 BMW
 kohle-cli import-statement kohle-simple-broker "Broker Cash" Depot statement.csv
 ```
 
-### Snapshots
+### Several devices
+If you use kohle on one machine and keep no copies of the ledger, skip this
+section.
+
+#### The model
+One device holds the writable ledger. Other devices read a copy of it.
+`kohle-cli snapshot` makes the copy, and `ledger.mode = "reader"` in a device's
+config keeps that copy read-only.
+
+The one-writer rule comes from copying a file between devices, not from kohle.
+File sync tools produce conflict copies, not merges, when two devices write the
+same file. Network filesystems lock unreliably, so SQLite's lock cannot
+serialise writers on different machines.
+
+This is the first of the known strategies, and the one kohle supports. A server
+layer in front of SQLite (rqlite, LiteFS, libSQL) is a possible later option. A
+synced operation log is a larger, separate feature. Neither is built. The
+connection is a single seam in `kohle/db/`, so another layer could be added
+there later. Record-and-replay and a writer handshake are also possible later
+work.
+
+#### Setting up a reader
+In the reader's [device config](#device-config):
+```toml
+[ledger]
+path = "~/Sync/kohle/kohle.db"
+mode = "reader"
+```
+The ledger is opened read-only. Reads work normally. Commands that write
+refuse up front with `this device is configured as a reader; `ledger.mode` is
+set in <config file>`. If the file at `ledger.path` is missing, the command
+says so and creates nothing. A copy from a newer kohle is reported as ahead:
+upgrade kohle on the reader. A reader never runs `migrate`.
+
+The same `ledger.path` works to point any device at a ledger in a synced
+folder.
+
+#### Making and moving copies
 `kohle-cli snapshot <path>` writes a consistent, self-contained copy of the
 ledger to `<path>` and exits zero. The copy opens as an ordinary ledger, with no
 journal or WAL file beside it. The ledger is only read: nothing is changed and
@@ -853,3 +897,31 @@ nothing is overwritten. Its parent directory must exist. The copy is written to
 a hidden `.<name>.XXXX.tmp` beside `<path>` and renamed into place, so `<path>`
 is never half-written; a hard kill can leave that temporary file, which is never
 read and may be deleted. The snapshot file is mode 0600.
+
+A scheduled job should not snapshot straight onto the last copy, because
+`snapshot` refuses an existing path. Write to a temporary name and rename it
+over the old copy.
+
+Moving the copy is up to you. Syncthing, a scheduled `rsync` pull, cron and a
+Raspberry Pi are examples, not requirements. One worked example is the
+author's: a Raspberry Pi 3 is the writer, a daily cron job runs `fetch-prices`
+and then a snapshot into a Syncthing folder, and a laptop and a tablet are
+readers of that folder (Send Only on the Pi, Receive Only on the readers).
+Receive Only is one way to make the transport one-way, not the only correct
+reader setup.
+```bash
+rm -f ~/Sync/kohle/.kohle.db.new
+kohle-cli snapshot ~/Sync/kohle/.kohle.db.new && mv ~/Sync/kohle/.kohle.db.new ~/Sync/kohle/kohle.db
+```
+
+#### Limits and caveats
+- Nothing in kohle stops a second device from being configured as a writer, and
+  a reader whose `config.toml` is missing falls back to `writer`. The guarantee
+  comes from the one-way transport, the device configuration and file
+  permissions, not from coordination between devices.
+- `chmod 444` on a reader's copy is a backstop: even a plain open of the file
+  cannot write it.
+- Reader copies are not backups. A corruption on the writer syncs out to every
+  reader.
+- Keep `config.toml` out of synced folders: it describes one device.
+- Point readers at a snapshot, not at a live file another process writes.
