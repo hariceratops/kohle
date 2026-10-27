@@ -25,7 +25,7 @@ InitError = LedgerError | SettingError
 
 def _compare_existing(path: Path, settings: Mapping[str, str]) -> Result[Initialized, InitError]:
     """Reads only: init never changes an existing ledger."""
-    engine = make_engine(ledger_url(path))
+    engine = make_engine(ledger_url(path, "writer"))
     try:
         checked = check_schema(path, engine)
         if checked.is_err:

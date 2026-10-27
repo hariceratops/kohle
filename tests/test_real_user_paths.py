@@ -43,7 +43,7 @@ def _audit(event: str, args: tuple) -> None:
 sys.addaudithook(_audit)
 
 
-def _record_invocations(write_init_rc, *extra: str) -> list[Path]:
+def _record_invocations(write_init_rc, *extra: str | tuple[str, ...]) -> list[Path]:
     global _recorded
     write_init_rc('state = "BW"\n')
     runner = CliRunner()
@@ -53,7 +53,7 @@ def _record_invocations(write_init_rc, *extra: str) -> list[Path]:
         runner.invoke(cli, ["list-accounts"])
         runner.invoke(cli, ["--help"])
         for command in extra:
-            runner.invoke(cli, [command])
+            runner.invoke(cli, [command] if isinstance(command, str) else list(command))
         return _recorded
     finally:
         _recorded = None
@@ -79,6 +79,17 @@ def test_temp_config_toml_is_among_the_recorded_opens(write_init_rc, tmp_path: P
 
 def test_list_config_never_touches_the_real_kohle_directories(write_init_rc) -> None:
     recorded = _record_invocations(write_init_rc, "list-config")
+
+    real = [
+        path
+        for path in recorded
+        if any(path.absolute().is_relative_to(directory) for directory in _REAL_DIRS)
+    ]
+    assert real == []
+
+
+def test_snapshot_never_touches_the_real_kohle_directories(write_init_rc, tmp_path: Path) -> None:
+    recorded = _record_invocations(write_init_rc, ("snapshot", str(tmp_path / "copy.db")))
 
     real = [
         path

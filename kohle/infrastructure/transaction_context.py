@@ -6,7 +6,8 @@ from sqlalchemy.orm import Session
 
 from kohle.core.result import Result
 from kohle.domain.models import Operation, OperationGroup
-from kohle.infrastructure.infra_errors import InfrastructureError, UniqueViolation
+from kohle.db.connection import is_busy
+from kohle.infrastructure.infra_errors import InfrastructureError, LedgerBusy, UniqueViolation
 
 T = TypeVar("T")
 
@@ -27,7 +28,7 @@ class DbTransactionContext:
         op.group_id = self.transaction_group.id
         self.transaction_steps.append(op)
 
-    def run(self, op: Callable[[Session], T]) -> Result[T, InfrastructureError]:
+    def run(self, op: Callable[[Session], T]) -> Result[T, InfrastructureError | LedgerBusy]:
         try:
             value = op(self.session)
             self.session.flush()
@@ -38,5 +39,5 @@ class DbTransactionContext:
             return Result.err(UniqueViolation(constraint=constraint))
 
         except Exception as e:
-            return Result.err(InfrastructureError(str(e)))
+            return Result.err(LedgerBusy() if is_busy(e) else InfrastructureError(str(e)))
 

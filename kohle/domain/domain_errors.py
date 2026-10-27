@@ -616,3 +616,12 @@ class BadConfigFile(DeviceConfigError):
 
     def __str__(self) -> str:
         return f"{self.path}: {self.reason}"
+
+
+class DeviceIsReader(DeviceConfigError):
+    def __init__(self, config_path: Path) -> None:
+        super().__init__()
+        self.config_path = config_path
+
+    def __str__(self) -> str:
+        return f"this device is configured as a reader; `ledger.mode` is set in {self.config_path}"

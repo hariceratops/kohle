@@ -45,6 +45,16 @@ def _ledger_path_value(value: object) -> Result[object, InvalidDeviceValue]:
     return Result.err(InvalidDeviceValue("ledger.path", value, "an absolute path, or one starting with ~"))
 
 
+LedgerMode = Literal["writer", "reader"]
+LEDGER_MODES: tuple[LedgerMode, ...] = ("writer", "reader")
+
+
+def _ledger_mode_value(value: object) -> Result[object, InvalidDeviceValue]:
+    if isinstance(value, str) and value in LEDGER_MODES:
+        return Result.ok(value)
+    return Result.err(InvalidDeviceValue("ledger.mode", value, f"one of {', '.join(LEDGER_MODES)}"))
+
+
 def _default_ledger_path() -> Path:
     data_home = os.environ.get("XDG_DATA_HOME")
     data_dir = Path(data_home) if data_home else Path.home() / ".local" / "share"
@@ -54,6 +64,7 @@ def _default_ledger_path() -> Path:
 # Separate from the ledger SETTINGS in kohle/use_cases/settings.py.
 DEVICE_KEYS: dict[str, DeviceKey] = {
     "ledger.path": DeviceKey(_ledger_path_value, _default_ledger_path),
+    "ledger.mode": DeviceKey(_ledger_mode_value, lambda: "writer"),
 }
 
 

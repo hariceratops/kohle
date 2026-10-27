@@ -24,18 +24,22 @@ def test_list_config_shows_value_and_source(write_config, tmp_path: Path, monkey
     result = CliRunner().invoke(cli, ["list-config"])
     assert result.exit_code == 0, result.output
     assert result.output == (
-        f"ledger.path = {_default_path(tmp_path)}  (default)\n\nfile: {config} (not found)\n"
+        f"ledger.path = {_default_path(tmp_path)}  (default)\n"
+        f"ledger.mode = writer  (default)\n\nfile: {config} (not found)\n"
     )
 
     write_config('ledger.path = "~/books/kohle.db"\n')
     result = CliRunner().invoke(cli, ["list-config"])
     assert result.output == (
-        f"ledger.path = {tmp_path / 'home' / 'books' / 'kohle.db'}  (file)\n\nfile: {config}\n"
+        f"ledger.path = {tmp_path / 'home' / 'books' / 'kohle.db'}  (file)\n"
+        f"ledger.mode = writer  (default)\n\nfile: {config}\n"
     )
 
     monkeypatch.setenv("KOHLE_DB", "/tmp/scratch.db")
     result = CliRunner().invoke(cli, ["list-config"])
-    assert result.output == f"ledger.path = /tmp/scratch.db  (KOHLE_DB)\n\nfile: {config}\n"
+    assert result.output == (
+        f"ledger.path = /tmp/scratch.db  (KOHLE_DB)\nledger.mode = writer  (default)\n\nfile: {config}\n"
+    )
 
 
 def _forbid_ledger(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -5,6 +5,8 @@ from typing import Generic, TypeVar
 from sqlalchemy.orm import Session
 
 from kohle.core.result import Result
+from kohle.db.connection import is_busy
+from kohle.infrastructure.infra_errors import LedgerBusy
 from kohle.infrastructure.transaction_context import DbTransactionContext
 
 T = TypeVar("T")
@@ -31,7 +33,7 @@ class DbTransaction(Generic[T, E]):
 
         except Exception as e:
             self.session.rollback()
-            return Result.err(e)
+            return Result.err(LedgerBusy() if is_busy(e) else e)
         finally:
             self.session.close()
 

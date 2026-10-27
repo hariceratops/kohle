@@ -4,7 +4,7 @@ from textual.widgets import Static, Footer
 from textual.containers import Vertical
 from textual.command import Hit, Hits, Provider
 from functools import partial
-from kohle.db.connection import ledger_path
+from kohle.db.connection import ledger_mode, ledger_path
 from kohle.db.schema import open_ledger
 from kohle.infrastructure.device_config import load_device_config
 from kohle.app.tui.screens.category_screen import CategoriesScreen
@@ -44,7 +44,8 @@ def main():
     loaded = load_device_config()
     if loaded.is_err:
         sys.exit(str(loaded.unwrap_err()))
-    opened = open_ledger(ledger_path(loaded.unwrap()))
+    config = loaded.unwrap()
+    opened = open_ledger(ledger_path(config), ledger_mode(config))
     if opened.is_err:
         sys.exit(str(opened.unwrap_err()))
     KohleApp(opened.unwrap()).run()

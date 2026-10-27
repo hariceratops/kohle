@@ -1,5 +1,7 @@
 from pathlib import Path
 
+from kohle.infrastructure.device_config import LedgerMode
+
 
 class InfrastructureError(Exception):
     pass
@@ -29,11 +31,14 @@ class LedgerError(Exception):
 
 
 class NoLedger(LedgerError):
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, mode: LedgerMode):
         super().__init__()
         self.path = path
+        self.mode = mode
 
     def __str__(self) -> str:
+        if self.mode == "reader":
+            return f"no ledger at {self.path}; this device is configured as a reader and never creates one"
         return f"no ledger at {self.path}; run `kohle-cli init`"
 
 
@@ -79,3 +84,27 @@ class LedgerBuildFailed(LedgerError):
 
     def __str__(self) -> str:
         return f"building the ledger at {self.path} failed and left it as it was: {self.reason}"
+
+
+class SnapshotExists(LedgerError):
+    def __init__(self, dest: Path):
+        super().__init__()
+        self.dest = dest
+
+    def __str__(self) -> str:
+        return f"{self.dest} already exists; snapshot never overwrites a file"
+
+
+class SnapshotFailed(LedgerError):
+    def __init__(self, dest: Path, reason: str):
+        super().__init__()
+        self.dest = dest
+        self.reason = reason
+
+    def __str__(self) -> str:
+        return f"writing a snapshot to {self.dest} failed: {self.reason}"
+
+
+class LedgerBusy(LedgerError):
+    def __str__(self) -> str:
+        return "the ledger stayed locked by another process; nothing was changed, try again"
