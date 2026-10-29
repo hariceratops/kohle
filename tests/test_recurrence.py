@@ -13,6 +13,7 @@ from kohle.use_cases.recurrence import (
     Day,
     LastDay,
     LastWorkday,
+    Workday,
     is_working_day,
     occurrences,
     parse_recurrence,
@@ -35,6 +36,8 @@ def _by(_: date) -> str:
         ("  day   31 ", "day 31"),
         ("last workday", "last workday"),
         ("last   workday", "last workday"),
+        ("workday 25", "workday 25"),
+        ("workday 05", "workday 5"),
         ("last day", "last day"),
         ("last   day", "last day"),
     ],
@@ -59,11 +62,14 @@ def test_parse_builds_the_kind() -> None:
         ("day 32", "day N with N from 1 to 31"),
         ("day x", "day N with N from 1 to 31"),
         ("day -1", "day N with N from 1 to 31"),
+        ("workday 0", "workday N with N from 1 to 31"),
+        ("workday 32", "workday N with N from 1 to 31"),
+        ("workday x", "workday N with N from 1 to 31"),
         ("last friday", "last workday or last day; for a weekday use 1st, 2nd, 3rd or 4th"),
-        ("Day 15", "one of: day N, last workday, last day"),
-        ("every 2 weeks from 2026-01-02", "one of: day N, last workday, last day"),
-        ("yearly 12-24", "one of: day N, last workday, last day"),
-        ("", "one of: day N, last workday, last day"),
+        ("Day 15", "one of: day N, workday N, last workday, last day"),
+        ("every 2 weeks from 2026-01-02", "one of: day N, workday N, last workday, last day"),
+        ("yearly 12-24", "one of: day N, workday N, last workday, last day"),
+        ("", "one of: day N, workday N, last workday, last day"),
     ],
 )
 def test_a_bad_rule_names_the_bad_part_and_the_valid_choices(text: str, expected: str) -> None:
@@ -186,3 +192,22 @@ def test_last_day_never_asks_for_the_state() -> None:
         raise AssertionError("last day does not shift")
 
     assert occurrences(LastDay(), date(2026, 1, 1), date(2026, 12, 31), boom)[0] == date(2026, 1, 31)
+
+
+def test_parse_builds_workday() -> None:
+    assert parse_recurrence("workday 25").unwrap() == Workday(25)
+
+
+def test_workday_moves_back_off_a_weekend() -> None:
+    assert occurrences(Workday(15), date(2026, 2, 1), date(2026, 2, 28), _by) == [date(2026, 2, 13)]
+    assert occurrences(Workday(15), date(2026, 3, 1), date(2026, 3, 31), _by) == [date(2026, 3, 13)]
+
+
+def test_workday_clamps_then_shifts() -> None:
+    assert occurrences(Workday(31), date(2026, 2, 1), date(2026, 2, 28), _by) == [date(2026, 2, 27)]
+    assert occurrences(Workday(31), date(2028, 12, 1), date(2028, 12, 31), _by) == [date(2028, 12, 29)]
+
+
+def test_workday_can_land_in_the_previous_month() -> None:
+    # 1 May is a holiday and 30 April a Thursday.
+    assert occurrences(Workday(1), date(2026, 4, 1), date(2026, 4, 30), _by) == [date(2026, 4, 1), date(2026, 4, 30)]

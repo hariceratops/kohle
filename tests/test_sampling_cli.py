@@ -187,7 +187,11 @@ def _sample_months(output: str) -> list[str]:
 
 @pytest.mark.parametrize(
     ("rules", "to", "last_row_is_to"),
-    [("salary: day 25", "2026-10-31", True), ("salary: last day", "2026-10-31", False)],
+    [
+        ("salary: day 25", "2026-10-31", True),
+        ("salary: workday 25", "2026-10-31", True),
+        ("salary: last day", "2026-10-31", False),
+    ],
 )
 def test_one_sample_row_per_month_plus_the_to_row(session_factory, monkeypatch, rules, to, last_row_is_to) -> None:
     _pin_today(monkeypatch, date(2026, 11, 20))

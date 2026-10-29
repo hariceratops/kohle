@@ -21,6 +21,11 @@ class Day:
 
 
 @dataclass(frozen=True, slots=True)
+class Workday:
+    day: int
+
+
+@dataclass(frozen=True, slots=True)
 class LastWorkday:
     pass
 
@@ -30,9 +35,9 @@ class LastDay:
     pass
 
 
-Recurrence = Day | LastWorkday | LastDay
+Recurrence = Day | Workday | LastWorkday | LastDay
 
-KINDS = ("day N", "last workday", "last day")
+KINDS = ("day N", "workday N", "last workday", "last day")
 
 
 def parse_recurrence(text: str) -> Result[Recurrence, InvalidRecurrence]:
@@ -41,6 +46,10 @@ def parse_recurrence(text: str) -> Result[Recurrence, InvalidRecurrence]:
             if n.isascii() and n.isdigit() and 1 <= int(n) <= 31:
                 return Result.ok(Day(int(n)))
             return Result.err(InvalidRecurrence(text, "day N with N from 1 to 31"))
+        case ["workday", n]:
+            if n.isascii() and n.isdigit() and 1 <= int(n) <= 31:
+                return Result.ok(Workday(int(n)))
+            return Result.err(InvalidRecurrence(text, "workday N with N from 1 to 31"))
         case ["last", "workday"]:
             return Result.ok(LastWorkday())
         case ["last", "day"]:
@@ -57,6 +66,8 @@ def render_recurrence(rule: Recurrence) -> str:
     match rule:
         case Day(day):
             return f"day {day}"
+        case Workday(day):
+            return f"workday {day}"
         case LastWorkday():
             return "last workday"
         case LastDay():
@@ -84,7 +95,7 @@ def is_working_day(day: date, state: str) -> bool:
 def _unshifted(rule: Recurrence, year: int, month: int) -> date:
     last = calendar.monthrange(year, month)[1]
     match rule:
-        case Day(day):
+        case Day(day) | Workday(day):
             return date(year, month, min(day, last))
         case LastWorkday() | LastDay():
             return date(year, month, last)
@@ -96,7 +107,7 @@ def _shifts(rule: Recurrence) -> bool:
     match rule:
         case Day() | LastDay():
             return False
-        case LastWorkday():
+        case Workday() | LastWorkday():
             return True
         case _:
             assert_never(rule)

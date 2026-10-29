@@ -63,7 +63,7 @@ def parse_sampling_rules(text: str) -> Result[list[SamplingRule], SamplingRulesE
             role = Role(role_text.strip())
         except ValueError:
             return Result.err(InvalidRole(item.strip(), role_text.strip()))
-        recurrence = parse_recurrence(rule_text)
+        recurrence = parse_recurrence(rule_text.strip())
         if recurrence.is_err:
             return Result.err(recurrence.unwrap_err())
         rules.append(SamplingRule(role, recurrence.unwrap()))
