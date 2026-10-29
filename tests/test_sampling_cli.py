@@ -63,6 +63,29 @@ def test_the_highest_id_rule_list_is_the_one_in_force(session_factory, monkeypat
     assert [ln.split()[0] for ln in result.output.splitlines()[2:]] == ["2026-10-25", "2026-10-31"]
 
 
+def test_role_filters_rows_and_always_shows_the_to_row(session_factory, monkeypatch) -> None:
+    _pin_today(monkeypatch, date(2026, 11, 20))
+    runner = _ledger(session_factory)
+
+    result = _history(runner, session_factory, "--from", "2026-10-01", "--to", "2026-10-15", "--role", "salary")
+
+    rows = result.output.splitlines()[2:]
+    assert result.exit_code == 0, result.output
+    assert [ln.split()[0] for ln in rows] == ["2026-10-15"]
+    assert rows[0].split()[-1] == "mid-month"
+
+
+def test_an_unknown_role_exits_2_naming_the_choices_and_opens_no_session(monkeypatch) -> None:
+    def no_session():
+        raise AssertionError("session opened")
+
+    result = CliRunner().invoke(cli, ["net-worth-history", "--role", "bogus"], obj=no_session)
+
+    assert result.exit_code == 2
+    assert "mid-month" in result.output
+    assert "salary" in result.output
+
+
 def test_period_end_is_gone(session_factory) -> None:
     result = CliRunner().invoke(cli, ["net-worth-history", "--period-end", "month-end"], obj=session_factory)
 

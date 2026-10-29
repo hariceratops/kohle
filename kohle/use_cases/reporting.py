@@ -244,6 +244,7 @@ class NetWorthHistory(UnitOfWork[list[HistoryRow], HistoryError]):
         end: date,
         max_age_days: int,
         state: str,
+        role: Role | None = None,
     ) -> Result[list[HistoryRow], HistoryError]:
         def use_case(ctx: DbTransactionContext) -> Result[list[HistoryRow], HistoryError]:
             rules_res = current_sampling_rules(ctx)
@@ -261,6 +262,9 @@ class NetWorthHistory(UnitOfWork[list[HistoryRow], HistoryError]):
             else:
                 first_day = start
             samples = sample_dates(rules_res.unwrap(), lambda _: state, first_day, end)
+            if role is not None:
+                # Filtering before the fold and valuation is safe: the fold is over a prefix.
+                samples = [s for s in samples if role in s.roles or s.on == end]
             dates = [s.on for s in samples]
 
             own = aggregate_by_unit_through(lines.own, dates)

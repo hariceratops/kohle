@@ -160,3 +160,36 @@ def test_the_salary_day_row_is_dated_the_working_day_and_includes_that_days_line
     assert [r.on for r in rows] == [date(2026, 2, 15), date(2026, 2, 27), date(2026, 2, 28)]
     assert [r.roles for r in rows] == [(Role.mid_month,), (Role.salary,), ()]
     assert by_date[date(2026, 2, 27)].report.at_cost.net_worth_at_cost == Decimal(1500)
+
+
+def test_role_keeps_only_that_roles_rows_and_the_to_row(session: Session, ledger: dict) -> None:
+    rows = NetWorthHistory(session).execute(date(2026, 2, 1), date(2026, 2, 28), 7, "BY", Role.salary).unwrap()
+
+    assert [r.on for r in rows] == [date(2026, 2, 27), date(2026, 2, 28)]
+
+
+def test_role_keeps_the_to_row_when_it_is_a_sample_date_of_the_other_role(session: Session, ledger: dict) -> None:
+    rows = NetWorthHistory(session).execute(date(2026, 2, 1), date(2026, 2, 15), 7, "BY", Role.salary).unwrap()
+
+    assert [(r.on, r.roles) for r in rows] == [(date(2026, 2, 15), (Role.mid_month,))]
+
+
+def test_a_filtered_row_has_the_same_figures_as_unfiltered(session: Session, ledger: dict) -> None:
+    all_rows = _by_date(NetWorthHistory(session).execute(date(2026, 2, 1), date(2026, 2, 28), 7, "BY").unwrap())
+    kept = NetWorthHistory(session).execute(date(2026, 2, 1), date(2026, 2, 28), 7, "BY", Role.salary).unwrap()
+
+    assert all(r == all_rows[r.on] for r in kept)
+
+
+def test_a_row_listing_both_roles_matches_either(session: Session, ledger: dict) -> None:
+    from kohle.domain.models import SamplingRuleList
+
+    session.add(SamplingRuleList(rules="mid-month: day 15; salary: day 15"))
+    session.commit()
+
+    for role in Role:
+        rows = NetWorthHistory(session).execute(date(2026, 2, 1), date(2026, 2, 20), 7, "BY", role).unwrap()
+        assert [(r.on, r.roles) for r in rows] == [
+            (date(2026, 2, 15), (Role.mid_month, Role.salary)),
+            (date(2026, 2, 20), ()),
+        ]

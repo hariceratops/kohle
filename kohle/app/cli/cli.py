@@ -67,7 +67,7 @@ from kohle.use_cases.reporting import (
     unrealised_gain,
 )
 from kohle.use_cases.rules import AddRule, ListRules, RemoveRule
-from kohle.use_cases.sampling import STATES, ListSamplingRules, SetSamplingRules
+from kohle.use_cases.sampling import STATES, ListSamplingRules, Role, SetSamplingRules
 from kohle.use_cases.settings import ListSettings, SetSettings, validate_init_settings
 from kohle.use_cases.splitting import (
     AddSplitGroup,
@@ -1092,9 +1092,13 @@ def fetch_prices_cmd(make_session):
     help="Bundesland whose public holidays are not working days, for this run only; "
     "defaults to the ledger's state setting",
 )
+@click.option(
+    "--role", type=click.Choice([r.value for r in Role]), default=None,
+    help="Only rows sampled for this role; the row dated --to is always shown",
+)
 @MAX_AGE_DAYS
 @click.pass_obj
-def net_worth_history_cmd(make_session, start, end, state: str | None, max_age_days: int):
+def net_worth_history_cmd(make_session, start, end, state: str | None, role: str | None, max_age_days: int):
     today = date.today()  # noqa: DTZ011 - the user's local date, by design
     end_date = end.date() if end is not None else today
     start_date = start.date() if start is not None else None
@@ -1111,7 +1115,9 @@ def net_worth_history_cmd(make_session, start, end, state: str | None, max_age_d
         state = listed.unwrap().values["state"]
         if state is None:
             raise click.ClickException(str(StateNotSet()))
-    res = NetWorthHistory(make_session()).execute(start_date, end_date, max_age_days, state)
+    res = NetWorthHistory(make_session()).execute(
+        start_date, end_date, max_age_days, state, Role(role) if role is not None else None
+    )
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
     rows = [
