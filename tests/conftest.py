@@ -11,7 +11,7 @@ from sqlalchemy.pool import StaticPool
 
 from kohle.app.cli.cli import cli
 from kohle.db.connection import base
-from kohle.domain.models import AccountType, SamplingRuleList
+from kohle.domain.models import START, AccountType, SamplingRuleList, StateEntry
 from kohle.plugin.importer_plugin import CashRow
 from kohle.use_cases.accounts import AddAccount
 from kohle.use_cases.journal import PEOPLE_ROOT
@@ -101,6 +101,16 @@ def session_factory():
     base.metadata.create_all(bind=engine)
     yield SessionLocal
     base.metadata.drop_all(bind=engine)
+
+
+@pytest.fixture
+def start_state(session: Session) -> StateEntry:
+    """Opt-in: a ledger with no `start` entry is legitimate, and its refusal
+    must be testable (design §18.1)."""
+    entry = StateEntry(effective_from=START, state="BY")
+    session.add(entry)
+    session.commit()
+    return entry
 
 
 @pytest.fixture

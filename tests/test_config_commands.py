@@ -151,12 +151,11 @@ def test_set_setting_refuses_device_keys_and_writes_nothing(
     assert _counts(session_factory) == before
 
 
-def test_set_setting_for_ledger_keys_is_unchanged(session_factory) -> None:
+def test_set_setting_for_ledger_keys_refuses_unknown_and_state(session_factory) -> None:
     result = CliRunner().invoke(cli, ["set-setting", "foo", "x"], obj=session_factory)
     assert result.exit_code == 1
-    assert "unknown setting 'foo'; known settings: state" in result.output
+    assert "unknown setting 'foo'; there are no ledger settings" in result.output
 
-    args = ["set-setting", "state", "HE"]
-    result = CliRunner().invoke(cli, args, obj=session_factory)
-    assert result.exit_code == 0, result.output
-    assert "Set state to HE" in result.output
+    result = CliRunner().invoke(cli, ["set-setting", "state", "HE"], obj=session_factory)
+    assert result.exit_code == 1
+    assert "move-state --from" in result.output

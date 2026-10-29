@@ -11,8 +11,8 @@ from decimal import Decimal
 import pytest
 
 from kohle.domain.models import JournalEntry, JournalLine, Unit, UnitKind
+from kohle.use_cases.bundesland import STATES
 from kohle.use_cases.journal import aggregate_by_unit, aggregate_by_unit_through
-from kohle.use_cases.sampling import STATES
 
 
 @pytest.mark.parametrize("state", STATES)

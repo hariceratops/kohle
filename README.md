@@ -39,11 +39,10 @@ A ledger from before this change sits at `./kohle.db`. Move it once, by hand:
 ```bash
 mkdir -p ~/.local/share/kohle && mv ./kohle.db ~/.local/share/kohle/kohle.db
 kohle-cli migrate
-kohle-cli set-setting state <code>
 ```
 
-A migrated ledger has no Bundesland, and `net-worth-history` refuses without
-one.
+A stored `state` setting becomes the ledger's `start` Bundesland. A migrated
+ledger without one has none, and `net-worth-history` refuses without one.
 
 ### Device config
 Settings that describe one machine live in
@@ -77,7 +76,7 @@ mode = "reader"
 Precedence for a key is the built-in default, then the file, then `KOHLE_DB`
 (for `ledger.path` only; there are no other environment overrides).
 
-There are two scopes of setting. Ledger settings (`state`) live in the
+There are two scopes of setting. Ledger settings live in the
 `settings` table, travel with the ledger and are managed with `list-settings`
 and `set-setting` (and the init file, once). Device settings live in the file
 and stay on the machine. Keep secrets out of the file; plugin variables such as
@@ -119,22 +118,19 @@ unknown key, an invalid `state`, a missing file or a file without `state` makes
 kohle-cli init
 kohle-cli list-settings
 ```
-`init` creates the ledger's directory, runs the packaged migrations and stores
-the file's values as settings. It reads the file once; editing it afterwards
+`init` creates the ledger's directory, runs the packaged migrations and records
+the file's `state` as the ledger's `start` Bundesland. It reads the file once; editing it afterwards
 changes nothing. Run against an existing ledger, `init` never writes: at the
-current revision with the file's `state` it prints `already initialized at <path>,
+current revision with the file's `state` equal to the `start` entry it prints `already initialized at <path>,
 revision <rev>` and exits 0; behind, it exits non-zero and points to `migrate`; with a
-stored `state` that differs or is unset, it exits non-zero and points to
-`set-setting state <code>`. A failed or interrupted first `init` leaves no
+`start` state that differs or is missing, it exits non-zero and points to
+`move-state --from start <code>`. A failed or interrupted first `init` leaves no
 ledger. `list-settings`
-shows every setting (`state = (unset)` when not set), then the ledger path, with
+shows every setting, then the ledger path, with
 how it was chosen (`default`, `file` or `KOHLE_DB`), and its schema revision.
 
-```bash
-kohle-cli set-setting state HE
-```
-`set-setting <key> <value>` changes a setting after `init`, with the same keys
-and validation as the init file. An unknown key lists the known keys and an
+`set-setting <key> <value>` changes a setting after `init`. `state` is not a
+setting; `set-setting state` points to `move-state`. An unknown key lists the known keys and an
 invalid value lists the valid ones; either exits non-zero and writes nothing.
 Each change is recorded as an operation (`settings`, `create` the first time,
 `update` after) and shows in `list-operations`; setting the current value again
@@ -171,7 +167,7 @@ mode 0600. A symlinked ledger is upgraded where it lives and stays a link.
 - no file at the path: points to `kohle-cli init`, creates nothing, exit 1;
 - revision ahead of this kohle: says to upgrade kohle, exit 1.
 
-A ledger migrated from before settings existed has `state` unset.
+A ledger migrated from before settings existed has no `start` Bundesland.
 
 ### Writing migrations
 The Alembic migrations ship inside the package, in `kohle/db/migrations/`.
@@ -677,14 +673,13 @@ valued at cost; both of the latter count in `estimated`, which reads `K of M`
 as in `net-worth`'s last line.
 
 The salary date is each month's last working day: Monday to Friday, not a public holiday of the
-`--state` Bundesland (a two-letter code such as `BE` or `NW`; it defaults to the
-ledger's `state` setting, and `--state` overrides it for one run), and
+Bundesland in force on that date (`list-states`), and
 never 24 or 31 December. A month ending on a Saturday or a holiday therefore
 samples the working day before it, and December is 30 December when that is a
 weekday (2028: Friday 29 December). The 15th never moves. The row is dated that
-day and includes its lines. An unknown `--state` is a usage error.
-On a ledger whose `state` is unset, the command without `--state` exits non-zero
-and points to `set-setting state <code>`.
+day and includes its lines.
+On a ledger with no `start` Bundesland the command exits non-zero
+and points to `move-state --from start <code>`.
 Holidays come from the pinned `holidays` package, so a deliberate upgrade of it
 can move a date.
 

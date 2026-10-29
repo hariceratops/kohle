@@ -26,13 +26,6 @@ from kohle.use_cases.recurrence import (
     render_recurrence,
 )
 
-# Written out because `holidays.Germany.subdivisions` also lists "Augsburg",
-# a city, which is not a Bundesland.
-STATES = (
-    "BB", "BE", "BW", "BY", "HB", "HE", "HH", "MV",
-    "NI", "NW", "RP", "SH", "SL", "SN", "ST", "TH",
-)
-
 
 class Role(Enum):
     mid_month = "mid-month"

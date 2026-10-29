@@ -11,14 +11,13 @@ from pathlib import Path
 
 import pytest
 from alembic import command
-from click.testing import CliRunner
 from sqlalchemy import select
 
 from kohle.app.cli.cli import cli
 from kohle.db.schema import alembic_config
 from kohle.domain.models import Price, Unit
 from kohle.use_cases.sampling import parse_sampling_rules, render_sampling_rules, sample_dates
-from tests.test_portfolio_cli import _SETUP, _pin_today
+from tests.test_portfolio_cli import _ledger, _pin_today
 
 FIXTURES = Path(__file__).parent / "fixtures"
 DEFAULT = "mid-month: day 15; salary: last workday"
@@ -38,16 +37,14 @@ def test_default_list_dates_equal_the_captured_pre_feature_dates() -> None:
 
 def test_default_list_figures_equal_the_captured_pre_feature_output(session_factory, monkeypatch) -> None:
     _pin_today(monkeypatch, date(2029, 6, 20))
-    runner = CliRunner()
-    for args in _SETUP:
-        assert runner.invoke(cli, args, obj=session_factory).exit_code == 0
+    runner = _ledger(session_factory)
     with session_factory() as session:
         unit_id = session.scalars(select(Unit.id).where(Unit.identifier == "X1")).one()
         session.add(Price(unit_id=unit_id, price_date=date(2025, 8, 20), price=Decimal(125), source="file"))
         session.commit()
 
     result = runner.invoke(
-        cli, ["net-worth-history", "--from", "2024-01-01", "--to", "2029-01-31", "--state", "BY"], obj=session_factory
+        cli, ["net-worth-history", "--from", "2024-01-01", "--to", "2029-01-31"], obj=session_factory
     )
 
     assert result.exit_code == 0, result.output

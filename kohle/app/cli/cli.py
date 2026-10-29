@@ -13,10 +13,10 @@ from kohle.domain.domain_errors import (
     AccountNotFoundError,
     DeviceIsReader,
     DeviceKeyNotASetting,
-    StateNotSet,
+    StateNotASetting,
     UnknownDeviceKey,
 )
-from kohle.domain.models import DEFAULT_RULE_PRIORITY, AccountType, UnitKind
+from kohle.domain.models import DEFAULT_RULE_PRIORITY, START, AccountType, UnitKind
 from kohle.infrastructure.device_config import (
     DEVICE_KEYS,
     DeviceConfig,
@@ -26,6 +26,7 @@ from kohle.infrastructure.device_config import (
 )
 from kohle.plugin.plugin_manager import load_plugins, load_price_plugins
 from kohle.use_cases.accounts import AddAccount, ListAccount, ListChildAccounts
+from kohle.use_cases.bundesland import ListStates
 from kohle.use_cases.classification import ListUnclassified, Reclassify
 from kohle.use_cases.journal import (
     BASE_CURRENCY,
@@ -36,7 +37,7 @@ from kohle.use_cases.journal import (
     RecordSimpleEntry,
     RecordSplitEntry,
 )
-from kohle.use_cases.ledger import init_ledger
+from kohle.use_cases.ledger import init_ledger, validate_init_file
 from kohle.use_cases.lots import QueryRealised, realised_gain
 from kohle.use_cases.operations import ListOperations
 from kohle.use_cases.prices import (
@@ -67,8 +68,8 @@ from kohle.use_cases.reporting import (
     unrealised_gain,
 )
 from kohle.use_cases.rules import AddRule, ListRules, RemoveRule
-from kohle.use_cases.sampling import STATES, ListSamplingRules, Role, SetSamplingRules
-from kohle.use_cases.settings import ListSettings, SetSettings, validate_init_settings
+from kohle.use_cases.sampling import ListSamplingRules, Role, SetSamplingRules
+from kohle.use_cases.settings import ListSettings, SetSettings
 from kohle.use_cases.splitting import (
     AddSplitGroup,
     PersonShare,
@@ -244,7 +245,7 @@ def _read_init_file(path: Path) -> dict[str, object]:
 def init_cmd(config: DeviceConfig) -> None:
     rc = _init_file_path()
     raw = _read_init_file(rc)
-    validated = validate_init_settings(raw)
+    validated = validate_init_file(raw)
     if validated.is_err:
         raise click.ClickException(f"{rc}: {validated.unwrap_err()}")
     res = init_ledger(ledger_path(config), validated.unwrap())
@@ -329,10 +330,29 @@ def list_settings_cmd(make_session, config: DeviceConfig):
 def set_setting_cmd(make_session, config: DeviceConfig, key: str, value: str):
     if key in DEVICE_KEYS:
         raise click.ClickException(str(DeviceKeyNotASetting(key, config.path)))
+    if key == "state":
+        raise click.ClickException(str(StateNotASetting()))
     res = SetSettings(make_session()).execute({key: value})
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
     click.echo(f"Set {key} to {value}")
+
+
+@cli.command(writes=False)
+@click.pass_obj
+def list_states_cmd(make_session):
+    res = ListStates(make_session()).execute()
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    entries = res.unwrap()
+    if not entries:
+        click.echo("No state recorded; run `kohle-cli move-state --from start <code>`")
+        return
+    rows = [
+        {"from": "start" if e.effective_from == START else e.effective_from, "state": e.state}
+        for e in entries
+    ]
+    click.echo(tabulate(rows, headers="keys"))
 
 
 @cli.command(writes=True)
@@ -1088,17 +1108,12 @@ def fetch_prices_cmd(make_session):
     help="Last date sampled, not after today; defaults to today",
 )
 @click.option(
-    "--state", type=click.Choice(STATES), default=None,
-    help="Bundesland whose public holidays are not working days, for this run only; "
-    "defaults to the ledger's state setting",
-)
-@click.option(
     "--role", type=click.Choice([r.value for r in Role]), default=None,
     help="Only rows sampled for this role; the row dated --to is always shown",
 )
 @MAX_AGE_DAYS
 @click.pass_obj
-def net_worth_history_cmd(make_session, start, end, state: str | None, role: str | None, max_age_days: int):
+def net_worth_history_cmd(make_session, start, end, role: str | None, max_age_days: int):
     today = date.today()  # noqa: DTZ011 - the user's local date, by design
     end_date = end.date() if end is not None else today
     start_date = start.date() if start is not None else None
@@ -1108,15 +1123,8 @@ def net_worth_history_cmd(make_session, start, end, state: str | None, role: str
         raise click.BadParameter(
             f"{start_date.isoformat()} is after the last date {end_date.isoformat()}", param_hint="--from"
         )
-    if state is None:
-        listed = ListSettings(make_session()).execute()
-        if listed.is_err:
-            raise click.ClickException(str(listed.unwrap_err()))
-        state = listed.unwrap().values["state"]
-        if state is None:
-            raise click.ClickException(str(StateNotSet()))
     res = NetWorthHistory(make_session()).execute(
-        start_date, end_date, max_age_days, state, Role(role) if role is not None else None
+        start_date, end_date, max_age_days, Role(role) if role is not None else None
     )
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))

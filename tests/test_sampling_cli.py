@@ -7,15 +7,15 @@ from click.testing import CliRunner
 from sqlalchemy import func, select
 
 from kohle.app.cli.cli import cli
-from kohle.domain.models import Operation, OperationGroup, Price, SamplingRuleList
-from tests.test_portfolio_cli import _SETUP, _pin_today
-
-
-def _ledger(session_factory) -> CliRunner:
-    runner = CliRunner()
-    for args in _SETUP:
-        assert runner.invoke(cli, args, obj=session_factory).exit_code == 0
-    return runner
+from kohle.domain.models import (
+    START,
+    Operation,
+    OperationGroup,
+    Price,
+    SamplingRuleList,
+    StateEntry,
+)
+from tests.test_portfolio_cli import _ledger, _pin_today
 
 
 def _history(runner: CliRunner, session_factory, *args: str):
@@ -244,3 +244,28 @@ def test_set_and_list_never_touch_prices_or_plugins(session_factory, monkeypatch
     _list(runner, session_factory)
 
     assert _counts(session_factory)[2] == before
+
+
+def test_list_states_prints_the_history_oldest_first_and_leaves_no_group(session_factory) -> None:
+    with session_factory() as session:
+        session.add_all([
+            StateEntry(effective_from=date(2026, 1, 1), state="NI"),
+            StateEntry(effective_from=START, state="BY"),
+        ])
+        session.commit()
+    before = _counts(session_factory)
+
+    result = CliRunner().invoke(cli, ["list-states"], obj=session_factory)
+
+    assert result.exit_code == 0, result.output
+    assert [ln.split() for ln in result.output.splitlines()] == [
+        ["from", "state"], ["----------", "-------"], ["start", "BY"], ["2026-01-01", "NI"],
+    ]
+    assert _counts(session_factory) == before
+
+
+def test_list_states_on_an_empty_history_points_to_move_state(session_factory) -> None:
+    result = CliRunner().invoke(cli, ["list-states"], obj=session_factory)
+
+    assert result.exit_code == 0, result.output
+    assert result.output == "No state recorded; run `kohle-cli move-state --from start <code>`\n"

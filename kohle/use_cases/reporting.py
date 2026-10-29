@@ -19,6 +19,8 @@ from kohle.domain.domain_errors import (
 from kohle.infrastructure.transaction_context import DbTransactionContext
 from kohle.infrastructure.uow import UnitOfWork
 from kohle.services.account_services import get_account_by_name_service
+from kohle.services.state_services import list_state_entries_service
+from kohle.use_cases.bundesland import state_lookup
 from kohle.use_cases.journal import (
     BASE_CURRENCY,
     NetWorthReport,
@@ -243,13 +245,19 @@ class NetWorthHistory(UnitOfWork[list[HistoryRow], HistoryError]):
         start: date | None,
         end: date,
         max_age_days: int,
-        state: str,
         role: Role | None = None,
     ) -> Result[list[HistoryRow], HistoryError]:
         def use_case(ctx: DbTransactionContext) -> Result[list[HistoryRow], HistoryError]:
             rules_res = current_sampling_rules(ctx)
             if rules_res.is_err:
                 return Result.err(rules_res.unwrap_err())
+
+            entries_res = list_state_entries_service(ctx)
+            if entries_res.is_err:
+                return Result.err(entries_res.unwrap_err())
+            lookup_res = state_lookup(entries_res.unwrap())
+            if lookup_res.is_err:
+                return Result.err(lookup_res.unwrap_err())
 
             lines_res = net_worth_lines(ctx)
             if lines_res.is_err:
@@ -261,7 +269,7 @@ class NetWorthHistory(UnitOfWork[list[HistoryRow], HistoryError]):
                 first_day = min(first, end)
             else:
                 first_day = start
-            samples = sample_dates(rules_res.unwrap(), lambda _: state, first_day, end)
+            samples = sample_dates(rules_res.unwrap(), lookup_res.unwrap(), first_day, end)
             if role is not None:
                 # Filtering before the fold and valuation is safe: the fold is over a prefix.
                 samples = [s for s in samples if role in s.roles or s.on == end]

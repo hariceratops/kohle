@@ -397,3 +397,19 @@ class SamplingRuleList(base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     rules: Mapped[str] = mapped_column(String, nullable=False)
+
+
+# The effective_from of the entry that applies from the start of the ledger.
+START = date.min
+
+
+class StateEntry(base):
+    """The Bundesland from `effective_from` onward, until the next entry."""
+
+    __tablename__ = "state_entries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    effective_from: Mapped[date] = mapped_column(Date, nullable=False)
+    state: Mapped[str] = mapped_column(String, nullable=False)
+
+    __table_args__ = (UniqueConstraint("effective_from", name="uq_state_entry_effective_from"),)

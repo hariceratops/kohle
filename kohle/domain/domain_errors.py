@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -527,6 +528,8 @@ class UnknownSetting(SettingError):
         self.known = known
 
     def __str__(self) -> str:
+        if not self.known:
+            return f"unknown setting {self.key!r}; there are no ledger settings"
         return f"unknown setting {self.key!r}; known settings: {', '.join(self.known)}"
 
 
@@ -539,15 +542,6 @@ class InvalidSettingValue(SettingError):
 
     def __str__(self) -> str:
         return f"invalid {self.key} {self.value!r}; expected {self.expected}"
-
-
-class MissingSettings(SettingError):
-    def __init__(self, keys: list[str]) -> None:
-        super().__init__()
-        self.keys = keys
-
-    def __str__(self) -> str:
-        return f"missing {', '.join(self.keys)}"
 
 
 class SettingDiffers(SettingError):
@@ -568,9 +562,12 @@ class SettingDiffers(SettingError):
         )
 
 
-class StateNotSet(SettingError):
+class StateNotASetting(SettingError):
     def __str__(self) -> str:
-        return "no state set for this ledger; set it with `kohle-cli set-setting state <code>` or pass --state"
+        return (
+            "state is not a setting; record a move with "
+            "`kohle-cli move-state --from <start|YYYY-MM-DD> <code>`"
+        )
 
 
 class DeviceKeyNotASetting(SettingError):
@@ -664,4 +661,66 @@ class InvalidRole(SamplingError):
 
 SamplingRulesError = SamplingError | InvalidRecurrence
 
-HistoryError = ValuationError | SamplingRulesError
+class StateError(Exception):
+    pass
+
+
+class InvalidState(StateError):
+    def __init__(self, value: object, valid: Sequence[str]) -> None:
+        super().__init__()
+        self.value = value
+        self.valid = valid
+
+    def __str__(self) -> str:
+        return f"invalid state {self.value!r}; expected one of {', '.join(self.valid)}"
+
+
+class NoStartState(StateError):
+    def __str__(self) -> str:
+        return (
+            "no state from the start of the ledger; "
+            "record it with `kohle-cli move-state --from start <code>`"
+        )
+
+
+class StartStateDiffers(StateError):
+    def __init__(self, path: Path, stored: str | None, wanted: str) -> None:
+        super().__init__()
+        self.path = path
+        self.stored = stored
+        self.wanted = wanted
+
+    def __str__(self) -> str:
+        mover = f"`kohle-cli move-state --from start {self.wanted}`"
+        if self.stored is None:
+            return f"ledger at {self.path} has no state from the start; record it with {mover}"
+        return (
+            f"ledger at {self.path} has state {self.stored} from the start but init.toml says "
+            f"{self.wanted}; init never changes an existing ledger, {mover} does"
+        )
+
+
+class InitFileError(Exception):
+    pass
+
+
+class UnknownInitKey(InitFileError):
+    def __init__(self, key: str, known: list[str]) -> None:
+        super().__init__()
+        self.key = key
+        self.known = known
+
+    def __str__(self) -> str:
+        return f"unknown key {self.key!r}; known keys: {', '.join(self.known)}"
+
+
+class MissingInitKeys(InitFileError):
+    def __init__(self, keys: list[str]) -> None:
+        super().__init__()
+        self.keys = keys
+
+    def __str__(self) -> str:
+        return f"missing {', '.join(self.keys)}"
+
+
+HistoryError = ValuationError | SamplingRulesError | StateError

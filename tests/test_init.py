@@ -11,15 +11,15 @@ from kohle.app.cli.cli import cli
 from kohle.core.result import Result
 from kohle.db import schema
 from kohle.db.schema import alembic_config
-from kohle.domain.domain_errors import SettingError
-from kohle.use_cases.settings import SetSettings
+from kohle.domain.domain_errors import StateError
+from kohle.use_cases.ledger import PopulateLedger
 
 
 def _head() -> str:
     return ScriptDirectory.from_config(alembic_config()).get_current_head()
 
 
-def test_init_then_list_accounts_and_list_settings(write_init_toml, run_init) -> None:
+def test_init_then_list_accounts_and_list_states(write_init_toml, run_init) -> None:
     write_init_toml('state = "BW"\n')
     db = Path(os.environ["KOHLE_DB"])
 
@@ -30,9 +30,12 @@ def test_init_then_list_accounts_and_list_settings(write_init_toml, run_init) ->
     accounts = CliRunner().invoke(cli, ["list-accounts"])
     assert accounts.exit_code == 0, accounts.output
     assert "People" in accounts.output
+    states = CliRunner().invoke(cli, ["list-states"])
+    assert states.exit_code == 0, states.output
+    assert "start" in states.output
+    assert "BW" in states.output
     settings = CliRunner().invoke(cli, ["list-settings"])
     assert settings.exit_code == 0, settings.output
-    assert "state = BW" in settings.output
     assert f"ledger:   {db.resolve()}" in settings.output
     assert f"revision: {_head()}" in settings.output
 
@@ -83,7 +86,7 @@ def test_init_file_falls_back_to_home_config(run_init, tmp_path: Path, monkeypat
     rc.write_text('state = "NW"\n')
 
     assert run_init().exit_code == 0
-    assert "state = NW" in CliRunner().invoke(cli, ["list-settings"]).output
+    assert "NW" in CliRunner().invoke(cli, ["list-states"]).output
 
 
 def _assert_rejected(result, db: Path, *fragments: str) -> None:
@@ -112,7 +115,7 @@ def test_non_string_state_is_invalid(write_init_toml, run_init) -> None:
 def test_unknown_key_lists_the_known_keys(write_init_toml, run_init) -> None:
     write_init_toml('state = "BW"\nfoo = 1\n')
 
-    _assert_rejected(run_init(), Path(os.environ["KOHLE_DB"]), "unknown setting 'foo'", "known settings: state")
+    _assert_rejected(run_init(), Path(os.environ["KOHLE_DB"]), "unknown key 'foo'", "known keys: state")
 
 
 def test_a_typo_reports_unknown_not_missing(write_init_toml, run_init) -> None:
@@ -120,7 +123,7 @@ def test_a_typo_reports_unknown_not_missing(write_init_toml, run_init) -> None:
 
     result = run_init()
 
-    _assert_rejected(result, Path(os.environ["KOHLE_DB"]), "unknown setting 'stat'")
+    _assert_rejected(result, Path(os.environ["KOHLE_DB"]), "unknown key 'stat'")
     assert "missing" not in result.output
 
 
@@ -145,14 +148,14 @@ def test_init_takes_no_flags(write_init_toml) -> None:
     assert not Path(os.environ["KOHLE_DB"]).parent.exists()
 
 
-def test_the_settings_write_is_audited(write_init_toml, run_init) -> None:
+def test_the_state_write_is_audited(write_init_toml, run_init) -> None:
     write_init_toml('state = "BW"\n')
     run_init()
 
     ops = CliRunner().invoke(cli, ["list-operations"])
 
     rows = [line.split() for line in ops.output.splitlines()[2:]]
-    assert rows == [["1", "settings", "1", "create"]]
+    assert rows == [["1", "state_entries", "1", "create"]]
 
 
 def _snapshot(db: Path) -> tuple[bytes, int]:
@@ -197,7 +200,7 @@ def test_existing_ledger_behind_points_to_migrate(write_init_toml, run_init) -> 
     assert _snapshot(db) == before
 
 
-def test_existing_ledger_with_a_different_state_points_to_set_setting(write_init_toml, run_init) -> None:
+def test_existing_ledger_with_a_different_start_state_points_to_move_state(write_init_toml, run_init) -> None:
     db = _init_then(write_init_toml, run_init, "BW")
     write_init_toml('state = "BY"\n')
     before = _snapshot(db)
@@ -205,23 +208,38 @@ def test_existing_ledger_with_a_different_state_points_to_set_setting(write_init
     result = run_init()
 
     assert result.exit_code == 1
-    assert "set-setting state BY" in result.output
-    assert "state = BW" in result.output
+    assert "move-state --from start BY" in result.output
+    assert "state BW from the start" in result.output
     assert _snapshot(db) == before
 
 
-def test_existing_ledger_with_state_unset_points_to_set_setting(write_init_toml, run_init) -> None:
+def test_existing_ledger_with_no_start_entry_points_to_move_state(write_init_toml, run_init) -> None:
     db = _init_then(write_init_toml, run_init)
     engine = create_engine(f"sqlite:///{db}")
     with engine.begin() as connection:
-        connection.execute(text("DELETE FROM settings"))
+        connection.execute(text("DELETE FROM state_entries"))
     engine.dispose()
     before = _snapshot(db)
 
     result = run_init()
 
     assert result.exit_code == 1
-    assert "set-setting state BW" in result.output
+    assert "move-state --from start BW" in result.output
+    assert _snapshot(db) == before
+
+
+def test_a_move_after_the_start_does_not_change_the_comparison(write_init_toml, run_init) -> None:
+    db = _init_then(write_init_toml, run_init, "BW")
+    engine = create_engine(f"sqlite:///{db}")
+    with engine.begin() as connection:
+        connection.execute(text("INSERT INTO state_entries (effective_from, state) VALUES ('2026-01-01', 'NI')"))
+    engine.dispose()
+    before = _snapshot(db)
+
+    result = run_init()
+
+    assert result.exit_code == 0, result.output
+    assert "already initialized" in result.output
     assert _snapshot(db) == before
 
 
@@ -251,7 +269,7 @@ def test_failed_populate_leaves_nothing(write_init_toml, run_init, monkeypatch: 
     write_init_toml('state = "BW"\n')
     db = Path(os.environ["KOHLE_DB"])
     with monkeypatch.context() as patched:
-        patched.setattr(SetSettings, "execute", lambda self, values: Result.err(SettingError("nope")))
+        patched.setattr(PopulateLedger, "execute", lambda self, init: Result.err(StateError("nope")))
         result = run_init()
 
     assert result.exit_code == 1
@@ -264,11 +282,11 @@ def test_interrupted_populate_leaves_nothing(write_init_toml, run_init, monkeypa
     write_init_toml('state = "BW"\n')
     db = Path(os.environ["KOHLE_DB"])
 
-    def interrupt(self, values):
+    def interrupt(self, init):
         raise KeyboardInterrupt
 
     with monkeypatch.context() as patched:
-        patched.setattr(SetSettings, "execute", interrupt)
+        patched.setattr(PopulateLedger, "execute", interrupt)
         result = run_init()
 
     assert result.exit_code == 1

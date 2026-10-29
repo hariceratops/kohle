@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from kohle.core.result import Result
 from kohle.domain.domain_errors import (
     InvalidSettingValue,
-    MissingSettings,
     SettingError,
     UnknownSetting,
 )
@@ -16,18 +15,12 @@ from kohle.services.setting_services import (
     list_settings_service,
     set_setting_service,
 )
-from kohle.use_cases.sampling import STATES
 
 Validator = Callable[[object], Result[str, InvalidSettingValue]]
 
-
-def _bundesland(value: object) -> Result[str, InvalidSettingValue]:
-    if isinstance(value, str) and value in STATES:
-        return Result.ok(value)
-    return Result.err(InvalidSettingValue("state", value, f"one of {', '.join(STATES)}"))
-
-
-SETTINGS: dict[str, Validator] = {"state": _bundesland}
+# Ledger settings, in listing order. `init.toml` accepts `state` (bundesland.py)
+# plus these.
+SETTINGS: dict[str, Validator] = {}
 
 
 def validate_settings(raw: Mapping[str, object]) -> Result[dict[str, str], SettingError]:
@@ -41,18 +34,6 @@ def validate_settings(raw: Mapping[str, object]) -> Result[dict[str, str], Setti
             return Result.err(checked.unwrap_err())
         validated[key] = checked.unwrap()
     return Result.ok(validated)
-
-
-def validate_init_settings(raw: Mapping[str, object]) -> Result[dict[str, str], SettingError]:
-    # Unknown keys are reported before missing ones so a typo (`stat`) says
-    # "unknown setting" rather than "missing state".
-    validated = validate_settings(raw)
-    if validated.is_err:
-        return validated
-    missing = [key for key in SETTINGS if key not in raw]
-    if missing:
-        return Result.err(MissingSettings(missing))
-    return validated
 
 
 @dataclass(frozen=True, slots=True)
