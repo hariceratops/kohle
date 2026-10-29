@@ -31,6 +31,7 @@ BEFORE_SPLIT_GROUPS = "TODO"
 BEFORE_PRICE_BINDINGS = "a1cebfe54f33"
 BEFORE_PRICES_UNIQUE_PER_DAY = "b3f9d2a41c70"
 BEFORE_SETTINGS = "d4e7a8c15b92"
+BEFORE_SAMPLING_RULES = "e5a1c3b7d902"
 
 
 @pytest.fixture
@@ -418,3 +419,46 @@ def test_downgrade_refuses_rather_than_dropping_a_setting(migrated_db) -> None:
         command.downgrade(config, BEFORE_SETTINGS)
     assert "1 setting" in str(exc_info.value)
     assert "settings" in _tables(db), "refusal must leave the schema untouched"
+
+
+_DEFAULT_RULES = "mid-month: day 15; salary: last workday"
+
+
+def _rule_lists(db: Path) -> list[tuple[str]]:
+    conn = sqlite3.connect(db)
+    rows = conn.execute("SELECT rules FROM sampling_rule_lists ORDER BY id").fetchall()
+    conn.close()
+    return rows
+
+
+def test_sampling_rule_lists_upgrade_seeds_the_default(migrated_db) -> None:
+    _, db = migrated_db
+
+    assert _rule_lists(db) == [(_DEFAULT_RULES,)]
+
+
+def test_sampling_rule_lists_round_trips_with_only_the_default(migrated_db) -> None:
+    config, db = migrated_db
+
+    command.downgrade(config, BEFORE_SAMPLING_RULES)
+    assert "sampling_rule_lists" not in _tables(db)
+
+    command.upgrade(config, "head")
+    assert _rule_lists(db) == [(_DEFAULT_RULES,)]
+
+
+@pytest.mark.parametrize(
+    "statements",
+    [
+        ["INSERT INTO sampling_rule_lists (rules) VALUES ('salary: workday 25')"],
+        ["UPDATE sampling_rule_lists SET rules = 'salary: day 25'"],
+    ],
+    ids=["a second list", "a non-default list"],
+)
+def test_downgrade_refuses_rather_than_dropping_a_changed_rule_list(migrated_db, statements) -> None:
+    config, db = migrated_db
+    _exec(db, *statements)
+
+    with pytest.raises(RuntimeError, match="sampling rules"):
+        command.downgrade(config, BEFORE_SAMPLING_RULES)
+    assert "sampling_rule_lists" in _tables(db), "refusal must leave the schema untouched"

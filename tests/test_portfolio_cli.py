@@ -141,7 +141,7 @@ def test_net_worth_history_final_row_matches_net_worth(session_factory, monkeypa
     assert history.exit_code == 0, history.output
     assert now.exit_code == 0, now.output
     lines = history.output.splitlines()
-    assert lines[0].split() == ["date", "at", "cost", "at", "market", "estimated"]
+    assert lines[0].split() == ["date", "at", "cost", "at", "market", "estimated", "role"]
     assert lines[2].split()[0] == "2025-06-15"
     last = lines[-1].split()
     assert last[0] == "2026-05-20"
@@ -150,8 +150,8 @@ def test_net_worth_history_final_row_matches_net_worth(session_factory, monkeypa
     estimates = now.output.splitlines()[-1].split()
     assert last[1] == at_cost.split()[-1]
     assert last[2] == at_market.split()[-1]
-    assert f"{estimates[0]} of {estimates[2]}" == " ".join(last[3:])
-    assert last[3:] == ["0", "of", "1"]
+    assert f"{estimates[0]} of {estimates[2]}" == " ".join(last[3:6])
+    assert last[3:] == ["0", "of", "1", "-"]
 
 
 def test_net_worth_history_past_to_ends_with_that_row_and_no_today_row(session_factory, monkeypatch):
@@ -215,16 +215,6 @@ def test_net_worth_history_without_a_state_refuses_and_points_to_the_setter(sess
     assert "set-setting state <code>" in result.output
 
 
-def test_net_worth_history_without_a_state_also_refuses_with_month_end(session_factory, monkeypatch):
-    _pin_today(monkeypatch, date(2026, 11, 20))
-    runner = _unset_state_ledger(session_factory)
-
-    result = runner.invoke(cli, [*_HISTORY_OCT, "--period-end", "month-end"], obj=session_factory)
-
-    assert result.exit_code == 1
-    assert "set-setting state <code>" in result.output
-
-
 def test_net_worth_history_state_flag_runs_on_an_unset_ledger(session_factory, monkeypatch):
     _pin_today(monkeypatch, date(2026, 11, 20))
     runner = _unset_state_ledger(session_factory)
@@ -250,19 +240,6 @@ def test_net_worth_history_uses_a_stored_state_and_leaves_no_group(session_facto
         assert session.scalar(select(func.count()).select_from(OperationGroup)) == groups
 
 
-def test_net_worth_history_month_end_keeps_the_calendar_last_day_and_ignores_state(session_factory, monkeypatch):
-    _pin_today(monkeypatch, date(2026, 11, 20))
-    runner = _ledger(session_factory)
-    args = ["net-worth-history", "--from", "2026-10-01", "--to", "2026-10-31", "--period-end", "month-end"]
-
-    plain = runner.invoke(cli, args, obj=session_factory)
-    other = runner.invoke(cli, [*args, "--state", "BE"], obj=session_factory)
-
-    assert plain.exit_code == 0, plain.output
-    assert [ln.split()[0] for ln in plain.output.splitlines()[2:]] == ["2026-10-15", "2026-10-31"]
-    assert other.output == plain.output
-
-
 def test_net_worth_history_state_changes_the_period_end(session_factory, monkeypatch):
     _pin_today(monkeypatch, date(2029, 6, 20))
     runner = _ledger(session_factory)
@@ -275,8 +252,8 @@ def test_net_worth_history_state_changes_the_period_end(session_factory, monkeyp
     assert [ln.split()[0] for ln in be.output.splitlines()[2:]] == ["2029-05-15", "2029-05-31"]
 
 
-@pytest.mark.parametrize("args", [["--state", "Augsburg"], ["--state", "XX"], ["--period-end", "weekly"]])
-def test_net_worth_history_unknown_state_or_period_end_is_a_usage_error_before_any_read(monkeypatch, args):
+@pytest.mark.parametrize("args", [["--state", "Augsburg"], ["--state", "XX"]])
+def test_net_worth_history_unknown_state_is_a_usage_error_before_any_read(monkeypatch, args):
     _pin_today(monkeypatch, date(2026, 5, 20))
 
     result = CliRunner().invoke(cli, ["net-worth-history", *args], obj=_forbidden_factory)

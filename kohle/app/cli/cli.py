@@ -67,7 +67,7 @@ from kohle.use_cases.reporting import (
     unrealised_gain,
 )
 from kohle.use_cases.rules import AddRule, ListRules, RemoveRule
-from kohle.use_cases.sampling import STATES, PeriodEnd
+from kohle.use_cases.sampling import STATES
 from kohle.use_cases.settings import ListSettings, SetSettings, validate_init_settings
 from kohle.use_cases.splitting import (
     AddSplitGroup,
@@ -1069,18 +1069,13 @@ def fetch_prices_cmd(make_session):
     help="Last date sampled, not after today; defaults to today",
 )
 @click.option(
-    "--period-end", "period_end", type=click.Choice([p.value for p in PeriodEnd]),
-    default=PeriodEnd.last_working_day.value, show_default=True,
-    help="The month's second sample date: the calendar last day or the last working day",
-)
-@click.option(
     "--state", type=click.Choice(STATES), default=None,
     help="Bundesland whose public holidays are not working days, for this run only; "
-    "defaults to the ledger's state setting; ignored with month-end",
+    "defaults to the ledger's state setting",
 )
 @MAX_AGE_DAYS
 @click.pass_obj
-def net_worth_history_cmd(make_session, start, end, period_end: str, state: str | None, max_age_days: int):
+def net_worth_history_cmd(make_session, start, end, state: str | None, max_age_days: int):
     today = date.today()  # noqa: DTZ011 - the user's local date, by design
     end_date = end.date() if end is not None else today
     start_date = start.date() if start is not None else None
@@ -1097,9 +1092,7 @@ def net_worth_history_cmd(make_session, start, end, period_end: str, state: str 
         state = listed.unwrap().values["state"]
         if state is None:
             raise click.ClickException(str(StateNotSet()))
-    res = NetWorthHistory(make_session()).execute(
-        start_date, end_date, max_age_days, PeriodEnd(period_end), state
-    )
+    res = NetWorthHistory(make_session()).execute(start_date, end_date, max_age_days, state)
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
     rows = [
@@ -1108,6 +1101,7 @@ def net_worth_history_cmd(make_session, start, end, period_end: str, state: str 
             "at cost": r.report.at_cost.net_worth_at_cost,
             "at market": r.report.net_worth_at_market,
             "estimated": f"{r.report.estimates.estimated} of {r.report.estimates.holdings}",
+            "role": ", ".join(role.value for role in r.roles) or None,
         }
         for r in res.unwrap()
     ]

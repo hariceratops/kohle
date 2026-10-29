@@ -625,3 +625,43 @@ class DeviceIsReader(DeviceConfigError):
 
     def __str__(self) -> str:
         return f"this device is configured as a reader; `ledger.mode` is set in {self.config_path}"
+
+
+class RecurrenceError(Exception):
+    pass
+
+
+class InvalidRecurrence(RecurrenceError):
+    def __init__(self, text: str, expected: str) -> None:
+        super().__init__()
+        self.text = text
+        self.expected = expected
+
+    def __str__(self) -> str:
+        return f"invalid rule {self.text!r}; expected {self.expected}"
+
+
+class SamplingError(Exception):
+    pass
+
+
+class EmptySamplingRules(SamplingError):
+    def __str__(self) -> str:
+        return 'no sampling rules given; write "<role>: <rule>; …" with roles mid-month, salary'
+
+
+class InvalidRole(SamplingError):
+    def __init__(self, item: str, role: str | None) -> None:
+        super().__init__()
+        self.item = item
+        self.role = role
+
+    def __str__(self) -> str:
+        if self.role is None:
+            return f'{self.item!r} has no role; write "<role>: <rule>" with role mid-month or salary'
+        return f"unknown role {self.role!r} in {self.item!r}; roles: mid-month, salary"
+
+
+SamplingRulesError = SamplingError | InvalidRecurrence
+
+HistoryError = ValuationError | SamplingRulesError

@@ -41,6 +41,8 @@ RECORDING_MODULES = (
     "kohle.use_cases.splitting",
     # Not a recording module: listed because realised gain must come from recorded prices only.
     "kohle.use_cases.lots",
+    "kohle.use_cases.recurrence",
+    "kohle.use_cases.sampling",
 )
 PRICE_ENTRY_POINT_NAMES = {"file", "alphavantage"}
 
@@ -75,6 +77,9 @@ def _guarded_sources() -> dict[str, str]:
             "kohle/use_cases/classification.py",
             "kohle/use_cases/splitting.py",
             "kohle/use_cases/lots.py",
+            "kohle/use_cases/recurrence.py",
+            "kohle/use_cases/sampling.py",
+            "kohle/services/sampling_services.py",
             "kohle/plugin/importer_plugin.py",
         )
     }

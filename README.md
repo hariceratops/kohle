@@ -676,17 +676,15 @@ row's date is fresh, an older one is stale, and a date before any close is
 valued at cost; both of the latter count in `estimated`, which reads `K of M`
 as in `net-worth`'s last line.
 
-`--period-end last-working-day` (the default) samples each month's second date
-on its last working day: Monday to Friday, not a public holiday of the
+The salary date is each month's last working day: Monday to Friday, not a public holiday of the
 `--state` Bundesland (a two-letter code such as `BE` or `NW`; it defaults to the
 ledger's `state` setting, and `--state` overrides it for one run), and
 never 24 or 31 December. A month ending on a Saturday or a holiday therefore
 samples the working day before it, and December is 30 December when that is a
 weekday (2028: Friday 29 December). The 15th never moves. The row is dated that
-day and includes its lines. `--period-end month-end` keeps the calendar last
-day, and then `--state` has no effect. An unknown `--state` is a usage error.
+day and includes its lines. An unknown `--state` is a usage error.
 On a ledger whose `state` is unset, the command without `--state` exits non-zero
-and points to `set-setting state <code>`, in `month-end` mode too.
+and points to `set-setting state <code>`.
 Holidays come from the pinned `holidays` package, so a deliberate upgrade of it
 can move a date.
 

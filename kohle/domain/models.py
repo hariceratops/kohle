@@ -385,3 +385,15 @@ class Setting(base):
     value: Mapped[str] = mapped_column(String, nullable=False)
 
     __table_args__ = (UniqueConstraint("key", name="uq_setting_key"),)
+
+
+class SamplingRuleList(base):
+    """The ledger's sampling rules, as the canonical text set-sampling-rules
+    takes. The row with the highest id applies to the whole history. Earlier
+    rows are kept so the audit trail's creates still point at what was set;
+    nothing reads them for sampling."""
+
+    __tablename__ = "sampling_rule_lists"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    rules: Mapped[str] = mapped_column(String, nullable=False)

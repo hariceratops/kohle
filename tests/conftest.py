@@ -5,16 +5,25 @@ from pathlib import Path
 
 import pytest
 from click.testing import CliRunner, Result as CliResult
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event, insert
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from kohle.app.cli.cli import cli
 from kohle.db.connection import base
-from kohle.domain.models import AccountType
+from kohle.domain.models import AccountType, SamplingRuleList
 from kohle.plugin.importer_plugin import CashRow
 from kohle.use_cases.accounts import AddAccount
 from kohle.use_cases.journal import PEOPLE_ROOT
+
+
+@event.listens_for(SamplingRuleList.__table__, "after_create")
+def _seed_default_sampling_rules(target, connection, **kw) -> None:
+    """Mirror the migration's unconditional seed: every ledger at head has a
+    rule list, and tests build their schema from `base.metadata`. Fires on
+    every create_all, so no test builds a schema without it (design §18.1).
+    The literal is restated here as a spec value, not imported."""
+    connection.execute(insert(target).values(rules="mid-month: day 15; salary: last workday"))
 
 
 @pytest.fixture(autouse=True)

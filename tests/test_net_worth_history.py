@@ -16,7 +16,7 @@ from kohle.services.journal_services import LineSpec, add_journal_entry_service
 from kohle.services.unit_services import add_unit_service
 from kohle.use_cases.prices import NoClose
 from kohle.use_cases.reporting import HistoryRow, NetWorthHistory, ValuedNetWorth
-from kohle.use_cases.sampling import PeriodEnd
+from kohle.use_cases.sampling import Role
 
 EUR = Decimal(1)
 TODAY = date(2026, 3, 10)
@@ -64,7 +64,7 @@ def _by_date(rows: list[HistoryRow]) -> dict[date, HistoryRow]:
 
 
 def test_a_line_on_a_sample_date_is_included_and_the_next_days_is_excluded(session: Session, ledger: dict) -> None:
-    rows = _by_date(NetWorthHistory(session).execute(date(2026, 2, 1), date(2026, 2, 28), 7).unwrap())
+    rows = _by_date(NetWorthHistory(session).execute(date(2026, 2, 1), date(2026, 2, 28), 7, "BY").unwrap())
 
     # 2 X1 bought on the 15th: 1000 - 20 cash plus 2 * 12 at the 02-10 close.
     assert rows[date(2026, 2, 15)].report.at_cost.net_worth_at_cost == Decimal(1000)
@@ -77,10 +77,10 @@ def test_a_line_on_a_sample_date_is_included_and_the_next_days_is_excluded(sessi
 def test_a_close_is_never_a_later_one_and_is_marked_stale_relative_to_the_sample_date(
     session: Session, ledger: dict
 ) -> None:
-    rows = _by_date(NetWorthHistory(session).execute(date(2026, 2, 1), date(2026, 3, 10), 7).unwrap())
+    rows = _by_date(NetWorthHistory(session).execute(date(2026, 2, 1), date(2026, 3, 10), 7, "BY").unwrap())
 
-    # 02-28 is 18 days after the 02-10 close (stale), and the 03-05 close is later.
-    feb_end = rows[date(2026, 2, 28)].report
+    # 02-27 (28 is a Saturday) is 17 days after the 02-10 close (stale), and the 03-05 close is later.
+    feb_end = rows[date(2026, 2, 27)].report
     assert feb_end.net_worth_at_market == Decimal(970 + 3 * 12)
     assert (feb_end.estimates.estimated, feb_end.estimates.holdings) == (1, 1)
     # 02-15 is 5 days after the close: fresh.
@@ -102,7 +102,7 @@ def test_a_date_before_any_close_is_valued_at_cost_and_marked(session: Session, 
     session.commit()
     _close(session, sec.id, date(2026, 2, 1), "50")
 
-    jan = _by_date(NetWorthHistory(session).execute(None, date(2026, 1, 31), 7).unwrap())[date(2026, 1, 15)]
+    jan = _by_date(NetWorthHistory(session).execute(None, date(2026, 1, 31), 7, "BY").unwrap())[date(2026, 1, 15)]
 
     assert [v.close for v in jan.report.own if v.balance.unit_identifier == "X1"] == [NoClose()]
     assert jan.report.net_worth_at_market == jan.report.at_cost.net_worth_at_cost == Decimal(0)
@@ -110,27 +110,29 @@ def test_a_date_before_any_close_is_valued_at_cost_and_marked(session: Session, 
 
 
 def test_the_default_start_is_the_earliest_entry(session: Session, ledger: dict) -> None:
-    rows = NetWorthHistory(session).execute(None, date(2026, 2, 28), 7).unwrap()
+    rows = NetWorthHistory(session).execute(None, date(2026, 2, 28), 7, "BY").unwrap()
 
-    assert [r.on for r in rows] == [date(2026, 1, 15), date(2026, 1, 31), date(2026, 2, 15), date(2026, 2, 28)]
+    assert [r.on for r in rows] == [
+        date(2026, 1, 15), date(2026, 1, 30), date(2026, 2, 15), date(2026, 2, 27), date(2026, 2, 28),
+    ]
 
 
 def test_a_past_to_ends_with_a_row_dated_to(session: Session, ledger: dict) -> None:
-    rows = NetWorthHistory(session).execute(date(2026, 2, 1), date(2026, 2, 20), 7).unwrap()
+    rows = NetWorthHistory(session).execute(date(2026, 2, 1), date(2026, 2, 20), 7, "BY").unwrap()
 
     assert rows[-1].on == date(2026, 2, 20)
     assert rows[-1].report.net_worth_at_market == Decimal(970 + 3 * 12)
 
 
 def test_an_empty_ledger_gives_one_row_dated_to(session: Session, people_root) -> None:
-    rows = NetWorthHistory(session).execute(None, TODAY, 7).unwrap()
+    rows = NetWorthHistory(session).execute(None, TODAY, 7, "BY").unwrap()
 
     assert [r.on for r in rows] == [TODAY]
     assert rows[0].report.net_worth_at_market == 0
 
 
 def test_the_last_row_at_today_equals_valued_net_worth(session: Session, ledger: dict) -> None:
-    last = NetWorthHistory(session).execute(None, TODAY, 7).unwrap()[-1]
+    last = NetWorthHistory(session).execute(None, TODAY, 7, "BY").unwrap()[-1]
     now = ValuedNetWorth(session).execute(TODAY, 7).unwrap()
 
     assert last.on == TODAY
@@ -152,10 +154,9 @@ def test_the_salary_day_row_is_dated_the_working_day_and_includes_that_days_line
     ]).unwrap()
     session.commit()
 
-    rows = NetWorthHistory(session).execute(
-        date(2026, 2, 1), date(2026, 2, 28), 7, PeriodEnd.last_working_day, "BY"
-    ).unwrap()
+    rows = NetWorthHistory(session).execute(date(2026, 2, 1), date(2026, 2, 28), 7, "BY").unwrap()
     by_date = _by_date(rows)
 
     assert [r.on for r in rows] == [date(2026, 2, 15), date(2026, 2, 27), date(2026, 2, 28)]
+    assert [r.roles for r in rows] == [(Role.mid_month,), (Role.salary,), ()]
     assert by_date[date(2026, 2, 27)].report.at_cost.net_worth_at_cost == Decimal(1500)
