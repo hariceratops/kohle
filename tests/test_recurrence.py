@@ -11,6 +11,7 @@ import pytest
 from kohle.domain.domain_errors import InvalidRecurrence
 from kohle.use_cases.recurrence import (
     Day,
+    LastDay,
     LastWorkday,
     is_working_day,
     occurrences,
@@ -34,6 +35,8 @@ def _by(_: date) -> str:
         ("  day   31 ", "day 31"),
         ("last workday", "last workday"),
         ("last   workday", "last workday"),
+        ("last day", "last day"),
+        ("last   day", "last day"),
     ],
 )
 def test_parse_then_render_gives_the_canonical_text(text: str, canonical: str) -> None:
@@ -46,6 +49,7 @@ def test_parse_then_render_gives_the_canonical_text(text: str, canonical: str) -
 def test_parse_builds_the_kind() -> None:
     assert parse_recurrence("day 15").unwrap() == Day(15)
     assert parse_recurrence("last workday").unwrap() == LastWorkday()
+    assert parse_recurrence("last day").unwrap() == LastDay()
 
 
 @pytest.mark.parametrize(
@@ -55,11 +59,11 @@ def test_parse_builds_the_kind() -> None:
         ("day 32", "day N with N from 1 to 31"),
         ("day x", "day N with N from 1 to 31"),
         ("day -1", "day N with N from 1 to 31"),
-        ("last friday", "last workday"),
-        ("Day 15", "one of: day N, last workday"),
-        ("every 2 weeks from 2026-01-02", "one of: day N, last workday"),
-        ("yearly 12-24", "one of: day N, last workday"),
-        ("", "one of: day N, last workday"),
+        ("last friday", "last workday or last day; for a weekday use 1st, 2nd, 3rd or 4th"),
+        ("Day 15", "one of: day N, last workday, last day"),
+        ("every 2 weeks from 2026-01-02", "one of: day N, last workday, last day"),
+        ("yearly 12-24", "one of: day N, last workday, last day"),
+        ("", "one of: day N, last workday, last day"),
     ],
 )
 def test_a_bad_rule_names_the_bad_part_and_the_valid_choices(text: str, expected: str) -> None:
@@ -164,3 +168,21 @@ def test_day_rules_never_import_the_holidays_package() -> None:
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "False"
+
+
+@pytest.mark.parametrize(("year", "month", "expected"), [(2026, 2, 28), (2028, 2, 29), (2026, 4, 30), (2026, 5, 31)])
+def test_last_day_is_the_calendar_last_day_and_never_moves(year: int, month: int, expected: int) -> None:
+    first, last = date(year, month, 1), date(year, month, calendar.monthrange(year, month)[1])
+
+    assert occurrences(LastDay(), first, last, _by) == [date(year, month, expected)]
+
+
+def test_last_day_on_a_holiday_does_not_shift() -> None:
+    assert occurrences(LastDay(), date(2026, 12, 1), date(2026, 12, 31), _by) == [date(2026, 12, 31)]
+
+
+def test_last_day_never_asks_for_the_state() -> None:
+    def boom(_: date) -> str:
+        raise AssertionError("last day does not shift")
+
+    assert occurrences(LastDay(), date(2026, 1, 1), date(2026, 12, 31), boom)[0] == date(2026, 1, 31)

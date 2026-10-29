@@ -33,6 +33,7 @@ _WRITE_ARGV: dict[str, list[str]] = {
     "unsplit-line": ["unsplit-line", "1"],
     "set-price-source": ["set-price-source", "IE00B4L5Y983", "alphavantage", "IWDA"],
     "fetch-prices": ["fetch-prices"],
+    "set-sampling-rules": ["set-sampling-rules", "salary: last day"],
 }
 
 
@@ -42,6 +43,7 @@ def _read_argv(tmp_path: Path) -> dict[str, list[str]]:
         "get-config": ["get-config", "ledger.mode"],
         "snapshot": ["snapshot", str(tmp_path / "snap.db")],
         "list-settings": ["list-settings"],
+        "list-sampling-rules": ["list-sampling-rules"],
         "list-accounts": ["list-accounts"],
         "list-child-accounts": ["list-child-accounts", "Groceries"],
         "list-units": ["list-units"],

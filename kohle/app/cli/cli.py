@@ -67,7 +67,7 @@ from kohle.use_cases.reporting import (
     unrealised_gain,
 )
 from kohle.use_cases.rules import AddRule, ListRules, RemoveRule
-from kohle.use_cases.sampling import STATES
+from kohle.use_cases.sampling import STATES, ListSamplingRules, SetSamplingRules
 from kohle.use_cases.settings import ListSettings, SetSettings, validate_init_settings
 from kohle.use_cases.splitting import (
     AddSplitGroup,
@@ -333,6 +333,25 @@ def set_setting_cmd(make_session, config: DeviceConfig, key: str, value: str):
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
     click.echo(f"Set {key} to {value}")
+
+
+@cli.command(writes=True)
+@click.argument("rules")
+@click.pass_obj
+def set_sampling_rules_cmd(make_session, rules: str):
+    res = SetSamplingRules(make_session()).execute(rules)
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    click.echo(f"Set sampling rules to {res.unwrap()}")
+
+
+@cli.command(writes=False)
+@click.pass_obj
+def list_sampling_rules_cmd(make_session):
+    res = ListSamplingRules(make_session()).execute()
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    click.echo(res.unwrap())
 
 
 @cli.command(writes=True)

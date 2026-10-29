@@ -10,10 +10,15 @@ from kohle.core.result import Result
 from kohle.domain.domain_errors import (
     EmptySamplingRules,
     InvalidRole,
+    SamplingError,
     SamplingRulesError,
 )
 from kohle.infrastructure.transaction_context import DbTransactionContext
-from kohle.services.sampling_services import current_rule_list_service
+from kohle.infrastructure.uow import UnitOfWork
+from kohle.services.sampling_services import (
+    current_rule_list_service,
+    set_rule_list_service,
+)
 from kohle.use_cases.recurrence import (
     Recurrence,
     occurrences,
@@ -95,3 +100,30 @@ def current_sampling_rules(ctx: DbTransactionContext) -> Result[list[SamplingRul
     if stored.is_err:
         return Result.err(stored.unwrap_err())
     return parse_sampling_rules(stored.unwrap().rules)
+
+
+class SetSamplingRules(UnitOfWork[str, SamplingRulesError]):
+    def execute(self, text: str) -> Result[str, SamplingRulesError]:
+        parsed = parse_sampling_rules(text)
+        if parsed.is_err:
+            return Result.err(parsed.unwrap_err())
+        canonical = render_sampling_rules(parsed.unwrap())
+
+        def use_case(ctx: DbTransactionContext) -> Result[str, SamplingRulesError]:
+            written = set_rule_list_service(ctx, canonical)
+            if written.is_err:
+                return Result.err(written.unwrap_err())
+            return Result.ok(canonical)
+
+        return self._run(use_case)
+
+
+class ListSamplingRules(UnitOfWork[str, SamplingError]):
+    def execute(self) -> Result[str, SamplingError]:
+        def use_case(ctx: DbTransactionContext) -> Result[str, SamplingError]:
+            stored = current_rule_list_service(ctx)
+            if stored.is_err:
+                return Result.err(stored.unwrap_err())
+            return Result.ok(stored.unwrap().rules)
+
+        return self._run(use_case)

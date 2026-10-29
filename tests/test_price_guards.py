@@ -86,6 +86,10 @@ def _guarded_sources() -> dict[str, str]:
     callback = cli_module.import_statement.callback
     assert callback is not None
     sources["cli.import_statement"] = inspect.getsource(callback)
+    for name in ("set_sampling_rules_cmd", "list_sampling_rules_cmd"):
+        command_callback = getattr(cli_module, name).callback
+        assert command_callback is not None
+        sources[f"cli.{name}"] = inspect.getsource(command_callback)
     return sources
 
 

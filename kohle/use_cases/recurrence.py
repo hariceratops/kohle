@@ -25,9 +25,14 @@ class LastWorkday:
     pass
 
 
-Recurrence = Day | LastWorkday
+@dataclass(frozen=True, slots=True)
+class LastDay:
+    pass
 
-KINDS = ("day N", "last workday")
+
+Recurrence = Day | LastWorkday | LastDay
+
+KINDS = ("day N", "last workday", "last day")
 
 
 def parse_recurrence(text: str) -> Result[Recurrence, InvalidRecurrence]:
@@ -38,8 +43,12 @@ def parse_recurrence(text: str) -> Result[Recurrence, InvalidRecurrence]:
             return Result.err(InvalidRecurrence(text, "day N with N from 1 to 31"))
         case ["last", "workday"]:
             return Result.ok(LastWorkday())
+        case ["last", "day"]:
+            return Result.ok(LastDay())
         case ["last", *_]:
-            return Result.err(InvalidRecurrence(text, "last workday"))
+            return Result.err(
+                InvalidRecurrence(text, "last workday or last day; for a weekday use 1st, 2nd, 3rd or 4th")
+            )
         case _:
             return Result.err(InvalidRecurrence(text, f"one of: {', '.join(KINDS)}"))
 
@@ -50,6 +59,8 @@ def render_recurrence(rule: Recurrence) -> str:
             return f"day {day}"
         case LastWorkday():
             return "last workday"
+        case LastDay():
+            return "last day"
         case _:
             assert_never(rule)
 
@@ -75,7 +86,7 @@ def _unshifted(rule: Recurrence, year: int, month: int) -> date:
     match rule:
         case Day(day):
             return date(year, month, min(day, last))
-        case LastWorkday():
+        case LastWorkday() | LastDay():
             return date(year, month, last)
         case _:
             assert_never(rule)
@@ -83,7 +94,7 @@ def _unshifted(rule: Recurrence, year: int, month: int) -> date:
 
 def _shifts(rule: Recurrence) -> bool:
     match rule:
-        case Day():
+        case Day() | LastDay():
             return False
         case LastWorkday():
             return True
