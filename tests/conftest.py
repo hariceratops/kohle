@@ -53,11 +53,11 @@ def write_config(tmp_path: Path):
 
 
 @pytest.fixture
-def write_init_rc(tmp_path: Path):
-    """Write `$XDG_CONFIG_HOME/kohle/init.rc`; return the file's path."""
+def write_init_toml(tmp_path: Path):
+    """Write `$XDG_CONFIG_HOME/kohle/init.toml`; return the file's path."""
 
     def write(content: str) -> Path:
-        rc = tmp_path / "xdg-config" / "kohle" / "init.rc"
+        rc = tmp_path / "xdg-config" / "kohle" / "init.toml"
         rc.parent.mkdir(parents=True, exist_ok=True)
         rc.write_text(content)
         return rc

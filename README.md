@@ -102,8 +102,8 @@ way to debug a wrong `ledger.path`.
 
 ### First run
 `kohle-cli init` creates the ledger. It takes no flags and never prompts; its
-only input is the init file, `$XDG_CONFIG_HOME/kohle/init.rc`, or
-`~/.config/kohle/init.rc` when `XDG_CONFIG_HOME` is unset. No other file is
+only input is the init file, `$XDG_CONFIG_HOME/kohle/init.toml`, or
+`~/.config/kohle/init.toml` when `XDG_CONFIG_HOME` is unset. No other file is
 read.
 
 The file is TOML. The only key is `state`, your Bundesland, whose public

@@ -43,13 +43,13 @@ def test_table_form_and_dotted_form_load_equal(write_config) -> None:
     assert table_form == dotted_form == {"ledger.path": Path("/x")}
 
 
-def _init_at(runner: CliRunner, write_init_rc) -> None:
-    write_init_rc('state = "BW"\n')
+def _init_at(runner: CliRunner, write_init_toml) -> None:
+    write_init_toml('state = "BW"\n')
     result = runner.invoke(cli, ["init"])
     assert result.exit_code == 0, result.output
 
 
-def test_ledger_resolution_order_end_to_end(write_config, write_init_rc, tmp_path: Path, monkeypatch) -> None:
+def test_ledger_resolution_order_end_to_end(write_config, write_init_toml, tmp_path: Path, monkeypatch) -> None:
     runner = CliRunner()
     from_file = tmp_path / "from-file" / "kohle.db"
     from_env = tmp_path / "from-env" / "kohle.db"
@@ -58,7 +58,7 @@ def test_ledger_resolution_order_end_to_end(write_config, write_init_rc, tmp_pat
 
     monkeypatch.delenv("KOHLE_DB")
     assert _resolved() == from_file
-    _init_at(runner, write_init_rc)
+    _init_at(runner, write_init_toml)
     assert from_file.exists()
     result = runner.invoke(cli, ["list-settings"])
     assert result.exit_code == 0, result.output
@@ -66,7 +66,7 @@ def test_ledger_resolution_order_end_to_end(write_config, write_init_rc, tmp_pat
 
     monkeypatch.setenv("KOHLE_DB", str(from_env))
     assert _resolved() == from_env
-    _init_at(runner, write_init_rc)
+    _init_at(runner, write_init_toml)
     assert from_env.exists()
     assert str(from_env) in runner.invoke(cli, ["list-settings"]).output
 
@@ -77,7 +77,7 @@ def test_ledger_resolution_order_end_to_end(write_config, write_init_rc, tmp_pat
     write_config("")
     monkeypatch.delenv("KOHLE_DB")
     assert _resolved() == default
-    _init_at(runner, write_init_rc)
+    _init_at(runner, write_init_toml)
     assert default.exists()
     assert str(default) in runner.invoke(cli, ["list-settings"]).output
 
@@ -196,11 +196,11 @@ def test_key_flattening_edge_cases(write_config) -> None:
 
 
 def test_bad_config_stops_init_and_migrate_before_any_write(
-    write_config, write_init_rc, session_factory
+    write_config, write_init_toml, session_factory
 ) -> None:
     runner = CliRunner()
     db = Path(os.environ["KOHLE_DB"])
-    write_init_rc('state = "BW"\n')
+    write_init_toml('state = "BW"\n')
     write_config('ledgr.path = "/x"\n')
 
     result = runner.invoke(cli, ["init"])

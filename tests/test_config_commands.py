@@ -100,9 +100,9 @@ def test_config_commands_fail_on_a_bad_config(command: list[str], write_config) 
 
 
 def test_list_settings_ledger_line_shows_its_source(
-    write_config, run_init, write_init_rc, tmp_path: Path, monkeypatch
+    write_config, run_init, write_init_toml, tmp_path: Path, monkeypatch
 ) -> None:
-    write_init_rc('state = "BW"\n')
+    write_init_toml('state = "BW"\n')
     db = tmp_path / "books" / "kohle.db"
     monkeypatch.setenv("KOHLE_DB", str(db))
     assert run_init().exit_code == 0

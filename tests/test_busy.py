@@ -34,8 +34,8 @@ INSERT_ACCOUNT = "INSERT INTO accounts (name, type, created_at) VALUES ('Held', 
 
 
 @pytest.fixture
-def ledger(write_init_rc, run_init) -> Path:
-    write_init_rc('state = "BW"\n')
+def ledger(write_init_toml, run_init) -> Path:
+    write_init_toml('state = "BW"\n')
     assert run_init().exit_code == 0
     return Path(os.environ["KOHLE_DB"])
 

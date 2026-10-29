@@ -43,9 +43,9 @@ def _audit(event: str, args: tuple) -> None:
 sys.addaudithook(_audit)
 
 
-def _record_invocations(write_init_rc, *extra: str | tuple[str, ...]) -> list[Path]:
+def _record_invocations(write_init_toml, *extra: str | tuple[str, ...]) -> list[Path]:
     global _recorded
-    write_init_rc('state = "BW"\n')
+    write_init_toml('state = "BW"\n')
     runner = CliRunner()
     _recorded = []
     try:
@@ -59,8 +59,8 @@ def _record_invocations(write_init_rc, *extra: str | tuple[str, ...]) -> list[Pa
         _recorded = None
 
 
-def test_commands_never_touch_the_real_kohle_directories(write_init_rc) -> None:
-    recorded = _record_invocations(write_init_rc)
+def test_commands_never_touch_the_real_kohle_directories(write_init_toml) -> None:
+    recorded = _record_invocations(write_init_toml)
 
     assert recorded
     real = [
@@ -71,14 +71,14 @@ def test_commands_never_touch_the_real_kohle_directories(write_init_rc) -> None:
     assert real == []
 
 
-def test_temp_config_toml_is_among_the_recorded_opens(write_init_rc, tmp_path: Path) -> None:
-    recorded = _record_invocations(write_init_rc)
+def test_temp_config_toml_is_among_the_recorded_opens(write_init_toml, tmp_path: Path) -> None:
+    recorded = _record_invocations(write_init_toml)
 
     assert tmp_path / "xdg-config" / "kohle" / "config.toml" in recorded
 
 
-def test_list_config_never_touches_the_real_kohle_directories(write_init_rc) -> None:
-    recorded = _record_invocations(write_init_rc, "list-config")
+def test_list_config_never_touches_the_real_kohle_directories(write_init_toml) -> None:
+    recorded = _record_invocations(write_init_toml, "list-config")
 
     real = [
         path
@@ -88,8 +88,8 @@ def test_list_config_never_touches_the_real_kohle_directories(write_init_rc) -> 
     assert real == []
 
 
-def test_snapshot_never_touches_the_real_kohle_directories(write_init_rc, tmp_path: Path) -> None:
-    recorded = _record_invocations(write_init_rc, ("snapshot", str(tmp_path / "copy.db")))
+def test_snapshot_never_touches_the_real_kohle_directories(write_init_toml, tmp_path: Path) -> None:
+    recorded = _record_invocations(write_init_toml, ("snapshot", str(tmp_path / "copy.db")))
 
     real = [
         path

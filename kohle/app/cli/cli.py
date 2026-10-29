@@ -224,7 +224,7 @@ def cli() -> None:
 
 
 def _init_file_path() -> Path:
-    return config_dir() / "init.rc"
+    return config_dir() / "init.toml"
 
 
 def _read_init_file(path: Path) -> dict[str, object]:

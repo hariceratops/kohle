@@ -563,7 +563,7 @@ class SettingDiffers(SettingError):
         if self.stored is None:
             return f"ledger at {self.path} has no {self.key}; set it with {setter}"
         return (
-            f"ledger at {self.path} has {self.key} = {self.stored} but init.rc says {self.wanted}; "
+            f"ledger at {self.path} has {self.key} = {self.stored} but init.toml says {self.wanted}; "
             f"init never changes an existing ledger, {setter} does"
         )
 
