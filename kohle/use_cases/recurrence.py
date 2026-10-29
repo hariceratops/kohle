@@ -26,6 +26,12 @@ class Workday:
 
 
 @dataclass(frozen=True, slots=True)
+class NthWeekday:
+    nth: int
+    weekday: int
+
+
+@dataclass(frozen=True, slots=True)
 class LastWorkday:
     pass
 
@@ -35,9 +41,12 @@ class LastDay:
     pass
 
 
-Recurrence = Day | Workday | LastWorkday | LastDay
+Recurrence = Day | Workday | NthWeekday | LastWorkday | LastDay
 
-KINDS = ("day N", "workday N", "last workday", "last day")
+KINDS = ("day N", "workday N", "<nth> <weekday>", "last workday", "last day")
+
+_ORDINALS = ("1st", "2nd", "3rd", "4th")
+_WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 
 
 def parse_recurrence(text: str) -> Result[Recurrence, InvalidRecurrence]:
@@ -58,6 +67,12 @@ def parse_recurrence(text: str) -> Result[Recurrence, InvalidRecurrence]:
             return Result.err(
                 InvalidRecurrence(text, "last workday or last day; for a weekday use 1st, 2nd, 3rd or 4th")
             )
+        case [nth, weekday] if nth in _ORDINALS and weekday in _WEEKDAYS:
+            return Result.ok(NthWeekday(_ORDINALS.index(nth) + 1, _WEEKDAYS.index(weekday)))
+        case [nth, _] if nth in _ORDINALS:
+            return Result.err(InvalidRecurrence(text, "a weekday mon, tue, wed, thu, fri, sat or sun"))
+        case [_, weekday] if weekday in _WEEKDAYS:
+            return Result.err(InvalidRecurrence(text, "an ordinal 1st, 2nd, 3rd or 4th before the weekday"))
         case _:
             return Result.err(InvalidRecurrence(text, f"one of: {', '.join(KINDS)}"))
 
@@ -68,6 +83,8 @@ def render_recurrence(rule: Recurrence) -> str:
             return f"day {day}"
         case Workday(day):
             return f"workday {day}"
+        case NthWeekday(nth, weekday):
+            return f"{_ORDINALS[nth - 1]} {_WEEKDAYS[weekday]}"
         case LastWorkday():
             return "last workday"
         case LastDay():
@@ -97,6 +114,9 @@ def _unshifted(rule: Recurrence, year: int, month: int) -> date:
     match rule:
         case Day(day) | Workday(day):
             return date(year, month, min(day, last))
+        case NthWeekday(nth, weekday):
+            first_weekday = calendar.weekday(year, month, 1)
+            return date(year, month, 1 + (weekday - first_weekday) % 7 + 7 * (nth - 1))
         case LastWorkday() | LastDay():
             return date(year, month, last)
         case _:
@@ -107,7 +127,7 @@ def _shifts(rule: Recurrence) -> bool:
     match rule:
         case Day() | LastDay():
             return False
-        case Workday() | LastWorkday():
+        case Workday() | NthWeekday() | LastWorkday():
             return True
         case _:
             assert_never(rule)

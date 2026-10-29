@@ -128,3 +128,11 @@ def test_dec_24_and_31_are_never_last_workday_samples() -> None:
 
     assert not {date(2028, 12, 24), date(2028, 12, 31)} & {s.on for s in samples}
     assert date(2028, 12, 29) in {s.on for s in samples}
+
+
+def test_a_third_friday_on_the_15th_gives_one_row_with_both_roles() -> None:
+    rules = parse_sampling_rules("mid-month: day 15; salary: 3rd fri").unwrap()
+
+    assert sample_dates(rules, _by, date(2026, 5, 1), date(2026, 5, 15)) == [
+        Sample(date(2026, 5, 15), (Role.mid_month, Role.salary)),
+    ]

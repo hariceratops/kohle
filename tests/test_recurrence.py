@@ -13,6 +13,7 @@ from kohle.use_cases.recurrence import (
     Day,
     LastDay,
     LastWorkday,
+    NthWeekday,
     Workday,
     is_working_day,
     occurrences,
@@ -66,10 +67,14 @@ def test_parse_builds_the_kind() -> None:
         ("workday 32", "workday N with N from 1 to 31"),
         ("workday x", "workday N with N from 1 to 31"),
         ("last friday", "last workday or last day; for a weekday use 1st, 2nd, 3rd or 4th"),
-        ("Day 15", "one of: day N, workday N, last workday, last day"),
-        ("every 2 weeks from 2026-01-02", "one of: day N, workday N, last workday, last day"),
-        ("yearly 12-24", "one of: day N, workday N, last workday, last day"),
-        ("", "one of: day N, workday N, last workday, last day"),
+        ("5th fri", "an ordinal 1st, 2nd, 3rd or 4th before the weekday"),
+        ("first fri", "an ordinal 1st, 2nd, 3rd or 4th before the weekday"),
+        ("3rd friday", "a weekday mon, tue, wed, thu, fri, sat or sun"),
+        ("3rd", "one of: day N, workday N, <nth> <weekday>, last workday, last day"),
+        ("Day 15", "one of: day N, workday N, <nth> <weekday>, last workday, last day"),
+        ("every 2 weeks from 2026-01-02", "one of: day N, workday N, <nth> <weekday>, last workday, last day"),
+        ("yearly 12-24", "one of: day N, workday N, <nth> <weekday>, last workday, last day"),
+        ("", "one of: day N, workday N, <nth> <weekday>, last workday, last day"),
     ],
 )
 def test_a_bad_rule_names_the_bad_part_and_the_valid_choices(text: str, expected: str) -> None:
@@ -211,3 +216,28 @@ def test_workday_clamps_then_shifts() -> None:
 def test_workday_can_land_in_the_previous_month() -> None:
     # 1 May is a holiday and 30 April a Thursday.
     assert occurrences(Workday(1), date(2026, 4, 1), date(2026, 4, 30), _by) == [date(2026, 4, 1), date(2026, 4, 30)]
+
+
+def test_parse_builds_nth_weekday() -> None:
+    assert parse_recurrence("3rd fri").unwrap() == NthWeekday(3, 4)
+    assert parse_recurrence("1st mon").unwrap() == NthWeekday(1, 0)
+
+
+def test_nth_weekday_round_trips() -> None:
+    for nth in ("1st", "2nd", "3rd", "4th"):
+        for wd in ("mon", "tue", "wed", "thu", "fri", "sat", "sun"):
+            assert render_recurrence(parse_recurrence(f"{nth}  {wd}").unwrap()) == f"{nth} {wd}"
+
+
+def test_third_friday_of_may_2026_is_the_15th() -> None:
+    assert occurrences(NthWeekday(3, 4), date(2026, 5, 1), date(2026, 5, 31), _by) == [date(2026, 5, 15)]
+
+
+def test_nth_weekday_on_a_holiday_moves_to_the_previous_working_day() -> None:
+    assert occurrences(NthWeekday(1, 4), date(2026, 4, 1), date(2026, 4, 30), _by) == [date(2026, 4, 2), date(2026, 4, 30)]
+
+
+def test_third_friday_lands_on_days_15_to_21_when_it_does_not_shift() -> None:
+    found = occurrences(NthWeekday(3, 4), date(2026, 6, 1), date(2026, 6, 30), _by)
+
+    assert found == [date(2026, 6, 19)]
