@@ -645,9 +645,10 @@ and `realised` use FIFO, so they can disagree about what a lot cost.
 
 ### Net worth over time
 
-`net-worth-history` shows net worth at past sample dates: the 15th and the salary
-day (the last working day) of each month, plus a final row dated `--to` when that is not
-itself a sample date:
+`net-worth-history` shows net worth at past sample dates, as given by the ledger's
+sampling rules, plus a final row dated `--to` when that is not itself a sample
+date. A fresh ledger samples the 15th (`mid-month`) and the last working day
+(`salary`) of each month:
 
 ```bash
 kohle-cli net-worth-history
@@ -655,14 +656,19 @@ kohle-cli net-worth-history --from 2026-01-01 --to 2026-10-12
 ```
 
 ```
-date          at cost    at market  estimated
-----------  ---------  -----------  -----------
-2026-08-15   10210.00     10294.50  1 of 3
-2026-08-31   12890.00     12961.20  1 of 3
-2026-09-15   12650.00     12702.00  2 of 3
-2026-09-30   15330.00     15391.10  1 of 3
-2026-10-12   15105.00     15188.40  1 of 3
+date          at cost    at market  estimated    role
+----------  ---------  -----------  -----------  ------------------
+2026-08-15   10210.00     10294.50  1 of 3       mid-month
+2026-08-31   12890.00     12961.20  1 of 3       salary
+2026-09-15   12650.00     12702.00  2 of 3       mid-month
+2026-09-30   15330.00     15391.10  1 of 3       salary
+2026-10-12   15105.00     15188.40  1 of 3       -
 ```
+
+The `role` column lists every role whose rule reached the date, so a date hit by
+two rules is one row (`mid-month, salary`). The `--to` row that is not a sample
+date has no role (`-`). `--role mid-month|salary` keeps only rows listing that
+role; the `--to` row is always shown.
 
 Each row values the ledger as `net-worth` does, using only the lines dated on or
 before that date (a line dated on a sample date is included, the next day's is
@@ -672,22 +678,75 @@ row's date is fresh, an older one is stale, and a date before any close is
 valued at cost; both of the latter count in `estimated`, which reads `K of M`
 as in `net-worth`'s last line.
 
-The salary date is each month's last working day: Monday to Friday, not a public holiday of the
-Bundesland in force on that date (`list-states`), and
-never 24 or 31 December. A month ending on a Saturday or a holiday therefore
-samples the working day before it, and December is 30 December when that is a
-weekday (2028: Friday 29 December). The 15th never moves. The row is dated that
-day and includes its lines.
-On a ledger with no `start` Bundesland the command exits non-zero
-and points to `move-state --from start <code>`.
-Holidays come from the pinned `holidays` package, so a deliberate upgrade of it
-can move a date.
+`--period-end` and `--state` are removed, and `state` is no longer a setting:
+the stored sampling rules and Bundesland history are the only sources, with no
+per-run override. On a ledger with no `start` Bundesland the command exits
+non-zero and points to `move-state --from start <code>`. Holidays come from the
+pinned `holidays` package, so a deliberate upgrade of it can move a date.
 
 `--from` defaults to the earliest ledger entry and `--to` to today. A `--to`
 after today, or a `--from` later than `--to`, is a usage error. With `--to`
 omitted the last row equals what `net-worth` prints today, unless an entry is
 dated in the future, which `net-worth` counts and the history does not. The
 report never fetches prices.
+
+#### Sampling rules
+
+The rule list is stored in the ledger and applies to its whole history.
+`set-sampling-rules` replaces it as a whole, so changing it re-samples every
+past month; `list-sampling-rules` prints it:
+
+```bash
+kohle-cli list-sampling-rules
+kohle-cli set-sampling-rules "mid-month: day 15; salary: 3rd fri"
+```
+
+A list is `"<role>: <rule>; <role>: <rule>; ..."`. The roles are fixed:
+`mid-month` and `salary`. The default is `mid-month: day 15; salary: last
+workday`. An invalid rule, role or list writes nothing and the error names the
+bad part and lists the valid choices.
+
+| Rule | Meaning |
+|---|---|
+| `day N` | Calendar day N (1-31). Never moves; in a shorter month it is the last day. |
+| `workday N` | Day N (clamped the same way), or the last working day before it. |
+| `<nth> <weekday>` | `1st`-`4th` plus `mon`-`sun`, e.g. `3rd fri`: that weekday of the month, or the previous working day if it is not a working day. |
+| `last workday` | The last working day of the month. |
+| `last day` | The calendar last day of the month. |
+| `every N days\|weeks\|months from YYYY-MM-DD` | Every N units from the date. Specified, not built yet: reserved for `budgeting`. |
+| `yearly MM-DD` | That calendar day every year. Specified, not built yet: reserved for `budgeting`. |
+
+A working day is Monday to Friday, not a public holiday of the Bundesland in
+force on the rule's unshifted date, and never 24 or 31 December. A shift only
+moves backward and may land in the previous month; the row is dated where it
+lands and includes its lines. `day 15` on a Sunday stays on the 15th, while
+`workday 15` moves to Friday the 13th. With the default list, a month ending on
+a Saturday or a holiday samples the working day before it, and December is 30
+December when that is a weekday (2028: Friday 29 December).
+
+#### Bundesland history
+
+The Bundesland is an effective-dated history, so moving applies from a date
+onward and leaves earlier samples alone:
+
+```bash
+kohle-cli list-states
+kohle-cli move-state --from 2026-01-01 NI
+```
+
+`--from` is required and takes a date or `start`, the entry that applies from
+the start of the ledger. The date may be in the future. Repeating a date
+replaces that entry, which is how to correct a mistake; a later entry wins from
+its own date onward. `list-states` shows the history, oldest first, with `start`
+for the first entry. An invalid code writes nothing and lists the valid ones.
+Each successful change is one operation in `list-operations`.
+
+#### Sample dates and price calls
+
+Sample dates cost no API calls: the report only reads stored closes, taking the
+last one on or before each date, and none of these commands touches the price
+tables or a price plugin. Fetching past closes for the sample dates (backfill)
+is not built; `fetch-prices` still fetches only the latest close.
 
 ### Prices
 Current prices come from price plugins, a second plugin kind in the same
