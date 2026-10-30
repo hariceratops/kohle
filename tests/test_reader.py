@@ -19,7 +19,7 @@ STATEMENT = Path(__file__).parent / "fixtures" / "deutsche_bank_statement.csv"
 _WRITE_ARGV: dict[str, list[str]] = {
     "init": ["init"],
     "migrate": ["migrate"],
-    "set-setting": ["set-setting", "state", "BW"],
+    "set-setting": ["set-setting", "foo", "x"],
     "add-account": ["add-account", "Savings"],
     "add-unit": ["add-unit", "IE00B4L5Y983", "Core MSCI World"],
     "import-statement": ["import-statement", "deutsche-bank", "Cash", str(STATEMENT)],
@@ -33,6 +33,8 @@ _WRITE_ARGV: dict[str, list[str]] = {
     "unsplit-line": ["unsplit-line", "1"],
     "set-price-source": ["set-price-source", "IE00B4L5Y983", "alphavantage", "IWDA"],
     "fetch-prices": ["fetch-prices"],
+    "set-sampling-rules": ["set-sampling-rules", "salary: last day"],
+    "move-state": ["move-state", "--from", "start", "BY"],
 }
 
 
@@ -42,6 +44,8 @@ def _read_argv(tmp_path: Path) -> dict[str, list[str]]:
         "get-config": ["get-config", "ledger.mode"],
         "snapshot": ["snapshot", str(tmp_path / "snap.db")],
         "list-settings": ["list-settings"],
+        "list-sampling-rules": ["list-sampling-rules"],
+        "list-states": ["list-states"],
         "list-accounts": ["list-accounts"],
         "list-child-accounts": ["list-child-accounts", "Groceries"],
         "list-units": ["list-units"],
@@ -56,7 +60,7 @@ def _read_argv(tmp_path: Path) -> dict[str, list[str]]:
         "positions": ["positions"],
         "realised": ["realised"],
         "settle-up": ["settle-up"],
-        "net-worth-history": ["net-worth-history", "--state", "BW"],
+        "net-worth-history": ["net-worth-history"],
     }
 
 
@@ -73,8 +77,8 @@ def _invoke(*args: str):
 
 
 @pytest.fixture
-def live(write_init_rc, run_init) -> Path:
-    write_init_rc('state = "BW"\n')
+def live(write_init_toml, run_init) -> Path:
+    write_init_toml('state = "BW"\n')
     db = Path(os.environ["KOHLE_DB"])
     assert run_init().exit_code == 0
     for args in (

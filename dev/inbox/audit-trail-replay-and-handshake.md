@@ -63,3 +63,41 @@ is instead of relying on configuration.
 - `device-topology-and-sync` must not state that a reader never changes its
   file more strongly than "except by an apply command".
 - Its docs must not present Receive Only as the only correct reader setup.
+
+## Update 2026-10-27: moved out of kohle
+
+Decided: multi-device and multi-master sync is a separate side project, not a
+kohle feature. Repo under `~/code`, reference implementation in Rust, protocol
+specified separately from the code; aimed at a conference talk. Scope is mid
+2028, not the January release. kohle becomes the first adopter later. No
+further discussion planned until then.
+
+Why the brief above is not the basis for it (colleague session):
+
+- `operations` is not an op log. It records which `(entity_type, entity_id)`
+  was touched and the verb; `field` and `state` are almost always NULL
+  (`kohle/infrastructure/crud.py`). Fine for a reader catching up to one
+  writer, useless for merging two.
+- SQLite's session extension captures every write on a connection, including
+  journal lines and migrations that never get an `Operation`. Prefer
+  changesets over the audit trail. Unverified: APSW exposing the extension in
+  recent versions; rusqlite has a `session` feature.
+- Not a CRDT problem for kohle. Prices, imports (bank reference as idempotency
+  key) and soft deletes commute. Classifications and splits merge but
+  last-writer-wins drops a human decision. `uq_account_name` is global, so
+  concurrent creates conflict. FIFO is recomputed from journal lines, so it
+  merges as state, but "no sale exceeds its lots" does not (Bailis et al.,
+  "Coordination Avoidance in Database Systems", VLDB 2015).
+- Integer primary keys collide across writers: multi-writer needs UUIDs or
+  `(device, counter)` ids, a migration across every table. That is kohle's
+  adoption cost.
+- Category theory link is patch theory (Mimram and Di Giusto), not CRDTs
+  (order theory).
+- Prior art to read first: cr-sqlite, Litestream and LiteFS, Turso and
+  libSQL, Electric, Automerge.
+- First experiment: session on a copy of the real ledger, run `import-statement`
+  and `fetch-prices`, apply the changeset to an older snapshot, compare with a
+  fresh one. Then two copies with random command sequences cross-applied, logging
+  SQLite conflict types per table.
+- Open: whether recording on a laptop away from the Pi is wanted; if not, the
+  talk should say multi-master is a learning exercise.

@@ -10,10 +10,17 @@ from decimal import Decimal
 from typing import assert_never
 
 from kohle.core.result import Result
-from kohle.domain.domain_errors import PositionsError, PriceError, ValuationError
+from kohle.domain.domain_errors import (
+    HistoryError,
+    PositionsError,
+    PriceError,
+    ValuationError,
+)
 from kohle.infrastructure.transaction_context import DbTransactionContext
 from kohle.infrastructure.uow import UnitOfWork
 from kohle.services.account_services import get_account_by_name_service
+from kohle.services.state_services import list_state_entries_service
+from kohle.use_cases.bundesland import state_lookup
 from kohle.use_cases.journal import (
     BASE_CURRENCY,
     NetWorthReport,
@@ -25,7 +32,7 @@ from kohle.use_cases.journal import (
 )
 from kohle.use_cases.lots import FifoHolding, replay_ledger
 from kohle.use_cases.prices import Fresh, LatestClose, NoClose, Stale, latest_close
-from kohle.use_cases.sampling import PeriodEnd, sample_dates
+from kohle.use_cases.sampling import Role, current_sampling_rules, sample_dates
 
 
 def _market_value(quantity: Decimal, close: LatestClose | None, at_cost: Decimal) -> Decimal:
@@ -224,10 +231,11 @@ class QueryPositions(UnitOfWork[list[Position], PositionsError]):
 @dataclass(frozen=True, slots=True)
 class HistoryRow:
     on: date
+    roles: tuple[Role, ...]
     report: ValuedNetWorthReport
 
 
-class NetWorthHistory(UnitOfWork[list[HistoryRow], ValuationError]):
+class NetWorthHistory(UnitOfWork[list[HistoryRow], HistoryError]):
     """Net worth at each sample date, valued by `valued_net_worth`'s rule as
     of that date. The lines load once, the fold runs once, and every close
     read shares the transaction."""
@@ -237,10 +245,20 @@ class NetWorthHistory(UnitOfWork[list[HistoryRow], ValuationError]):
         start: date | None,
         end: date,
         max_age_days: int,
-        mode: PeriodEnd = PeriodEnd.month_end,
-        state: str = "BY",
-    ) -> Result[list[HistoryRow], ValuationError]:
-        def use_case(ctx: DbTransactionContext) -> Result[list[HistoryRow], ValuationError]:
+        role: Role | None = None,
+    ) -> Result[list[HistoryRow], HistoryError]:
+        def use_case(ctx: DbTransactionContext) -> Result[list[HistoryRow], HistoryError]:
+            rules_res = current_sampling_rules(ctx)
+            if rules_res.is_err:
+                return Result.err(rules_res.unwrap_err())
+
+            entries_res = list_state_entries_service(ctx)
+            if entries_res.is_err:
+                return Result.err(entries_res.unwrap_err())
+            lookup_res = state_lookup(entries_res.unwrap())
+            if lookup_res.is_err:
+                return Result.err(lookup_res.unwrap_err())
+
             lines_res = net_worth_lines(ctx)
             if lines_res.is_err:
                 return Result.err(lines_res.unwrap_err())
@@ -251,17 +269,21 @@ class NetWorthHistory(UnitOfWork[list[HistoryRow], ValuationError]):
                 first_day = min(first, end)
             else:
                 first_day = start
-            dates = sample_dates(first_day, end, mode, state)
+            samples = sample_dates(rules_res.unwrap(), lookup_res.unwrap(), first_day, end)
+            if role is not None:
+                # Filtering before the fold and valuation is safe: the fold is over a prefix.
+                samples = [s for s in samples if role in s.roles or s.on == end]
+            dates = [s.on for s in samples]
 
             own = aggregate_by_unit_through(lines.own, dates)
             receivables = aggregate_by_unit_through(lines.receivables, dates)
 
             rows: list[HistoryRow] = []
-            for day, o, r in zip(dates, own, receivables, strict=True):
-                valued_res = valued_net_worth(ctx, NetWorthReport(o, r), day, max_age_days)
+            for sample, o, r in zip(samples, own, receivables, strict=True):
+                valued_res = valued_net_worth(ctx, NetWorthReport(o, r), sample.on, max_age_days)
                 if valued_res.is_err:
                     return Result.err(valued_res.unwrap_err())
-                rows.append(HistoryRow(day, valued_res.unwrap()))
+                rows.append(HistoryRow(sample.on, sample.roles, valued_res.unwrap()))
             return Result.ok(rows)
 
         return self._run(use_case)

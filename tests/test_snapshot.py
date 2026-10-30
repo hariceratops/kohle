@@ -19,8 +19,8 @@ def _invoke(*args: str):
 
 
 @pytest.fixture
-def live(write_init_rc, run_init) -> Path:
-    write_init_rc('state = "BW"\n')
+def live(write_init_toml, run_init) -> Path:
+    write_init_toml('state = "BW"\n')
     db = Path(os.environ["KOHLE_DB"])
     assert run_init().exit_code == 0
     for args in (

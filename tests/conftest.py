@@ -5,16 +5,25 @@ from pathlib import Path
 
 import pytest
 from click.testing import CliRunner, Result as CliResult
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event, insert
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from kohle.app.cli.cli import cli
 from kohle.db.connection import base
-from kohle.domain.models import AccountType
+from kohle.domain.models import START, AccountType, SamplingRuleList, StateEntry
 from kohle.plugin.importer_plugin import CashRow
 from kohle.use_cases.accounts import AddAccount
 from kohle.use_cases.journal import PEOPLE_ROOT
+
+
+@event.listens_for(SamplingRuleList.__table__, "after_create")
+def _seed_default_sampling_rules(target, connection, **kw) -> None:
+    """Mirror the migration's unconditional seed: every ledger at head has a
+    rule list, and tests build their schema from `base.metadata`. Fires on
+    every create_all, so no test builds a schema without it (design §18.1).
+    The literal is restated here as a spec value, not imported."""
+    connection.execute(insert(target).values(rules="mid-month: day 15; salary: last workday"))
 
 
 @pytest.fixture(autouse=True)
@@ -44,11 +53,11 @@ def write_config(tmp_path: Path):
 
 
 @pytest.fixture
-def write_init_rc(tmp_path: Path):
-    """Write `$XDG_CONFIG_HOME/kohle/init.rc`; return the file's path."""
+def write_init_toml(tmp_path: Path):
+    """Write `$XDG_CONFIG_HOME/kohle/init.toml`; return the file's path."""
 
     def write(content: str) -> Path:
-        rc = tmp_path / "xdg-config" / "kohle" / "init.rc"
+        rc = tmp_path / "xdg-config" / "kohle" / "init.toml"
         rc.parent.mkdir(parents=True, exist_ok=True)
         rc.write_text(content)
         return rc
@@ -92,6 +101,16 @@ def session_factory():
     base.metadata.create_all(bind=engine)
     yield SessionLocal
     base.metadata.drop_all(bind=engine)
+
+
+@pytest.fixture
+def start_state(session: Session) -> StateEntry:
+    """Opt-in: a ledger with no `start` entry is legitimate, and its refusal
+    must be testable (design §18.1)."""
+    entry = StateEntry(effective_from=START, state="BY")
+    session.add(entry)
+    session.commit()
+    return entry
 
 
 @pytest.fixture

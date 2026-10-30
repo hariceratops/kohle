@@ -385,3 +385,31 @@ class Setting(base):
     value: Mapped[str] = mapped_column(String, nullable=False)
 
     __table_args__ = (UniqueConstraint("key", name="uq_setting_key"),)
+
+
+class SamplingRuleList(base):
+    """The ledger's sampling rules, as the canonical text set-sampling-rules
+    takes. The row with the highest id applies to the whole history. Earlier
+    rows are kept so the audit trail's creates still point at what was set;
+    nothing reads them for sampling."""
+
+    __tablename__ = "sampling_rule_lists"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    rules: Mapped[str] = mapped_column(String, nullable=False)
+
+
+# The effective_from of the entry that applies from the start of the ledger.
+START = date.min
+
+
+class StateEntry(base):
+    """The Bundesland from `effective_from` onward, until the next entry."""
+
+    __tablename__ = "state_entries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    effective_from: Mapped[date] = mapped_column(Date, nullable=False)
+    state: Mapped[str] = mapped_column(String, nullable=False)
+
+    __table_args__ = (UniqueConstraint("effective_from", name="uq_state_entry_effective_from"),)

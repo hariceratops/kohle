@@ -17,8 +17,10 @@ The ledger lives at `KOHLE_DB`, else `ledger.path` in `config.toml`, else
 is created and upgraded only by `kohle-cli init` and `migrate`, from the
 Alembic migrations packaged in `kohle/db/migrations/`, and every other command
 checks its revision first. Ledger-wide settings live in the `settings` table,
-keyed by the registry in `kohle/use_cases/settings.py`, never in environment
-variables. Device settings live in `$XDG_CONFIG_HOME/kohle/config.toml`, keyed
+keyed by the registry in `kohle/use_cases/settings.py` (empty today), never in
+environment variables. The Bundesland is not a setting: it is an
+effective-dated history in `state_entries`, and the net-worth-history sampling
+rules are a stored list in `sampling_rule_lists`. Device settings live in `$XDG_CONFIG_HOME/kohle/config.toml`, keyed
 by the separate registry in `kohle/infrastructure/device_config.py`; kohle
 never writes that file.
 

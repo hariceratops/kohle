@@ -12,9 +12,12 @@ from pathlib import Path
 
 import pytest
 from alembic.config import Config
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
 
 from alembic import command
 from kohle.db.schema import alembic_config
+from kohle.domain.models import START, StateEntry
 
 # The revision each migration under test replaced. Downgrading *to* one is what
 # undoes the migration above it, and unlike "-1" it keeps meaning that as newer
@@ -31,6 +34,8 @@ BEFORE_SPLIT_GROUPS = "TODO"
 BEFORE_PRICE_BINDINGS = "a1cebfe54f33"
 BEFORE_PRICES_UNIQUE_PER_DAY = "b3f9d2a41c70"
 BEFORE_SETTINGS = "d4e7a8c15b92"
+BEFORE_SAMPLING_RULES = "e5a1c3b7d902"
+BEFORE_STATE_ENTRIES = "f6b2d4c8e013"
 
 
 @pytest.fixture
@@ -418,3 +423,122 @@ def test_downgrade_refuses_rather_than_dropping_a_setting(migrated_db) -> None:
         command.downgrade(config, BEFORE_SETTINGS)
     assert "1 setting" in str(exc_info.value)
     assert "settings" in _tables(db), "refusal must leave the schema untouched"
+
+
+_DEFAULT_RULES = "mid-month: day 15; salary: last workday"
+
+
+def _rule_lists(db: Path) -> list[tuple[str]]:
+    conn = sqlite3.connect(db)
+    rows = conn.execute("SELECT rules FROM sampling_rule_lists ORDER BY id").fetchall()
+    conn.close()
+    return rows
+
+
+def test_sampling_rule_lists_upgrade_seeds_the_default(migrated_db) -> None:
+    _, db = migrated_db
+
+    assert _rule_lists(db) == [(_DEFAULT_RULES,)]
+
+
+def test_sampling_rule_lists_round_trips_with_only_the_default(migrated_db) -> None:
+    config, db = migrated_db
+
+    command.downgrade(config, BEFORE_SAMPLING_RULES)
+    assert "sampling_rule_lists" not in _tables(db)
+
+    command.upgrade(config, "head")
+    assert _rule_lists(db) == [(_DEFAULT_RULES,)]
+
+
+@pytest.mark.parametrize(
+    "statements",
+    [
+        ["INSERT INTO sampling_rule_lists (rules) VALUES ('salary: workday 25')"],
+        ["UPDATE sampling_rule_lists SET rules = 'salary: day 25'"],
+    ],
+    ids=["a second list", "a non-default list"],
+)
+def test_downgrade_refuses_rather_than_dropping_a_changed_rule_list(migrated_db, statements) -> None:
+    config, db = migrated_db
+    _exec(db, *statements)
+
+    with pytest.raises(RuntimeError, match="sampling rules"):
+        command.downgrade(config, BEFORE_SAMPLING_RULES)
+    assert "sampling_rule_lists" in _tables(db), "refusal must leave the schema untouched"
+
+
+@pytest.fixture
+def before_state_entries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Config, Path]:
+    db = tmp_path / "kohle.db"
+    db.touch()
+    monkeypatch.setenv("KOHLE_DB", str(db))
+    config = alembic_config()
+    command.upgrade(config, BEFORE_STATE_ENTRIES)
+    return config, db
+
+
+def _state_entries(db: Path) -> list[tuple[str, str]]:
+    conn = sqlite3.connect(db)
+    rows = conn.execute("SELECT effective_from, state FROM state_entries ORDER BY effective_from").fetchall()
+    conn.close()
+    return rows
+
+
+def test_state_setting_becomes_the_start_entry_and_leaves_settings(before_state_entries) -> None:
+    config, db = before_state_entries
+    _exec(db, "INSERT INTO settings (key, value) VALUES ('state', 'BY')")
+
+    command.upgrade(config, "head")
+
+    assert _state_entries(db) == [("0001-01-01", "BY")]
+    conn = sqlite3.connect(db)
+    assert conn.execute("SELECT COUNT(*) FROM settings WHERE key = 'state'").fetchone() == (0,)
+    conn.close()
+
+
+def test_start_entry_reads_back_as_the_start_sentinel_through_the_model(before_state_entries) -> None:
+    config, db = before_state_entries
+    _exec(db, "INSERT INTO settings (key, value) VALUES ('state', 'BY')")
+    command.upgrade(config, "head")
+
+    engine = create_engine(f"sqlite:///{db}")
+    with Session(engine) as session:
+        entry = session.query(StateEntry).one()
+        assert (entry.effective_from, entry.state) == (START, "BY")
+    engine.dispose()
+
+
+def test_an_unset_state_creates_no_entry(before_state_entries) -> None:
+    config, db = before_state_entries
+
+    command.upgrade(config, "head")
+
+    assert _state_entries(db) == []
+
+
+def test_state_entries_round_trip_a_start_only_history(migrated_db) -> None:
+    config, db = migrated_db
+    _exec(db, "INSERT INTO state_entries (effective_from, state) VALUES ('0001-01-01', 'BW')")
+
+    command.downgrade(config, BEFORE_STATE_ENTRIES)
+    assert "state_entries" not in _tables(db)
+    conn = sqlite3.connect(db)
+    assert conn.execute("SELECT value FROM settings WHERE key = 'state'").fetchone() == ("BW",)
+    conn.close()
+
+    command.upgrade(config, "head")
+    assert _state_entries(db) == [("0001-01-01", "BW")]
+
+
+def test_downgrade_refuses_rather_than_dropping_a_move(migrated_db) -> None:
+    config, db = migrated_db
+    _exec(
+        db,
+        "INSERT INTO state_entries (effective_from, state) VALUES ('0001-01-01', 'BY')",
+        "INSERT INTO state_entries (effective_from, state) VALUES ('2026-01-01', 'NI')",
+    )
+
+    with pytest.raises(RuntimeError, match="state history"):
+        command.downgrade(config, BEFORE_STATE_ENTRIES)
+    assert "state_entries" in _tables(db), "refusal must leave the schema untouched"

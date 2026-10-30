@@ -9,14 +9,15 @@ from decimal import Decimal
 import pytest
 from sqlalchemy.orm import Session
 
-from kohle.domain.models import AccountType, Price, UnitKind
+from kohle.domain.domain_errors import NoStartState
+from kohle.domain.models import AccountType, Price, StateEntry, UnitKind
 from kohle.infrastructure.transaction_context import DbTransactionContext
 from kohle.services.account_services import add_account_service
 from kohle.services.journal_services import LineSpec, add_journal_entry_service
 from kohle.services.unit_services import add_unit_service
 from kohle.use_cases.prices import NoClose
 from kohle.use_cases.reporting import HistoryRow, NetWorthHistory, ValuedNetWorth
-from kohle.use_cases.sampling import PeriodEnd
+from kohle.use_cases.sampling import Role
 
 EUR = Decimal(1)
 TODAY = date(2026, 3, 10)
@@ -28,7 +29,7 @@ def _close(session: Session, unit_id: int, on: date, price: str) -> None:
 
 
 @pytest.fixture
-def ledger(session: Session, people_root) -> dict:
+def ledger(session: Session, people_root, start_state) -> dict:
     ctx = DbTransactionContext(session)
     checking = add_account_service(ctx, "Checking", AccountType.asset, "DE1").unwrap()
     depot = add_account_service(ctx, "Depot", AccountType.asset, "DE2").unwrap()
@@ -79,8 +80,8 @@ def test_a_close_is_never_a_later_one_and_is_marked_stale_relative_to_the_sample
 ) -> None:
     rows = _by_date(NetWorthHistory(session).execute(date(2026, 2, 1), date(2026, 3, 10), 7).unwrap())
 
-    # 02-28 is 18 days after the 02-10 close (stale), and the 03-05 close is later.
-    feb_end = rows[date(2026, 2, 28)].report
+    # 02-27 (28 is a Saturday) is 17 days after the 02-10 close (stale), and the 03-05 close is later.
+    feb_end = rows[date(2026, 2, 27)].report
     assert feb_end.net_worth_at_market == Decimal(970 + 3 * 12)
     assert (feb_end.estimates.estimated, feb_end.estimates.holdings) == (1, 1)
     # 02-15 is 5 days after the close: fresh.
@@ -89,7 +90,7 @@ def test_a_close_is_never_a_later_one_and_is_marked_stale_relative_to_the_sample
     assert rows[date(2026, 3, 10)].report.net_worth_at_market == Decimal(970 + 3 * 20)
 
 
-def test_a_date_before_any_close_is_valued_at_cost_and_marked(session: Session, people_root) -> None:
+def test_a_date_before_any_close_is_valued_at_cost_and_marked(session: Session, people_root, start_state) -> None:
     ctx = DbTransactionContext(session)
     checking = add_account_service(ctx, "Checking", AccountType.asset, "DE1").unwrap()
     depot = add_account_service(ctx, "Depot", AccountType.asset, "DE2").unwrap()
@@ -112,7 +113,9 @@ def test_a_date_before_any_close_is_valued_at_cost_and_marked(session: Session, 
 def test_the_default_start_is_the_earliest_entry(session: Session, ledger: dict) -> None:
     rows = NetWorthHistory(session).execute(None, date(2026, 2, 28), 7).unwrap()
 
-    assert [r.on for r in rows] == [date(2026, 1, 15), date(2026, 1, 31), date(2026, 2, 15), date(2026, 2, 28)]
+    assert [r.on for r in rows] == [
+        date(2026, 1, 15), date(2026, 1, 30), date(2026, 2, 15), date(2026, 2, 27), date(2026, 2, 28),
+    ]
 
 
 def test_a_past_to_ends_with_a_row_dated_to(session: Session, ledger: dict) -> None:
@@ -122,7 +125,7 @@ def test_a_past_to_ends_with_a_row_dated_to(session: Session, ledger: dict) -> N
     assert rows[-1].report.net_worth_at_market == Decimal(970 + 3 * 12)
 
 
-def test_an_empty_ledger_gives_one_row_dated_to(session: Session, people_root) -> None:
+def test_an_empty_ledger_gives_one_row_dated_to(session: Session, people_root, start_state) -> None:
     rows = NetWorthHistory(session).execute(None, TODAY, 7).unwrap()
 
     assert [r.on for r in rows] == [TODAY]
@@ -152,10 +155,68 @@ def test_the_salary_day_row_is_dated_the_working_day_and_includes_that_days_line
     ]).unwrap()
     session.commit()
 
-    rows = NetWorthHistory(session).execute(
-        date(2026, 2, 1), date(2026, 2, 28), 7, PeriodEnd.last_working_day, "BY"
-    ).unwrap()
+    rows = NetWorthHistory(session).execute(date(2026, 2, 1), date(2026, 2, 28), 7).unwrap()
     by_date = _by_date(rows)
 
     assert [r.on for r in rows] == [date(2026, 2, 15), date(2026, 2, 27), date(2026, 2, 28)]
+    assert [r.roles for r in rows] == [(Role.mid_month,), (Role.salary,), ()]
     assert by_date[date(2026, 2, 27)].report.at_cost.net_worth_at_cost == Decimal(1500)
+
+
+def test_role_keeps_only_that_roles_rows_and_the_to_row(session: Session, ledger: dict) -> None:
+    rows = NetWorthHistory(session).execute(date(2026, 2, 1), date(2026, 2, 28), 7, Role.salary).unwrap()
+
+    assert [r.on for r in rows] == [date(2026, 2, 27), date(2026, 2, 28)]
+
+
+def test_role_keeps_the_to_row_when_it_is_a_sample_date_of_the_other_role(session: Session, ledger: dict) -> None:
+    rows = NetWorthHistory(session).execute(date(2026, 2, 1), date(2026, 2, 15), 7, Role.salary).unwrap()
+
+    assert [(r.on, r.roles) for r in rows] == [(date(2026, 2, 15), (Role.mid_month,))]
+
+
+def test_a_filtered_row_has_the_same_figures_as_unfiltered(session: Session, ledger: dict) -> None:
+    all_rows = _by_date(NetWorthHistory(session).execute(date(2026, 2, 1), date(2026, 2, 28), 7).unwrap())
+    kept = NetWorthHistory(session).execute(date(2026, 2, 1), date(2026, 2, 28), 7, Role.salary).unwrap()
+
+    assert all(r == all_rows[r.on] for r in kept)
+
+
+def test_a_row_listing_both_roles_matches_either(session: Session, ledger: dict) -> None:
+    from kohle.domain.models import SamplingRuleList
+
+    session.add(SamplingRuleList(rules="mid-month: day 15; salary: day 15"))
+    session.commit()
+
+    for role in Role:
+        rows = NetWorthHistory(session).execute(date(2026, 2, 1), date(2026, 2, 20), 7, role).unwrap()
+        assert [(r.on, r.roles) for r in rows] == [
+            (date(2026, 2, 15), (Role.mid_month, Role.salary)),
+            (date(2026, 2, 20), ()),
+        ]
+
+
+def test_a_ledger_with_no_state_entry_is_refused(session: Session, people_root) -> None:
+    err = NetWorthHistory(session).execute(None, TODAY, 7).unwrap_err()
+
+    assert isinstance(err, NoStartState)
+
+
+def test_a_history_with_only_dated_entries_is_refused(session: Session, people_root) -> None:
+    session.add(StateEntry(effective_from=date(2026, 1, 1), state="NI"))
+    session.commit()
+
+    err = NetWorthHistory(session).execute(None, TODAY, 7).unwrap_err()
+
+    assert isinstance(err, NoStartState)
+
+
+def test_holiday_shifts_use_the_state_in_force_on_each_rules_date(session: Session, people_root, start_state) -> None:
+    session.add(StateEntry(effective_from=date(2026, 1, 1), state="NI"))
+    session.commit()
+
+    rows = NetWorthHistory(session).execute(date(2025, 10, 1), date(2025, 10, 31), 7, Role.salary).unwrap()
+    later = NetWorthHistory(session).execute(date(2028, 10, 1), date(2028, 10, 31), 7, Role.salary).unwrap()
+
+    assert [r.on for r in rows] == [date(2025, 10, 31)]
+    assert [r.on for r in later] == [date(2028, 10, 30), date(2028, 10, 31)]

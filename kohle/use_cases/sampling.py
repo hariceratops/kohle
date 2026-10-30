@@ -1,57 +1,122 @@
-"""The dates `net-worth-history` samples (design §6)."""
+"""The dates `net-worth-history` samples: roles, the stored rule list, and
+the sample dates it yields (design §7.2)."""
 
-import calendar
-from collections.abc import Callable
-from datetime import date, timedelta
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from datetime import date
 from enum import Enum
 
-
-class PeriodEnd(Enum):
-    month_end = "month-end"
-    last_working_day = "last-working-day"
-
-
-# Written out because `holidays.Germany.subdivisions` also lists "Augsburg",
-# a city, which is not a Bundesland.
-STATES = (
-    "BB", "BE", "BW", "BY", "HB", "HE", "HH", "MV",
-    "NI", "NW", "RP", "SH", "SL", "SN", "ST", "TH",
+from kohle.core.result import Result
+from kohle.domain.domain_errors import (
+    EmptySamplingRules,
+    InvalidRole,
+    SamplingError,
+    SamplingRulesError,
+)
+from kohle.infrastructure.transaction_context import DbTransactionContext
+from kohle.infrastructure.uow import UnitOfWork
+from kohle.services.sampling_services import (
+    current_rule_list_service,
+    set_rule_list_service,
+)
+from kohle.use_cases.recurrence import (
+    Recurrence,
+    occurrences,
+    parse_recurrence,
+    render_recurrence,
 )
 
 
-def working_days(state: str) -> Callable[[date], bool]:
-    # Imported here: it costs ~0.19 s, which every other command would pay.
-    import holidays
-
-    public = holidays.country_holidays("DE", subdiv=state)
-    return lambda day: (
-        day.weekday() < 5 and day not in public and (day.month, day.day) not in {(12, 24), (12, 31)}
-    )
+class Role(Enum):
+    mid_month = "mid-month"
+    salary = "salary"
 
 
-def period_end(year: int, month: int, counts: Callable[[date], bool]) -> date:
-    """The last day of the month for which `counts` holds. The loop has no
-    guard: a real calendar always has a counting day in a month's last 16."""
-    day = date(year, month, calendar.monthrange(year, month)[1])
-    while not counts(day):
-        day -= timedelta(days=1)
-    return day
+@dataclass(frozen=True, slots=True)
+class SamplingRule:
+    role: Role
+    recurrence: Recurrence
+
+
+@dataclass(frozen=True, slots=True)
+class Sample:
+    on: date
+    roles: tuple[Role, ...]  # Role order; () only for the --to row that no rule reached
+
+
+def parse_sampling_rules(text: str) -> Result[list[SamplingRule], SamplingRulesError]:
+    rules: list[SamplingRule] = []
+    for item in text.split(";"):
+        if not item.strip():
+            continue
+        role_text, colon, rule_text = item.partition(":")
+        if not colon:
+            return Result.err(InvalidRole(item.strip(), None))
+        try:
+            role = Role(role_text.strip())
+        except ValueError:
+            return Result.err(InvalidRole(item.strip(), role_text.strip()))
+        recurrence = parse_recurrence(rule_text.strip())
+        if recurrence.is_err:
+            return Result.err(recurrence.unwrap_err())
+        rules.append(SamplingRule(role, recurrence.unwrap()))
+    if not rules:
+        return Result.err(EmptySamplingRules())
+    return Result.ok(rules)
+
+
+def render_sampling_rules(rules: Sequence[SamplingRule]) -> str:
+    return "; ".join(f"{r.role.value}: {render_recurrence(r.recurrence)}" for r in rules)
 
 
 def sample_dates(
-    start: date, end: date, mode: PeriodEnd = PeriodEnd.month_end, state: str = "BY"
-) -> list[date]:
-    """The 15th and the period end of each month in `[start, end]`, then `end`
-    itself unless it is already the last date. `state` only matters under
-    `last_working_day`."""
-    counts = (lambda _: True) if mode is PeriodEnd.month_end else working_days(state)
-    dates: list[date] = []
-    year, month = start.year, start.month
-    while (year, month) <= (end.year, end.month):
-        for day in (date(year, month, 15), period_end(year, month, counts)):
-            if start <= day <= end:
-                dates.append(day)
-        year, month = (year + 1, 1) if month == 12 else (year, month + 1)
-    if not dates or dates[-1] != end:
-        dates.append(end)
-    return dates
+    rules: Sequence[SamplingRule], state_on: Callable[[date], str], start: date, end: date
+) -> list[Sample]:
+    """Every date a rule lands on in [start, end], one Sample per date with
+    every role that reached it, ascending; then `end` with no role unless it
+    is already the last date. No price access: a backfill can call this to
+    learn which dates need closes."""
+    roles_by_date: dict[date, set[Role]] = {}
+    for rule in rules:
+        for day in occurrences(rule.recurrence, start, end, state_on):
+            roles_by_date.setdefault(day, set()).add(rule.role)
+    samples = [
+        Sample(day, tuple(r for r in Role if r in roles_by_date[day])) for day in sorted(roles_by_date)
+    ]
+    if not samples or samples[-1].on != end:
+        samples.append(Sample(end, ()))
+    return samples
+
+
+def current_sampling_rules(ctx: DbTransactionContext) -> Result[list[SamplingRule], SamplingRulesError]:
+    stored = current_rule_list_service(ctx)
+    if stored.is_err:
+        return Result.err(stored.unwrap_err())
+    return parse_sampling_rules(stored.unwrap().rules)
+
+
+class SetSamplingRules(UnitOfWork[str, SamplingRulesError]):
+    def execute(self, text: str) -> Result[str, SamplingRulesError]:
+        parsed = parse_sampling_rules(text)
+        if parsed.is_err:
+            return Result.err(parsed.unwrap_err())
+        canonical = render_sampling_rules(parsed.unwrap())
+
+        def use_case(ctx: DbTransactionContext) -> Result[str, SamplingRulesError]:
+            written = set_rule_list_service(ctx, canonical)
+            if written.is_err:
+                return Result.err(written.unwrap_err())
+            return Result.ok(canonical)
+
+        return self._run(use_case)
+
+
+class ListSamplingRules(UnitOfWork[str, SamplingError]):
+    def execute(self) -> Result[str, SamplingError]:
+        def use_case(ctx: DbTransactionContext) -> Result[str, SamplingError]:
+            stored = current_rule_list_service(ctx)
+            if stored.is_err:
+                return Result.err(stored.unwrap_err())
+            return Result.ok(stored.unwrap().rules)
+
+        return self._run(use_case)
