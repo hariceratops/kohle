@@ -1,5 +1,5 @@
 import tomllib
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import assert_never
@@ -26,7 +26,7 @@ from kohle.infrastructure.device_config import (
 )
 from kohle.plugin.plugin_manager import load_plugins, load_price_plugins
 from kohle.use_cases.accounts import AddAccount, ListAccount, ListChildAccounts
-from kohle.use_cases.bundesland import ListStates
+from kohle.use_cases.bundesland import ListStates, MoveState
 from kohle.use_cases.classification import ListUnclassified, Reclassify
 from kohle.use_cases.journal import (
     BASE_CURRENCY,
@@ -93,6 +93,21 @@ class DecimalParamType(click.ParamType):
 
 
 DECIMAL = DecimalParamType()
+
+
+class EffectiveFromType(click.ParamType):
+    name = "start|YYYY-MM-DD"
+
+    def convert(self, value, param, ctx):
+        if value == "start":
+            return START
+        try:
+            return datetime.strptime(value, "%Y-%m-%d").date()  # noqa: DTZ007 - a calendar date, no zone
+        except ValueError:
+            self.fail(f"{value!r} is not start or a date YYYY-MM-DD", param, ctx)
+
+
+EFFECTIVE_FROM = EffectiveFromType()
 
 MAX_AGE_DAYS = click.option(
     "--max-age-days", type=click.IntRange(min=0), default=7, show_default=True,
@@ -336,6 +351,19 @@ def set_setting_cmd(make_session, config: DeviceConfig, key: str, value: str):
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
     click.echo(f"Set {key} to {value}")
+
+
+@cli.command(writes=True)
+@click.option("--from", "effective_from", type=EFFECTIVE_FROM, required=True,
+              help="start or YYYY-MM-DD: the first day the state applies")
+@click.argument("state")
+@click.pass_obj
+def move_state_cmd(make_session, effective_from: date, state: str):
+    res = MoveState(make_session()).execute(effective_from, state)
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    label = "start" if effective_from == START else effective_from.isoformat()
+    click.echo(f"Set state from {label} to {res.unwrap().state}")
 
 
 @cli.command(writes=False)

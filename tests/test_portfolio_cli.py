@@ -8,7 +8,7 @@ from click.testing import CliRunner
 from sqlalchemy import func, select
 
 from kohle.app.cli.cli import cli
-from kohle.domain.models import START, OperationGroup, Price, StateEntry, Unit
+from kohle.domain.models import OperationGroup, Price, StateEntry, Unit
 
 _SETUP = [
     ["add-account", "Depot", "--type", "asset"],
@@ -24,9 +24,8 @@ _SETUP = [
 
 
 def _seed_state(session_factory, state: str) -> None:
-    with session_factory() as session:
-        session.add(StateEntry(effective_from=START, state=state))
-        session.commit()
+    result = CliRunner().invoke(cli, ["move-state", "--from", "start", state], obj=session_factory)
+    assert result.exit_code == 0, result.output
 
 
 def _unset_state_ledger(session_factory) -> CliRunner:

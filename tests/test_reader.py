@@ -34,6 +34,7 @@ _WRITE_ARGV: dict[str, list[str]] = {
     "set-price-source": ["set-price-source", "IE00B4L5Y983", "alphavantage", "IWDA"],
     "fetch-prices": ["fetch-prices"],
     "set-sampling-rules": ["set-sampling-rules", "salary: last day"],
+    "move-state": ["move-state", "--from", "start", "BY"],
 }
 
 

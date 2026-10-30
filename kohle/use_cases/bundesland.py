@@ -9,7 +9,10 @@ from kohle.domain.domain_errors import InvalidState, NoStartState, StateError
 from kohle.domain.models import START, StateEntry
 from kohle.infrastructure.transaction_context import DbTransactionContext
 from kohle.infrastructure.uow import UnitOfWork
-from kohle.services.state_services import list_state_entries_service
+from kohle.services.state_services import (
+    list_state_entries_service,
+    put_state_entry_service,
+)
 
 # Written out because `holidays.Germany.subdivisions` also lists "Augsburg",
 # a city, which is not a Bundesland.
@@ -32,6 +35,19 @@ def state_lookup(entries: Sequence[StateEntry]) -> Result[Callable[[date], str],
         return Result.err(NoStartState())
     froms = [e.effective_from for e in entries]
     return Result.ok(lambda day: entries[bisect_right(froms, day) - 1].state)
+
+
+class MoveState(UnitOfWork[StateEntry, StateError]):
+    def execute(self, effective_from: date, state: object) -> Result[StateEntry, StateError]:
+        valid = validate_state(state)
+        if valid.is_err:
+            return Result.err(valid.unwrap_err())
+        code = valid.unwrap()
+
+        def use_case(ctx: DbTransactionContext) -> Result[StateEntry, StateError]:
+            return put_state_entry_service(ctx, effective_from, code)
+
+        return self._run(use_case)
 
 
 class ListStates(UnitOfWork[list[StateEntry], StateError]):

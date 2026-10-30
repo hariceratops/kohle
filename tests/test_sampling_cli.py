@@ -269,3 +269,120 @@ def test_list_states_on_an_empty_history_points_to_move_state(session_factory) -
 
     assert result.exit_code == 0, result.output
     assert result.output == "No state recorded; run `kohle-cli move-state --from start <code>`\n"
+
+
+def _move(runner: CliRunner, session_factory, *args: str):
+    return runner.invoke(cli, ["move-state", *args], obj=session_factory)
+
+
+def _states(runner: CliRunner, session_factory) -> list[list[str]]:
+    result = runner.invoke(cli, ["list-states"], obj=session_factory)
+    assert result.exit_code == 0, result.output
+    return [ln.split() for ln in result.output.splitlines()[2:]]
+
+
+def test_move_state_start_then_dated_entries_confirm_and_list(session_factory) -> None:
+    runner = CliRunner()
+
+    first = _move(runner, session_factory, "--from", "start", "BY")
+    later = _move(runner, session_factory, "--from", "2030-01-01", "NI")
+
+    assert first.output == "Set state from start to BY\n"
+    assert later.output == "Set state from 2030-01-01 to NI\n"
+    assert _states(runner, session_factory) == [["start", "BY"], ["2030-01-01", "NI"]]
+
+
+def test_repeating_a_date_replaces_it_as_one_audited_update(session_factory) -> None:
+    runner = CliRunner()
+    assert _move(runner, session_factory, "--from", "2026-01-01", "NI").exit_code == 0
+    before = _counts(session_factory)
+
+    result = _move(runner, session_factory, "--from", "2026-01-01", "HH")
+
+    assert result.exit_code == 0, result.output
+    assert _states(runner, session_factory) == [["2026-01-01", "HH"]]
+    with session_factory() as session:
+        op = session.scalars(select(Operation).order_by(Operation.id.desc())).first()
+        assert (op.action, op.entity_type) == ("update", "state_entries")
+    assert _counts(session_factory) == (before[0] + 1, before[1] + 1, before[2])
+
+
+def test_a_new_date_is_one_audited_create_and_an_identical_repeat_adds_no_group(session_factory) -> None:
+    runner = CliRunner()
+    before = _counts(session_factory)
+
+    assert _move(runner, session_factory, "--from", "start", "BY").exit_code == 0
+
+    with session_factory() as session:
+        op = session.scalars(select(Operation).order_by(Operation.id.desc())).first()
+        assert (op.action, op.entity_type) == ("create", "state_entries")
+    after = _counts(session_factory)
+    assert after == (before[0] + 1, before[1] + 1, before[2])
+    assert _move(runner, session_factory, "--from", "start", "BY").exit_code == 0
+    assert _counts(session_factory) == after
+
+
+@pytest.mark.parametrize(
+    ("args", "code", "bad_part"),
+    [
+        (["--from", "start", "XX"], 1, "'XX'"),
+        (["--from", "start", "by"], 1, "'by'"),
+        (["--from", "2026-13-01", "NI"], 2, "'2026-13-01'"),
+        (["--from", "20260101", "NI"], 2, "'20260101'"),
+        (["--from", "yesterday", "NI"], 2, "'yesterday'"),
+    ],
+)
+def test_an_invalid_state_or_date_writes_nothing_and_names_the_bad_part(
+    session_factory, args, code, bad_part
+) -> None:
+    runner = CliRunner()
+    before = _counts(session_factory)
+
+    result = _move(runner, session_factory, *args)
+
+    assert result.exit_code == code
+    assert bad_part in result.output
+    assert ("BB, BE, BW, BY" if code == 1 else "start or a date YYYY-MM-DD") in result.output
+    assert _states(runner, session_factory) == []
+    assert _counts(session_factory) == before
+
+
+def test_from_is_required(session_factory) -> None:
+    result = _move(CliRunner(), session_factory, "NI")
+
+    assert result.exit_code == 2
+    assert "--from" in result.output
+
+
+def test_a_dated_move_alters_only_samples_from_its_date(session_factory, monkeypatch) -> None:
+    _pin_today(monkeypatch, date(2028, 11, 20))
+    runner = _ledger(session_factory)
+    args = ["--from", "2025-10-01", "--to", "2028-10-31", "--role", "salary"]
+
+    def salary_days() -> list[str]:
+        out = _history(runner, session_factory, *args).output
+        return [ln.split()[0] for ln in out.splitlines()[2:] if ln.split()[-1] == "salary" and ln.split()[0][5:7] == "10"]
+
+    assert salary_days() == ["2025-10-31", "2026-10-30", "2027-10-29", "2028-10-31"]
+    assert _move(runner, session_factory, "--from", "2026-01-01", "NI").exit_code == 0
+
+    assert salary_days() == ["2025-10-31", "2026-10-30", "2027-10-29", "2028-10-30"]
+
+
+def test_move_state_never_touches_prices_or_plugins(session_factory, monkeypatch) -> None:
+    def boom(*args, **kwargs):
+        raise AssertionError("no price plugin may load")
+
+    monkeypatch.setattr("kohle.app.cli.cli.load_price_plugins", boom)
+    runner = CliRunner()
+    before = _counts(session_factory)[2]
+
+    assert _move(runner, session_factory, "--from", "start", "BY").exit_code == 0
+
+    assert _counts(session_factory)[2] == before
+
+
+def test_there_is_no_way_to_remove_an_entry(session_factory) -> None:
+    result = _move(CliRunner(), session_factory, "--from", "start", "--delete")
+
+    assert result.exit_code == 2
