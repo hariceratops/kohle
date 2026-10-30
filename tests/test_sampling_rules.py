@@ -4,7 +4,11 @@ from datetime import date
 
 import pytest
 
-from kohle.domain.domain_errors import EmptySamplingRules, InvalidRecurrence, InvalidRole
+from kohle.domain.domain_errors import (
+    EmptySamplingRules,
+    InvalidRecurrence,
+    InvalidRole,
+)
 from kohle.use_cases.recurrence import Day, LastWorkday
 from kohle.use_cases.sampling import (
     Role,

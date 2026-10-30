@@ -661,6 +661,7 @@ class InvalidRole(SamplingError):
 
 SamplingRulesError = SamplingError | InvalidRecurrence
 
+
 class StateError(Exception):
     pass
 

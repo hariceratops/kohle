@@ -9,6 +9,8 @@ from kohle.db.connection import ledger_url, make_engine, make_session_factory
 from kohle.db.schema import build_ledger, check_schema
 from kohle.domain.domain_errors import (
     InitFileError,
+    InvalidSettingValue,
+    InvalidState,
     MissingInitKeys,
     SettingDiffers,
     SettingError,
@@ -39,7 +41,7 @@ InitError = LedgerError | SettingError | StateError
 @dataclass(frozen=True, slots=True)
 class InitFile:
     state: str
-    settings: dict[str, str]  # SETTINGS keys; none today
+    settings: dict[str, str]
 
 
 def validate_init_file(raw: Mapping[str, object]) -> Result[InitFile, InitFileError | StateError | SettingError]:
@@ -48,7 +50,7 @@ def validate_init_file(raw: Mapping[str, object]) -> Result[InitFile, InitFileEr
     validated: dict[str, str] = {}
     for key, value in raw.items():
         if key == "state":
-            checked = validate_state(value)
+            checked: Result[str, InvalidState] | Result[str, InvalidSettingValue] = validate_state(value)
         elif key in SETTINGS:
             checked = SETTINGS[key](value)
         else:

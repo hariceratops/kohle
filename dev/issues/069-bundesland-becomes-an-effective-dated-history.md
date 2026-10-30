@@ -38,3 +38,10 @@ Spec: `dev/specs/configurable-net-worth-sampling.md`
 - README lines that describe `--state` and `state` as a setting are removed in
   this slice.
 - Existing tests pass, apart from those that test `--state` and `set-setting state`.
+
+## Review 2026-10-30
+- Medium: `kohle/use_cases/ledger.py:51-53` fails mypy. `checked` is inferred as `Result[str, InvalidState]`, then assigned a `Result[str, InvalidSettingValue]`; annotate it as the union.
+- Low: `kohle/use_cases/ledger.py:42` has `# SETTINGS keys; none today`, which says what, not why.
+- Gap: "after `migrate` on a `state = BY` ledger, output equals the pre-feature output" is covered only by the oracle test, which seeds `start BY` directly. Add a test that runs `net-worth-history` on a ledger migrated from `state = BY`.
+- Opinion: `SETTINGS` is empty, so `tests/test_settings.py` tests `SetSettings`/`ListSettings` through a monkeypatched stand-in `colour` key. Kept: dropping it would lose that coverage.
+- Opinion: the migration revision id `a7c3e9d5b124` was chosen by the implementer; recorded here as the canonical id.

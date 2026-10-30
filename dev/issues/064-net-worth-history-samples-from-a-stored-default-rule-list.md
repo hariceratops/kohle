@@ -29,3 +29,8 @@ Spec: `dev/specs/configurable-net-worth-sampling.md`
 - No command touched here changes the `prices` row count or calls a price plugin.
 - README lines that describe `--period-end` are removed in this slice.
 - Existing tests pass, apart from those that test `--period-end`.
+
+## Review 2026-10-30
+- Low: `tests/test_pre_feature_equivalence.py:7` and `tests/test_sampling_rules.py:3` fail ruff I001 (long import lines need wrapping).
+- Low: `kohle/domain/domain_errors.py:662-664` has one blank line before `class StateError` where E302 wants two.
+- Opinion: the migration revision id `f6b2d4c8e013` was chosen by the implementer (the design says `<rev>`); recorded here as the canonical id.
