@@ -3,7 +3,9 @@
 import calendar
 import subprocess
 import sys
+from collections.abc import Callable
 from datetime import date
+from itertools import pairwise
 from pathlib import Path
 
 import pytest
@@ -11,10 +13,12 @@ import pytest
 from kohle.domain.domain_errors import InvalidRecurrence
 from kohle.use_cases.recurrence import (
     Day,
+    Every,
     LastDay,
     LastWorkday,
     NthWeekday,
     Workday,
+    Yearly,
     is_working_day,
     occurrences,
     parse_recurrence,
@@ -22,6 +26,15 @@ from kohle.use_cases.recurrence import (
 )
 
 ROOT = Path(__file__).resolve().parent.parent
+ALL_KINDS = (
+    "one of: day N, workday N, <nth> <weekday>, last workday, last day, "
+    "every N days|weeks|months from YYYY-MM-DD, yearly MM-DD"
+)
+EVERY_SHAPE = "every N days, weeks or months from YYYY-MM-DD"
+EVERY_N = "every N … with N from 1 to 999"
+EVERY_UNIT = "a unit days, weeks or months; for years write months, e.g. every 24 months"
+EVERY_DATE = "a date YYYY-MM-DD after from"
+YEARLY = "yearly MM-DD naming a calendar day, e.g. yearly 02-29"
 
 
 def _by(_: date) -> str:
@@ -41,6 +54,14 @@ def _by(_: date) -> str:
         ("workday 05", "workday 5"),
         ("last day", "last day"),
         ("last   day", "last day"),
+        ("every 2 weeks from 2026-01-02", "every 2 weeks from 2026-01-02"),
+        ("every 1 months from 2026-01-31", "every 1 months from 2026-01-31"),
+        ("every 24 months from 2026-01-01", "every 24 months from 2026-01-01"),
+        ("every 3 days from 2026-1-5", "every 3 days from 2026-01-05"),
+        ("  every   03  days  from  2026-01-05 ", "every 3 days from 2026-01-05"),
+        ("yearly 02-29", "yearly 02-29"),
+        ("yearly 2-9", "yearly 02-09"),
+        ("  yearly   12-25 ", "yearly 12-25"),
     ],
 )
 def test_parse_then_render_gives_the_canonical_text(text: str, canonical: str) -> None:
@@ -70,11 +91,25 @@ def test_parse_builds_the_kind() -> None:
         ("5th fri", "an ordinal 1st, 2nd, 3rd or 4th before the weekday"),
         ("first fri", "an ordinal 1st, 2nd, 3rd or 4th before the weekday"),
         ("3rd friday", "a weekday mon, tue, wed, thu, fri, sat or sun"),
-        ("3rd", "one of: day N, workday N, <nth> <weekday>, last workday, last day"),
-        ("Day 15", "one of: day N, workday N, <nth> <weekday>, last workday, last day"),
-        ("every 2 weeks from 2026-01-02", "one of: day N, workday N, <nth> <weekday>, last workday, last day"),
-        ("yearly 12-24", "one of: day N, workday N, <nth> <weekday>, last workday, last day"),
-        ("", "one of: day N, workday N, <nth> <weekday>, last workday, last day"),
+        ("3rd", ALL_KINDS),
+        ("Day 15", ALL_KINDS),
+        ("", ALL_KINDS),
+        ("every 2 years from 2026-01-01", EVERY_UNIT),
+        ("every 1 month from 2026-01-01", EVERY_UNIT),
+        ("every 0 days from 2026-01-01", EVERY_N),
+        ("every 1000 days from 2026-01-01", EVERY_N),
+        ("every x days from 2026-01-01", EVERY_N),
+        ("every 2 weeks", EVERY_SHAPE),
+        ("every", EVERY_SHAPE),
+        ("every 2 weeks since 2026-01-01", EVERY_SHAPE),
+        ("every 2 weeks from 2026-02-30", EVERY_DATE),
+        ("every 2 weeks from 20260101", EVERY_DATE),
+        ("yearly 02-30", YEARLY),
+        ("yearly 04-31", YEARLY),
+        ("yearly 13-01", YEARLY),
+        ("yearly 00-10", YEARLY),
+        ("yearly 0229", YEARLY),
+        ("yearly", YEARLY),
     ],
 )
 def test_a_bad_rule_names_the_bad_part_and_the_valid_choices(text: str, expected: str) -> None:
@@ -241,3 +276,116 @@ def test_third_friday_lands_on_days_15_to_21_when_it_does_not_shift() -> None:
     found = occurrences(NthWeekday(3, 4), date(2026, 6, 1), date(2026, 6, 30), _by)
 
     assert found == [date(2026, 6, 19)]
+
+
+def test_parse_builds_every_and_yearly() -> None:
+    assert parse_recurrence("every 2 weeks from 2026-01-02").unwrap() == Every(2, "weeks", date(2026, 1, 2))
+    assert parse_recurrence("yearly 02-29").unwrap() == Yearly(2, 29)
+
+
+def _forbidden(_: date) -> str:
+    raise AssertionError("state_on called")
+
+
+def test_every_months_runs_in_both_directions_from_the_anchor() -> None:
+    rule = parse_recurrence("every 3 months from 2026-01-15").unwrap()
+
+    assert occurrences(rule, date(2025, 9, 1), date(2026, 5, 1), _forbidden) == [
+        date(2025, 10, 15),
+        date(2026, 1, 15),
+        date(2026, 4, 15),
+    ]
+
+
+def test_every_months_clamps_to_the_month_without_drifting() -> None:
+    rule = parse_recurrence("every 1 months from 2026-01-31").unwrap()
+
+    assert occurrences(rule, date(2026, 1, 1), date(2026, 4, 30), _forbidden) == [
+        date(2026, 1, 31),
+        date(2026, 2, 28),
+        date(2026, 3, 31),
+        date(2026, 4, 30),
+    ]
+
+
+def test_yearly_feb_29_lands_on_feb_28_in_non_leap_years() -> None:
+    rule = parse_recurrence("yearly 02-29").unwrap()
+
+    assert occurrences(rule, date(2027, 1, 1), date(2028, 12, 31), _forbidden) == [
+        date(2027, 2, 28),
+        date(2028, 2, 29),
+    ]
+
+
+def test_every_days_keeps_the_phase_before_and_after_the_anchor() -> None:
+    rule = parse_recurrence("every 3 days from 2026-01-10").unwrap()
+
+    assert occurrences(rule, date(2026, 1, 5), date(2026, 1, 12), _forbidden) == [date(2026, 1, 7), date(2026, 1, 10)]
+
+
+def test_every_weeks_are_fourteen_days_apart_on_the_anchor_weekday() -> None:
+    rule = parse_recurrence("every 2 weeks from 2026-01-02").unwrap()
+
+    found = occurrences(rule, date(2025, 11, 1), date(2026, 3, 1), _forbidden)
+
+    assert date(2026, 1, 2) in found
+    assert all(d.weekday() == 4 for d in found)
+    assert all((b - a).days == 14 for a, b in pairwise(found))
+    assert found[0] < date(2026, 1, 2) < found[-1]
+
+
+def test_the_start_and_end_are_inclusive_for_every_and_yearly() -> None:
+    rule = parse_recurrence("every 2 weeks from 2026-01-02").unwrap()
+    assert occurrences(rule, date(2026, 1, 2), date(2026, 1, 16), _forbidden) == [date(2026, 1, 2), date(2026, 1, 16)]
+    assert occurrences(Yearly(12, 25), date(2026, 12, 25), date(2026, 12, 25), _forbidden) == [date(2026, 12, 25)]
+
+
+@pytest.mark.parametrize("text", ["every 1 days from 2026-01-01", "yearly 12-25"])
+def test_every_and_yearly_never_shift_to_a_working_day(text: str) -> None:
+    rule = parse_recurrence(text).unwrap()
+
+    found = occurrences(rule, date(2026, 12, 24), date(2026, 12, 26), _forbidden)
+
+    assert date(2026, 12, 25) in found
+    if text.startswith("every"):
+        assert found == [date(2026, 12, 24), date(2026, 12, 25), date(2026, 12, 26)]
+
+
+def test_every_and_yearly_never_import_the_holidays_package() -> None:
+    code = (
+        "import sys\n"
+        "from datetime import date\n"
+        "from kohle.use_cases.sampling import parse_sampling_rules, sample_dates\n"
+        "rules = parse_sampling_rules("
+        "'mid-month: every 2 weeks from 2026-01-02; salary: yearly 02-29').unwrap()\n"
+        "def no_state(_):\n"
+        "    raise AssertionError\n"
+        "sample_dates(rules, no_state, date(2026, 1, 1), date(2026, 12, 31))\n"
+        "print('holidays' in sys.modules)\n"
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-I", "-c", code], capture_output=True, text=True, cwd=ROOT, check=False
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "False"
+
+
+def _history_state(history: str) -> Callable[[date], str]:
+    if history == "BY":
+        return _by
+    return lambda day: "NI" if day >= date(2026, 1, 1) else "BY"
+
+
+def test_the_month_based_kinds_equal_the_pre_rewrite_oracle() -> None:
+    lines = (ROOT / "tests" / "fixtures" / "occurrences_monthly_kinds.txt").read_text().splitlines()
+    assert len(lines) == 72
+
+    for line in lines:
+        history, text, dates = (part.strip() for part in line.split(" | "))
+        rule = parse_recurrence(text).unwrap()
+
+        found = occurrences(rule, date(2000, 1, 1), date(2040, 12, 31), _history_state(history))
+
+        assert " ".join(d.isoformat() for d in found) == dates, (history, text)

@@ -713,8 +713,8 @@ bad part and lists the valid choices.
 | `<nth> <weekday>` | `1st`-`4th` plus `mon`-`sun`, e.g. `3rd fri`: that weekday of the month, or the previous working day if it is not a working day. |
 | `last workday` | The last working day of the month. |
 | `last day` | The calendar last day of the month. |
-| `every N days\|weeks\|months from YYYY-MM-DD` | Every N units from the date. Specified, not built yet: reserved for `budgeting`. |
-| `yearly MM-DD` | That calendar day every year. Specified, not built yet: reserved for `budgeting`. |
+| `every N days\|weeks\|months from YYYY-MM-DD` | Every N units in step with the date, which fixes only the phase: it also lands before the date (`every 3 months from 2026-01-15` includes 2025-10-15). N is 1-999 and the units are plural; there is no `years`, write `every 24 months`. A month-based date keeps the start's day, clamped to each month's length without drifting (from 31 January: 28 February, then 31 March). Never moves to a working day. |
+| `yearly MM-DD` | That calendar day every year; `yearly 02-29` lands on 28 February in non-leap years. Never moves to a working day. |
 
 A working day is Monday to Friday, not a public holiday of the Bundesland in
 force on the rule's unshifted date, and never 24 or 31 December. A shift only

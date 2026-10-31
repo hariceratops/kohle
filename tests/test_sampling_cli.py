@@ -139,7 +139,6 @@ def test_list_sampling_rules_prints_exactly_the_canonical_line_and_records_nothi
     ("rules", "bad_part", "choice"),
     [
         ("salary: day 32", "day 32'", "day N with N from 1 to 31"),
-        ("salary: every 2 weeks from 2026-01-02", "every 2 weeks", "last day"),
         ("pay: day 15", "'pay'", "mid-month, salary"),
         ("day 15", "'day 15'", "mid-month or salary"),
         ("", "no sampling rules", "mid-month, salary"),
