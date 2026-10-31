@@ -4,6 +4,7 @@ from enum import Enum
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
@@ -413,3 +414,26 @@ class StateEntry(base):
     state: Mapped[str] = mapped_column(String, nullable=False)
 
     __table_args__ = (UniqueConstraint("effective_from", name="uq_state_entry_effective_from"),)
+
+
+class CapEntry(base):
+    """A spending cap on an expense account from `effective_from` onward, until
+    the account's next entry. `amount` and `rule` both NULL: no cap from that
+    date (end-cap)."""
+
+    __tablename__ = "cap_entries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"), nullable=False)
+    effective_from: Mapped[date] = mapped_column(Date, nullable=False)
+    amount: Mapped[Decimal | None] = mapped_column(QUANTITY, nullable=True)
+    rule: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    account: Mapped["Account"] = relationship("Account")
+
+    __table_args__ = (
+        UniqueConstraint("account_id", "effective_from", name="uq_cap_entry_account_effective_from"),
+        # Readers branch on `amount is None` and parse `rule` otherwise, so half
+        # an end entry must not be storable.
+        CheckConstraint("(amount IS NULL) = (rule IS NULL)", name="ck_cap_entry_end_is_both_null"),
+    )

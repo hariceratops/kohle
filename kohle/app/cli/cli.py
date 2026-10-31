@@ -26,6 +26,7 @@ from kohle.infrastructure.device_config import (
 )
 from kohle.plugin.plugin_manager import load_plugins, load_price_plugins
 from kohle.use_cases.accounts import AddAccount, ListAccount, ListChildAccounts
+from kohle.use_cases.budgeting import ListCaps, SetCap
 from kohle.use_cases.bundesland import ListStates, MoveState
 from kohle.use_cases.classification import ListUnclassified, Reclassify
 from kohle.use_cases.journal import (
@@ -381,6 +382,43 @@ def list_states_cmd(make_session):
         for e in entries
     ]
     click.echo(tabulate(rows, headers="keys"))
+
+
+@cli.command(writes=True)
+@click.option("--from", "effective_from", type=click.DateTime(formats=["%Y-%m-%d"]), required=True,
+              help="YYYY-MM-DD: the first day the cap applies")
+@click.argument("account")
+@click.argument("amount", type=DECIMAL)
+@click.argument("rule")
+@click.pass_obj
+def set_cap_cmd(make_session, effective_from: datetime, account: str, amount: Decimal, rule: str):
+    res = SetCap(make_session()).execute(account, amount, rule, effective_from.date())
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    entry = res.unwrap()
+    click.echo(f"Set cap on {account} from {entry.effective_from.isoformat()}: {entry.amount:.2f}, {entry.rule}")
+
+
+@cli.command(writes=False)
+@click.pass_obj
+def list_caps_cmd(make_session):
+    res = ListCaps(make_session()).execute()
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    entries = res.unwrap()
+    if not entries:
+        click.echo('No caps; set one with `kohle-cli set-cap <account> <amount> "<rule>" --from YYYY-MM-DD`')
+        return
+    rows = [
+        {
+            "account": e.account.name,
+            "from": e.effective_from,
+            "cap": e.amount,
+            "rule": "no cap" if e.rule is None else e.rule,
+        }
+        for e in entries
+    ]
+    click.echo(tabulate(rows, headers="keys", floatfmt=".2f", missingval="-"))
 
 
 @cli.command(writes=True)

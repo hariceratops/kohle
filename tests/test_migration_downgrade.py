@@ -36,6 +36,7 @@ BEFORE_PRICES_UNIQUE_PER_DAY = "b3f9d2a41c70"
 BEFORE_SETTINGS = "d4e7a8c15b92"
 BEFORE_SAMPLING_RULES = "e5a1c3b7d902"
 BEFORE_STATE_ENTRIES = "f6b2d4c8e013"
+BEFORE_CAP_ENTRIES = "a7c3e9d5b124"
 
 
 @pytest.fixture
@@ -542,3 +543,39 @@ def test_downgrade_refuses_rather_than_dropping_a_move(migrated_db) -> None:
     with pytest.raises(RuntimeError, match="state history"):
         command.downgrade(config, BEFORE_STATE_ENTRIES)
     assert "state_entries" in _tables(db), "refusal must leave the schema untouched"
+
+
+def test_cap_entries_upgrade_adds_an_empty_table_and_downgrade_drops_it(migrated_db) -> None:
+    config, db = migrated_db
+    assert "cap_entries" in _tables(db)
+
+    command.downgrade(config, BEFORE_CAP_ENTRIES)
+
+    assert "cap_entries" not in _tables(db)
+
+
+def test_downgrade_refuses_rather_than_dropping_caps(migrated_db) -> None:
+    config, db = migrated_db
+    _exec(
+        db,
+        "INSERT INTO accounts (id, name, type, iban, parent_id, created_at) "
+        "VALUES (2, 'Groceries', 'expense', NULL, NULL, '2026-01-01')",
+        "INSERT INTO cap_entries (account_id, effective_from, amount, rule) "
+        "VALUES (2, '2026-01-01', 300, 'day 1')",
+    )
+
+    with pytest.raises(RuntimeError, match="spending caps"):
+        command.downgrade(config, BEFORE_CAP_ENTRIES)
+    assert "cap_entries" in _tables(db), "refusal must leave the schema untouched"
+
+
+def test_an_end_entry_must_null_amount_and_rule_together(migrated_db) -> None:
+    _, db = migrated_db
+    _exec(
+        db,
+        "INSERT INTO accounts (id, name, type, iban, parent_id, created_at) "
+        "VALUES (2, 'Groceries', 'expense', NULL, NULL, '2026-01-01')",
+    )
+
+    with pytest.raises(sqlite3.IntegrityError):
+        _exec(db, "INSERT INTO cap_entries (account_id, effective_from, amount) VALUES (2, '2026-01-01', 5)")
