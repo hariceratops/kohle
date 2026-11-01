@@ -163,7 +163,6 @@ def _spend(session_factory, day: str, amount: str, account: str = "Groceries", r
 
 
 def _summary(output: str) -> list[tuple[str, str, str, str]]:
-    """(account, from, to, spent) of the two closing rows."""
     parsed = []
     for line in output.splitlines()[-2:]:
         *account, start, end, _cap, spent, _over, _note = line.split()

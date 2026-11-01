@@ -126,7 +126,10 @@ class SetCap(UnitOfWork[CapEntry, CapWriteError]):
             account_res = check_cappable(accounts_res.unwrap(), account_name)
             if account_res.is_err:
                 return Result.err(account_res.unwrap_err())
-            return put_cap_entry_service(ctx, account_res.unwrap().id, effective_from, amount, canonical)
+            put_res = put_cap_entry_service(ctx, account_res.unwrap().id, effective_from, amount, canonical)
+            if put_res.is_err:
+                return Result.err(put_res.unwrap_err())
+            return Result.ok(put_res.unwrap())
 
         return self._run(use_case)
 
@@ -155,7 +158,10 @@ class EndCap(UnitOfWork[CapEntry, CapWriteError]):
             # An end entry at D itself is a replay; an earlier one leaves nothing to end.
             if latest is None or (latest.amount is None and latest.effective_from < effective_from):
                 return Result.err(NoCapInForce(account_name, effective_from))
-            return put_cap_entry_service(ctx, account.id, effective_from, None, None)
+            put_res = put_cap_entry_service(ctx, account.id, effective_from, None, None)
+            if put_res.is_err:
+                return Result.err(put_res.unwrap_err())
+            return Result.ok(put_res.unwrap())
 
         return self._run(use_case)
 
@@ -227,7 +233,7 @@ def net_spent(lines: Iterable[JournalLine], first: date, last: date) -> Decimal:
 @dataclass(frozen=True, slots=True)
 class CappedAccount:
     name: str
-    history: list[CapChange]  # oldest first
+    history: list[CapChange]
     covers: frozenset[int]
 
 
@@ -236,7 +242,7 @@ class BudgetRow:
     account: str
     period: Period
     spent: Decimal
-    day: int | None  # today's day number in the period, counting from 1, if it contains today
+    day: int | None
 
     @property
     def over(self) -> Decimal:
