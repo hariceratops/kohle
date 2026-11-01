@@ -495,6 +495,198 @@ def test_placeholder_readers() -> None:
     raise NotImplementedError
 
 
-@pytest.mark.skip(reason="TODO: 087 editor lookup, error banner, retry, recovery file")
-def test_placeholder_edit_rules() -> None:
-    raise NotImplementedError
+class _Editor:
+    """Scripted stand-in for click.edit: each call returns the next reply, or
+    calls it with the text it was given."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, *replies) -> None:
+        self.replies = list(replies)
+        self.texts: list[str] = []
+        self.editors: list[str | None] = []
+        monkeypatch.setattr("click.edit", self)
+
+    def __call__(self, text=None, editor=None, **kwargs):
+        self.texts.append(text)
+        self.editors.append(editor)
+        reply = self.replies.pop(0)
+        return reply(text) if callable(reply) else reply
+
+
+def _edit(runner: CliRunner, session_factory: sessionmaker, **kwargs):
+    return runner.invoke(cli, ["edit-rules"], obj=session_factory, **kwargs)
+
+
+_NEW_RULE = '[[rule]]\naccount = "Rent"\n[rule.when]\nany_field = "NEW"\n'
+
+
+@pytest.fixture
+def editor_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("VISUAL", raising=False)
+    monkeypatch.setenv("EDITOR", "ed")
+
+
+def test_edit_rules_without_an_editor_fails_and_never_opens_one(
+    session_factory: sessionmaker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("VISUAL", raising=False)
+    monkeypatch.delenv("EDITOR", raising=False)
+    editor = _Editor(monkeypatch)
+    runner = CliRunner()
+    _seed(runner, session_factory)
+    before = _live(session_factory)
+
+    result = _edit(runner, session_factory)
+
+    assert result.exit_code == 1
+    assert "no editor: set $VISUAL or $EDITOR" in result.output
+    assert editor.texts == []
+    assert _live(session_factory) == before
+
+
+def test_visual_wins_over_editor_and_the_editor_gets_the_rendered_rules(
+    session_factory: sessionmaker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("VISUAL", "visual-ed")
+    monkeypatch.setenv("EDITOR", "plain-ed")
+    editor = _Editor(monkeypatch, None)
+    runner = CliRunner()
+    _seed(runner, session_factory)
+
+    _edit(runner, session_factory)
+
+    assert editor.editors == ["visual-ed"]
+    assert editor.texts == [runner.invoke(cli, ["show-rules"], obj=session_factory).output]
+
+
+@pytest.mark.usefixtures("editor_env")
+def test_quitting_the_editor_without_saving_changes_nothing(
+    session_factory: sessionmaker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _Editor(monkeypatch, None)
+    runner = CliRunner()
+    _seed(runner, session_factory)
+    before = _live(session_factory)
+    groups = _count(session_factory, OperationGroup)
+
+    result = _edit(runner, session_factory)
+
+    assert result.exit_code == 0
+    assert "No changes; nothing applied" in result.output
+    assert _live(session_factory) == before
+    assert _count(session_factory, OperationGroup) == groups
+
+
+@pytest.mark.usefixtures("editor_env")
+def test_a_bad_file_reopens_the_editor_with_a_banner_naming_the_error_and_writes_nothing(
+    session_factory: sessionmaker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bad = '[[rule]]\naccount = "Rent"\n[rule.when]\ndescription = "("\n'
+    editor = _Editor(monkeypatch, bad, None)
+    runner = CliRunner()
+    _seed(runner, session_factory)
+    before = _live(session_factory)
+
+    result = _edit(runner, session_factory)
+
+    assert result.exit_code == 0
+    banner = editor.texts[1].splitlines()[:2]
+    assert banner[0].startswith("# !! kohle: not applied.")
+    assert banner[1].startswith("# !! rule 1, when.description: is not a valid pattern")
+    assert editor.texts[1].endswith(bad)
+    assert _live(session_factory) == before
+
+
+@pytest.mark.usefixtures("editor_env")
+def test_a_toml_syntax_error_line_number_matches_the_reopened_buffer(
+    session_factory: sessionmaker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bad = '[[rule]]\naccount = "Rent"\n[rule.when]\ndescription =\n'
+    editor = _Editor(monkeypatch, bad, None)
+
+    _edit(CliRunner(), session_factory)
+
+    reopened = editor.texts[1]
+    match = re.search(r"at line (\d+)", reopened.splitlines()[1])
+    assert match
+    assert reopened.splitlines()[int(match.group(1)) - 1] == "description ="
+
+
+@pytest.mark.usefixtures("editor_env")
+def test_a_fixed_file_after_a_bad_one_is_applied_with_the_banner_stripped(
+    session_factory: sessionmaker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bad = '[[rule]]\naccount = "Rent"\n[rule.when]\ndescription = "("\n'
+    runner = CliRunner()
+    _seed(runner, session_factory)
+    editor = _Editor(monkeypatch, bad, lambda reopened: reopened.replace('description = "("', 'description = "x"'))
+
+    result = _edit(runner, session_factory, input="y\n")
+
+    assert result.exit_code == 0, result.output
+    assert len(editor.texts) == 2
+    assert "Applied: 1 added, 2 retired" in result.output
+    assert [condition for _, condition, _, _ in _live(session_factory)] == ['{ description = "x" }']
+
+
+@pytest.mark.usefixtures("editor_env")
+def test_declining_the_confirmation_after_edit_writes_nothing(
+    session_factory: sessionmaker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _Editor(monkeypatch, _NEW_RULE)
+    runner = CliRunner()
+    _seed(runner, session_factory)
+    before = _live(session_factory)
+    groups = _count(session_factory, OperationGroup)
+
+    result = _edit(runner, session_factory, input="n\n")
+
+    assert result.exit_code == 1
+    assert "1 added, 2 retired, 0 reordered, 0 note changed, 0 unchanged" in result.output
+    assert _live(session_factory) == before
+    assert _count(session_factory, OperationGroup) == groups
+
+
+@pytest.mark.usefixtures("editor_env")
+def test_saving_the_rendered_text_unchanged_reports_no_changes(
+    session_factory: sessionmaker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _Editor(monkeypatch, lambda text: text)
+    runner = CliRunner()
+    _seed(runner, session_factory)
+    groups = _count(session_factory, OperationGroup)
+
+    result = _edit(runner, session_factory)
+
+    assert result.exit_code == 0
+    assert result.output == "No changes\n"
+    assert _count(session_factory, OperationGroup) == groups
+
+
+@pytest.mark.usefixtures("editor_env")
+def test_a_rule_added_while_editing_is_refused_and_the_users_text_is_saved(
+    session_factory: sessionmaker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = CliRunner()
+    _seed(runner, session_factory)
+
+    edited_text = {}
+
+    def capture(text: str) -> str:
+        assert CliRunner().invoke(cli, ["add-rule", "LIDL", "Groceries"], obj=session_factory).exit_code == 0
+        edited_text["value"] = text + "\n" + _NEW_RULE
+        return edited_text["value"]
+
+    _Editor(monkeypatch, capture)
+
+    result = _edit(runner, session_factory, input="y\n")
+
+    assert result.exit_code == 1
+    assert "the rules changed after this file was rendered" in result.output
+    match = re.search(r"your edits are saved in (\S+)", result.output)
+    assert match
+    saved = Path(match.group(1))
+    try:
+        assert saved.read_text() == edited_text["value"]
+    finally:
+        saved.unlink()
+    assert len(_live(session_factory)) == 3

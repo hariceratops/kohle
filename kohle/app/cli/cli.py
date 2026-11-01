@@ -1,3 +1,5 @@
+import os
+import tempfile
 import tomllib
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
@@ -13,6 +15,8 @@ from kohle.domain.domain_errors import (
     AccountNotFoundError,
     DeviceIsReader,
     DeviceKeyNotASetting,
+    MalformedRuleFile,
+    RulesChanged,
     StateNotASetting,
     UnknownDeviceKey,
 )
@@ -818,6 +822,78 @@ def apply_rules_cmd(make_session, file, yes: bool):
     applied = ApplyRuleFile(make_session()).execute(text, plan.base)
     if applied.is_err:
         raise click.ClickException(str(applied.unwrap_err()))
+    click.echo(f"Applied: {summary.splitlines()[0]}")
+
+
+_BANNER_MARKER = "# !! "
+_BANNER_HEIGHT = 2
+
+
+def _with_banner(body: str, err: MalformedRuleFile) -> str:
+    message = " ".join(str(err).split())
+    return (
+        f"{_BANNER_MARKER}kohle: not applied. Fix the problem below and save, or quit without saving to abort.\n"
+        f"{_BANNER_MARKER}{message}\n{body}"
+    )
+
+
+def _strip_banner(text: str) -> str:
+    lines = text.splitlines(keepends=True)
+    while lines and lines[0].startswith(_BANNER_MARKER):
+        lines.pop(0)
+    return "".join(lines)
+
+
+def _save_recovery_file(body: str) -> str:
+    fd, path = tempfile.mkstemp(prefix="kohle-rules-", suffix=".toml")
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(body)
+    return path
+
+
+def _rules_failure(err: Exception, body: str) -> click.ClickException:
+    if isinstance(err, RulesChanged):
+        return click.ClickException(f"{err}\nyour edits are saved in {_save_recovery_file(body)}")
+    return click.ClickException(str(err))
+
+
+@cli.command(writes=True)
+@click.pass_obj
+def edit_rules_cmd(make_session):
+    editor = os.environ.get("VISUAL") or os.environ.get("EDITOR")
+    if not editor:
+        raise click.ClickException("no editor: set $VISUAL or $EDITOR, or use show-rules and apply-rules")
+    shown = ShowRules(make_session()).execute()
+    if shown.is_err:
+        raise click.ClickException(str(shown.unwrap_err()))
+    text = shown.unwrap()
+
+    while True:
+        edited = click.edit(text, editor=editor, extension=".toml", require_save=True)
+        if edited is None:
+            click.echo("No changes; nothing applied")
+            return
+        body = _strip_banner(edited)
+        # The placeholder has the banner's height so a TOML syntax error's line
+        # number matches the buffer the user sees when the editor reopens.
+        planned = PlanRuleFile(make_session()).execute("#\n" * _BANNER_HEIGHT + body)
+        if planned.is_ok:
+            plan = planned.unwrap()
+            break
+        err = planned.unwrap_err()
+        if not isinstance(err, MalformedRuleFile):
+            raise _rules_failure(err, body)
+        text = _with_banner(body, err)
+
+    if plan.is_empty:
+        click.echo("No changes")
+        return
+    summary = _plan_summary(plan)
+    click.echo(summary)
+    click.confirm("Apply these changes?", abort=True)
+    applied = ApplyRuleFile(make_session()).execute(body, plan.base)
+    if applied.is_err:
+        raise _rules_failure(applied.unwrap_err(), body)
     click.echo(f"Applied: {summary.splitlines()[0]}")
 
 

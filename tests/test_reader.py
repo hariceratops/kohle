@@ -30,6 +30,7 @@ _WRITE_ARGV: dict[str, list[str]] = {
     # click opens FILE before invoke runs, so it has to exist; the refusal
     # comes before the body ever reads it.
     "apply-rules": ["apply-rules", str(STATEMENT), "--yes"],
+    "edit-rules": ["edit-rules"],
     "reclassify": ["reclassify", "1", "Groceries"],
     "add-group": ["add-group", "Flat"],
     "split-line": ["split-line", "1", "--mine", "5", "--share", "Anna:5"],
