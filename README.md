@@ -699,12 +699,15 @@ past month; `list-sampling-rules` prints it:
 ```bash
 kohle-cli list-sampling-rules
 kohle-cli set-sampling-rules "mid-month: day 15; salary: 3rd fri"
+kohle-cli set-sampling-rules "mid-month: day 15; salary: every 2 weeks from 2026-01-02"
 ```
 
 A list is `"<role>: <rule>; <role>: <rule>; ..."`. The roles are fixed:
 `mid-month` and `salary`. The default is `mid-month: day 15; salary: last
 workday`. An invalid rule, role or list writes nothing and the error names the
-bad part and lists the valid choices.
+bad part and lists the valid choices. All seven rules in the table below are
+valid here, including `every` and `yearly`; the second example samples every
+other Friday.
 
 | Rule | Meaning |
 |---|---|
@@ -713,8 +716,8 @@ bad part and lists the valid choices.
 | `<nth> <weekday>` | `1st`-`4th` plus `mon`-`sun`, e.g. `3rd fri`: that weekday of the month, or the previous working day if it is not a working day. |
 | `last workday` | The last working day of the month. |
 | `last day` | The calendar last day of the month. |
-| `every N days\|weeks\|months from YYYY-MM-DD` | Every N units from the date. Specified, not built yet: reserved for `budgeting`. |
-| `yearly MM-DD` | That calendar day every year. Specified, not built yet: reserved for `budgeting`. |
+| `every N days\|weeks\|months from YYYY-MM-DD` | Every N units in step with the date, which fixes only the phase: it also lands before the date (`every 3 months from 2026-01-15` includes 2025-10-15). N is 1-999 and the units are plural; there is no `years`, write `every 24 months`. A month-based date keeps the start's day, clamped to each month's length without drifting (from 31 January: 28 February, then 31 March). Never moves to a working day. |
+| `yearly MM-DD` | That calendar day every year; `yearly 02-29` lands on 28 February in non-leap years. Never moves to a working day. |
 
 A working day is Monday to Friday, not a public holiday of the Bundesland in
 force on the rule's unshifted date, and never 24 or 31 December. A shift only
@@ -747,6 +750,128 @@ Sample dates cost no API calls: the report only reads stored closes, taking the
 last one on or before each date, and none of these commands touches the price
 tables or a price plugin. Fetching past closes for the sample dates (backfill)
 is not built; `fetch-prices` still fetches only the latest close.
+
+### Budgeting
+
+Caps are estimates of what an expense account should cost over a period, and
+`budget` compares them with what was spent. A deviation is information, not an
+error. Caps are stored in the ledger as data and travel with snapshots; they are
+never device settings.
+
+> [!NOTE]
+> The command names `set-cap`, `end-cap`, `list-caps` and `budget` are
+> provisional and may be renamed by `cli-command-naming`.
+
+#### Caps
+
+A cap is an amount in the base currency plus a recurrence, the same
+[rule vocabulary](#sampling-rules) as `set-sampling-rules`, which defines its
+period. Any expense account, leaf or parent, may be capped, and a cap on a
+parent covers its whole subtree. Caps on a parent and a child are checked
+independently and need not add up. A total cap is a parent account you create
+and cap. `Unclassified Expense` (it has its own row), income, asset and
+liability accounts and People accounts are refused. An amount is 0 or more; 0
+makes any spending an overshoot.
+
+```bash
+kohle-cli set-cap Groceries 300 "day 1" --from 2026-01-01
+kohle-cli set-cap Groceries 400 "day 1" --from 2026-03-10
+kohle-cli set-cap Rundfunkbeitrag 55.08 "every 3 months from 2026-01-15" --from 2026-01-01
+kohle-cli end-cap Groceries --from 2026-09-01
+kohle-cli list-caps
+```
+
+Caps are an effective-dated history per account. `--from` is required, takes a
+date only (no `start`) and may be in the future. An account has one entry in
+force at a time; repeating a date replaces that entry, which is how to correct
+a mistake. `end-cap` records "no cap" from its date and is refused when no cap
+is in force then. An invalid account, amount, rule or date writes nothing and
+the error names the bad part and lists the valid choices. Each change is one
+operation in `list-operations`. A negative amount must follow `--` (and `--from`
+must come first), so it reaches the amount check instead of being read as an
+option.
+
+`list-caps` shows every account's full history, accounts by name and entries
+oldest first. An `end-cap` entry shows `-` and `no cap`:
+
+```
+account          from        cap  rule
+---------------  ----------  ------  ------------------------------
+Groceries        2026-01-01  300.00  day 1
+Groceries        2026-03-10  400.00  day 1
+Restaurants      2026-01-01  150.00  workday 25
+Restaurants      2026-07-01       -  no cap
+Rundfunkbeitrag  2026-01-01   55.08  every 3 months from 2026-01-15
+```
+
+#### Periods
+
+A period runs from one occurrence of the cap's rule to the day before the next.
+Every kind may define periods: `day 1` gives calendar months (`last day` does
+not, it would start each period on the last day), and `workday 25` runs from
+payday to payday. The shifting kinds (`workday N`, `<nth> <weekday>`,
+`last workday`) shift under the Bundesland in force; `budget` refuses and points
+to `move-state --from start <code>` when a cap uses one and there is no `start`
+entry. Caps using only the other kinds work without one.
+
+An entry taking effect at D cuts: it ends the running period on D-1 and starts
+a new one at D, which ends the day before the new rule's next occurrence after
+D. A cap's first period starts at its D the same way. A period cut short by D
+(or one that starts off an occurrence) is marked `short`, and its cap is not
+prorated. With the Groceries history above, March is 03-01 to 03-09 (short,
+300) and 03-10 to 03-31 (short, 400), and April is a full period at 400. An
+entry identical to the one before it (the same amount and rule, or two
+`end-cap`s) is listed but cuts nothing, so repeating the earlier cap at a
+mistaken date repairs the history without doubling the cap. An entry that falls
+on an occurrence of the running rule is not a cut. Months-based kinds clamp
+without drifting: `every 1 months from 2026-01-31` gives 01-31 to 02-27, 02-28
+to 03-30, 03-31 to 04-29.
+
+#### The budget report
+
+```bash
+kohle-cli budget
+kohle-cli budget --from 2026-03-01 --to 2026-06-30
+```
+
+`--to` defaults to today and may not be after it; `--from` defaults to 1
+January of `--to`'s year and may not be after `--to`. Both are usage errors
+otherwise. Every period of every cap that overlaps the range is shown whole,
+with all its spending, not clipped to the range. Periods starting after today
+are not shown. Rows come by account, then period start:
+
+```
+account               from        to             cap    spent    over/under  note
+--------------------  ----------  ----------  ------  -------  ------------  ------------------------------
+Groceries             2026-01-01  2026-01-31  300.00   320.50         20.50  over
+Groceries             2026-03-01  2026-03-09  300.00   112.00       -188.00  short
+Groceries             2026-03-10  2026-03-31  400.00   289.90       -110.10  short
+Groceries             2026-10-01  2026-10-31  400.00   371.15        -28.85  partial day 30 of 31
+Rundfunkbeitrag       2026-01-01  2026-01-14   55.08     0.00        -55.08  short
+Unclassified Expense  2026-01-01  2026-10-30       -    84.10             -  -
+(uncapped)            2026-01-01  2026-10-30       -   612.40             -  -
+```
+
+- `spent` is net: debits minus credits on the capped account and its subtree
+  for lines dated in the period, at the value each line recorded. A refund
+  reduces it, so a period can come out negative. An expense split leaves only
+  your own share.
+- `over/under` is `spent` minus `cap`: positive is overshoot, negative is
+  undershoot. There is no `+` sign.
+- `note` lists `over` (spent above cap), `short`, and for the period containing
+  today `partial day N of M` with today counted, joined by `, `; `-` means
+  none.
+- The `Unclassified Expense` row is the spending on that account over the
+  whole range. The `(uncapped)` row is the spending over the whole range on
+  lines whose account had no cap in force, on itself or any ancestor, on the
+  line's date; `Unclassified Expense` is left out of it. Both rows always
+  print, even at 0.00, so spending cannot hide. With no caps they are the only
+  rows.
+- There is no rollover: each period stands alone.
+- A line counts toward every capped ancestor, so a line on a child of a capped
+  parent counts toward the parent's cap and not toward `(uncapped)`.
+
+`budget` is a pure read: it records no operation and reads no prices.
 
 ### Prices
 Current prices come from price plugins, a second plugin kind in the same

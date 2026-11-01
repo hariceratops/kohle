@@ -35,6 +35,8 @@ _WRITE_ARGV: dict[str, list[str]] = {
     "fetch-prices": ["fetch-prices"],
     "set-sampling-rules": ["set-sampling-rules", "salary: last day"],
     "move-state": ["move-state", "--from", "start", "BY"],
+    "set-cap": ["set-cap", "Groceries", "300", "day 1", "--from", "2026-01-01"],
+    "end-cap": ["end-cap", "Groceries", "--from", "2026-06-01"],
 }
 
 
@@ -46,6 +48,8 @@ def _read_argv(tmp_path: Path) -> dict[str, list[str]]:
         "list-settings": ["list-settings"],
         "list-sampling-rules": ["list-sampling-rules"],
         "list-states": ["list-states"],
+        "list-caps": ["list-caps"],
+        "budget": ["budget"],
         "list-accounts": ["list-accounts"],
         "list-child-accounts": ["list-child-accounts", "Groceries"],
         "list-units": ["list-units"],

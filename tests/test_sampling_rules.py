@@ -140,3 +140,18 @@ def test_a_third_friday_on_the_15th_gives_one_row_with_both_roles() -> None:
     assert sample_dates(rules, _by, date(2026, 5, 1), date(2026, 5, 15)) == [
         Sample(date(2026, 5, 15), (Role.mid_month, Role.salary)),
     ]
+
+
+def test_a_fortnightly_salary_samples_every_other_friday() -> None:
+    rules = parse_sampling_rules("salary: every 2 weeks from 2026-01-02").unwrap()
+
+    assert render_sampling_rules(rules) == "salary: every 2 weeks from 2026-01-02"
+    samples = sample_dates(rules, _by, date(2026, 1, 1), date(2026, 2, 28))
+    assert [s.on for s in samples] == [
+        date(2026, 1, 2),
+        date(2026, 1, 16),
+        date(2026, 1, 30),
+        date(2026, 2, 13),
+        date(2026, 2, 27),
+        date(2026, 2, 28),  # the --to row
+    ]

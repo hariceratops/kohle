@@ -725,3 +725,47 @@ class MissingInitKeys(InitFileError):
 
 
 HistoryError = ValuationError | SamplingRulesError | StateError
+
+
+class CapError(Exception):
+    pass
+
+
+class UncappableAccount(CapError):
+    def __init__(self, name: str, problem: str, cappable: Sequence[str]) -> None:
+        super().__init__()
+        self.name = name
+        self.problem = problem
+        self.cappable = cappable
+
+    def __str__(self) -> str:
+        head = f"cannot cap {self.name!r}: {self.problem}"
+        if not self.cappable:
+            return (
+                f"{head}; no account can be capped yet, "
+                "add an expense account with `kohle-cli add-account <name>`"
+            )
+        return f"{head}; accounts that can be capped: {', '.join(self.cappable)}"
+
+
+class InvalidCapAmount(CapError):
+    def __init__(self, amount: object) -> None:
+        super().__init__()
+        self.amount = amount
+
+    def __str__(self) -> str:
+        return f"invalid cap amount {self.amount}; expected a number of 0 or more"
+
+
+class NoCapInForce(CapError):
+    def __init__(self, name: str, on: date) -> None:
+        super().__init__()
+        self.name = name
+        self.on = on
+
+    def __str__(self) -> str:
+        return f"{self.name} has no cap in force on {self.on}; list-caps shows its history"
+
+
+CapWriteError = CapError | AccountError | InvalidRecurrence
+BudgetError = CapError | AccountError | JournalError | InvalidRecurrence | StateError

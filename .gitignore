@@ -5,3 +5,4 @@ __pycache__/
 kohle.db
 kohle.egg-info/
 .venv
+kohle.db.bak-*

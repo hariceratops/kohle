@@ -81,6 +81,7 @@ def _guarded_sources() -> dict[str, str]:
         path: (ROOT / path).read_text(encoding="utf-8")
         for path in (
             "kohle/use_cases/journal.py",
+            "kohle/use_cases/budgeting.py",
             "kohle/use_cases/classification.py",
             "kohle/use_cases/splitting.py",
             "kohle/use_cases/lots.py",
