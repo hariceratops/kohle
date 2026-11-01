@@ -121,6 +121,30 @@ def test_yearly_period_boundary_lands_on_28_february_in_a_common_year() -> None:
     assert cap_periods(history, _state, date(2028, 3, 1))[0].end == date(2028, 2, 28)
 
 
+def test_workday_25_runs_payday_to_payday_under_the_state_in_force() -> None:
+    history = [_cap("10", "workday 25", date(2025, 9, 25))]
+
+    periods = cap_periods(history, lambda _: "BY", date(2025, 12, 31))
+
+    assert [(p.start, p.end, p.short) for p in periods] == [
+        (date(2025, 9, 25), date(2025, 10, 23), False),
+        (date(2025, 10, 24), date(2025, 11, 24), False),
+        (date(2025, 11, 25), date(2025, 12, 22), False),
+        (date(2025, 12, 23), date(2026, 1, 22), False),
+    ]
+
+
+def test_every_periods_never_shift_to_a_working_day() -> None:
+    history = [_cap("10", "every 1 weeks from 2026-01-03", date(2026, 1, 3))]
+
+    periods = cap_periods(history, _state, date(2026, 1, 10))
+
+    assert [(p.start, p.end) for p in periods] == [
+        (date(2026, 1, 3), date(2026, 1, 9)),
+        (date(2026, 1, 10), date(2026, 1, 16)),
+    ]
+
+
 @pytest.mark.skip(reason="TODO: slice 078 — cut at D, identical entry does not cut")
 def test_placeholder_cut_at_effective_date() -> None:
     # TODO: 03-01..03-09 (short, 300) and 03-10..03-31 (short, 400), April full

@@ -229,10 +229,30 @@ def test_budget_is_a_pure_read_and_calls_no_price_plugin(session_factory, monkey
     assert (_count(session_factory, Operation), _count(session_factory, OperationGroup)) == before
 
 
-@pytest.mark.skip(reason="TODO: slice 077 — Bundesland refusal for working-day rules")
-def test_placeholder_budget_bundesland_refusal() -> None:
-    # TODO: refuses with the move-state hint only when a rule shifts to a working day
-    ...
+@pytest.mark.parametrize("rule", ["workday 25", "1st fri", "last workday"])
+def test_budget_refuses_a_shifting_kind_without_a_bundesland(session_factory, monkeypatch, rule) -> None:
+    _ledger(session_factory)
+    _run(session_factory, "set-cap", "Food", "300", rule, "--from", "2026-01-01")
+    _pin_today(monkeypatch, date(2026, 2, 12))
+
+    result = _run(session_factory, "budget")
+
+    assert result.exit_code == 1
+    assert "move-state --from start" in result.output
+
+
+@pytest.mark.parametrize(
+    "rule", ["day 1", "last day", "every 2 weeks from 2026-01-02", "yearly 01-15"]
+)
+def test_budget_needs_no_bundesland_for_non_shifting_kinds(session_factory, monkeypatch, rule) -> None:
+    _ledger(session_factory)
+    _run(session_factory, "set-cap", "Food", "300", rule, "--from", "2026-01-01")
+    _pin_today(monkeypatch, date(2026, 2, 12))
+
+    result = _run(session_factory, "budget")
+
+    assert result.exit_code == 0, result.output
+    assert result.output.splitlines()[2].split()[0] == "Food"
 
 
 @pytest.mark.skip(reason="TODO: slice 079 — end-cap")

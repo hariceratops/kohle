@@ -35,6 +35,7 @@ from kohle.use_cases.recurrence import (
     next_occurrence,
     parse_recurrence,
     render_recurrence,
+    shifts,
 )
 
 
@@ -269,15 +270,19 @@ class QueryBudget(UnitOfWork[BudgetReport, BudgetError]):
             if states_res.is_err:
                 return Result.err(states_res.unwrap_err())
             lookup_res = state_lookup(states_res.unwrap())
-            if lookup_res.is_err:
+            if lookup_res.is_err and any(
+                c.cap is not None and shifts(c.cap.recurrence) for h in histories.values() for c in h
+            ):
                 return Result.err(lookup_res.unwrap_err())
+            # Only a shifting kind calls state_on, and with no start entry the refusal above ruled those out.
+            state_on = lambda day: lookup_res.unwrap()(day)
 
             covered = set().union(*(c.covers for c in capped))
             lines_res = account_lines_service(ctx, covered)
             if lines_res.is_err:
                 return Result.err(lines_res.unwrap_err())
 
-            rows = period_rows(capped, lines_res.unwrap(), lookup_res.unwrap(), start, end, today)
+            rows = period_rows(capped, lines_res.unwrap(), state_on, start, end, today)
             return Result.ok(BudgetReport(rows))
 
         return self._run(use_case)

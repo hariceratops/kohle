@@ -188,7 +188,7 @@ def _unshifted(rule: Monthly, year: int, month: int) -> date:
             assert_never(rule)
 
 
-def _shifts(rule: Recurrence) -> bool:
+def shifts(rule: Recurrence) -> bool:
     match rule:
         case Day() | LastDay() | Every() | Yearly():
             return False
@@ -237,7 +237,7 @@ def _ascending(rule: Recurrence, start: date, state_on: Callable[[date], str]) -
             year, month = start.year, start.month
             while True:
                 found = _unshifted(rule, year, month)
-                if _shifts(rule):
+                if shifts(rule):
                     state = state_on(found)
                     while not is_working_day(found, state):
                         found -= timedelta(days=1)
