@@ -145,10 +145,27 @@ def test_every_periods_never_shift_to_a_working_day() -> None:
     ]
 
 
-@pytest.mark.skip(reason="TODO: slice 078 — cut at D, identical entry does not cut")
-def test_placeholder_cut_at_effective_date() -> None:
-    # TODO: 03-01..03-09 (short, 300) and 03-10..03-31 (short, 400), April full
-    ...
+def test_a_new_cap_cuts_the_running_period_the_day_before_it_and_is_not_prorated() -> None:
+    history = [_cap("300", "day 1", date(2026, 1, 1)), _cap("400", "day 1", date(2026, 3, 10))]
+
+    periods = cap_periods(history, _state, date(2026, 4, 30))
+
+    assert [(p.start, p.end, p.cap, p.short) for p in periods[2:]] == [
+        (date(2026, 3, 1), date(2026, 3, 9), Decimal(300), True),
+        (date(2026, 3, 10), date(2026, 3, 31), Decimal(400), True),
+        (date(2026, 4, 1), date(2026, 4, 30), Decimal(400), False),
+    ]
+
+
+def test_an_entry_identical_to_the_one_in_force_does_not_cut() -> None:
+    history = [_cap("300", "day 1", date(2026, 1, 1)), _cap("300", "day 1", date(2026, 1, 20))]
+
+    periods = cap_periods(history, _state, date(2026, 2, 28))
+
+    assert [(p.start, p.end, p.short) for p in periods] == [
+        (date(2026, 1, 1), date(2026, 1, 31), False),
+        (date(2026, 2, 1), date(2026, 2, 28), False),
+    ]
 
 
 @pytest.mark.skip(reason="TODO: slice 080 — covered / uncapped / unclassified split")

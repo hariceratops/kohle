@@ -203,6 +203,23 @@ def test_budget_range_defaults_and_future_periods(session_factory, monkeypatch) 
     assert [line.split()[1] for line in explicit] == ["2025-12-01", "2026-01-01"]
 
 
+def test_a_future_cap_is_listed_but_not_in_budget_until_it_starts(session_factory, monkeypatch) -> None:
+    _ledger(session_factory)
+    _run(session_factory, "move-state", "--from", "start", "BY")
+    _run(session_factory, "set-cap", "Food", "300", "day 1", "--from", "2026-01-01")
+    _run(session_factory, "set-cap", "Food", "500", "day 1", "--from", "2026-06-01")
+    _pin_today(monkeypatch, date(2026, 2, 12))
+
+    budget = _run(session_factory, "budget", "--from", "2026-01-01").output.splitlines()[2:]
+    listed = _run(session_factory, "list-caps").output
+
+    assert [line.split()[1:4] for line in budget] == [
+        ["2026-01-01", "2026-01-31", "300.00"],
+        ["2026-02-01", "2026-02-28", "300.00"],
+    ]
+    assert "2026-06-01" in listed
+
+
 def test_budget_rejects_a_future_to_and_a_reversed_range(session_factory, monkeypatch) -> None:
     _pin_today(monkeypatch, date(2026, 2, 12))
 
