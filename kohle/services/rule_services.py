@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session, joinedload
 from kohle.core.result import Result
 from kohle.domain.domain_errors import RuleError, RuleNotFoundError
 from kohle.domain.models import Rule
-from kohle.infrastructure.crud import crud_create, crud_delete, crud_retrieve
+from kohle.infrastructure.crud import crud_create, crud_delete, crud_retrieve, crud_update
 from kohle.infrastructure.transaction_context import DbTransactionContext
 
 
@@ -19,6 +19,31 @@ def add_rule_service(
         return rule
 
     return ctx.run(op).map_err(lambda err: RuleError(str(err)))
+
+
+@crud_update
+def update_rule_service(
+    ctx: DbTransactionContext, rule_id: int, priority: int, note: str | None
+) -> Result[Rule, RuleError]:
+    """The only update path: condition and account_id are not arguments, so a
+    rule's immutability is structural rather than a convention."""
+
+    def op(session: Session) -> Rule | None:
+        rule = session.query(Rule).filter(Rule.id == rule_id, Rule.deleted_at.is_(None)).one_or_none()
+        if rule is not None:
+            rule.priority = priority
+            rule.note = note
+        return rule
+
+    return (
+        ctx.run(op)
+        .map_err(lambda err: RuleError(str(err)))
+        .and_then(lambda rule:
+            Result.ok(rule)
+            if rule is not None
+            else Result.err(RuleNotFoundError(rule_id))
+        )
+    )
 
 
 @crud_retrieve

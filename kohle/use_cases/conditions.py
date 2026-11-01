@@ -28,7 +28,14 @@ class When:
     hold each key once. Equality is then content identity, independent of key
     order in the file."""
 
+    description: str | None = None
+    counterparty: str | None = None
+    iban: str | None = None  # normalised: no whitespace, upper case
     any_field: str | None = None
+
+
+def normalise_iban(iban: str) -> str:
+    return "".join(iban.split()).upper()
 
 
 Predicate = Callable[[str, Counterparty], bool]
@@ -46,13 +53,37 @@ def _check_pattern(value: object, key: str) -> Result[str, MalformedRuleFile]:
     return Result.ok(value)
 
 
+def _check_iban(value: object, key: str) -> Result[str, MalformedRuleFile]:
+    if not isinstance(value, str):
+        return Result.err(MalformedRuleFile(None, key, "must be a string"))
+    normalised = normalise_iban(value)
+    if not re.fullmatch(r"[A-Z0-9]+", normalised):
+        return Result.err(
+            MalformedRuleFile(
+                None, key, "must be an IBAN (letters and digits); use any_field or counterparty for a pattern"
+            )
+        )
+    return Result.ok(normalised)
+
+
+_CONDITION_KEYS = ("description", "counterparty", "iban", "any_field")
+
+
 def parse_when(value: object, key: str = "when") -> Result[When, MalformedRuleFile]:
     if not isinstance(value, dict) or not value:
         return Result.err(MalformedRuleFile(None, key, "must be a table with at least one condition"))
     for name in value:
-        if name != "any_field":
+        if name not in _CONDITION_KEYS:
             return Result.err(MalformedRuleFile(None, f"{key}.{name}", "is not a known condition"))
-    return _check_pattern(value["any_field"], f"{key}.any_field").map(lambda pattern: When(any_field=pattern))
+    fields: dict[str, str] = {}
+    for name in _CONDITION_KEYS:
+        if name not in value:
+            continue
+        checked = (_check_iban if name == "iban" else _check_pattern)(value[name], f"{key}.{name}")
+        if checked.is_err:
+            return Result.err(checked.unwrap_err())
+        fields[name] = checked.unwrap()
+    return Result.ok(When(**fields))
 
 
 def parse_stored_when(text: str) -> Result[When, MalformedRuleFile]:
@@ -83,23 +114,41 @@ def toml_string(s: str) -> str:
     return '"' + "".join(out) + '"'
 
 
-def render_when_inline(when: When) -> str:
+def _render_parts(when: When) -> list[str]:
     parts = []
-    if when.any_field is not None:
-        parts.append(f"any_field = {toml_string(when.any_field)}")
-    return "{ " + ", ".join(parts) + " }"
+    for name in _CONDITION_KEYS:
+        value = getattr(when, name)
+        if value is not None:
+            parts.append(f"{name} = {toml_string(value)}")
+    return parts
+
+
+def render_when_inline(when: When) -> str:
+    return "{ " + ", ".join(_render_parts(when)) + " }"
 
 
 def render_when_lines(when: When) -> list[str]:
     """The body under `[rule.when]`: one `key = value` line per key."""
-    lines = []
-    if when.any_field is not None:
-        lines.append(f"any_field = {toml_string(when.any_field)}")
-    return lines
+    return _render_parts(when)
 
 
 def compile_when(when: When) -> Predicate:
     tests: list[Predicate] = []
+    if when.description is not None:
+        description_pattern = re.compile(when.description, PATTERN_FLAGS)
+        tests.append(lambda description, counterparty: description_pattern.search(description) is not None)
+    if when.counterparty is not None:
+        name_pattern = re.compile(when.counterparty, PATTERN_FLAGS)
+        tests.append(
+            lambda description, counterparty: counterparty.name is not None
+            and name_pattern.search(counterparty.name) is not None
+        )
+    if when.iban is not None:
+        wanted = when.iban
+        tests.append(
+            lambda description, counterparty: counterparty.iban is not None
+            and normalise_iban(counterparty.iban) == wanted
+        )
     if when.any_field is not None:
         pattern = re.compile(when.any_field, PATTERN_FLAGS)
 

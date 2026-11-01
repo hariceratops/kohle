@@ -27,6 +27,9 @@ _WRITE_ARGV: dict[str, list[str]] = {
     "record-split": ["record-split", "2026-03-02", "Rewe", "--line", "Cash:10:EUR:1:credit", "--line", "Groceries:10:EUR:1:debit"],
     "add-rule": ["add-rule", "ALDI", "Groceries"],
     "remove-rule": ["remove-rule", "1"],
+    # click opens FILE before invoke runs, so it has to exist; the refusal
+    # comes before the body ever reads it.
+    "apply-rules": ["apply-rules", str(STATEMENT), "--yes"],
     "reclassify": ["reclassify", "1", "Groceries"],
     "add-group": ["add-group", "Flat"],
     "split-line": ["split-line", "1", "--mine", "5", "--share", "Anna:5"],

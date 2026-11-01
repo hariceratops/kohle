@@ -69,7 +69,7 @@ from kohle.use_cases.reporting import (
     unrealised_gain,
 )
 from kohle.use_cases.conditions import render_when_inline
-from kohle.use_cases.rules import AddRule, ListRules, RemoveRule, ShowRules
+from kohle.use_cases.rules import AddRule, ApplyRuleFile, ListRules, PlanRuleFile, RemoveRule, RulePlan, ShowRules
 from kohle.use_cases.sampling import ListSamplingRules, Role, SetSamplingRules
 from kohle.use_cases.settings import ListSettings, SetSettings
 from kohle.use_cases.splitting import (
@@ -774,6 +774,51 @@ def show_rules_cmd(make_session):
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
     click.echo(res.unwrap(), nl=False)
+
+
+def _plan_summary(plan: RulePlan) -> str:
+    renoted = plan.renoted
+    lines = [
+        f"{len(plan.added)} added, {len(plan.retired)} retired, {len(plan.reordered)} reordered, "
+        f"{len(renoted)} note changed, {plan.unchanged} unchanged"
+    ]
+    for item in plan.added:
+        lines.append(f"  rule {item.rule.position} (new) -> {item.rule.account} {render_when_inline(item.rule.when)}")
+    for rule in plan.retired:
+        lines.append(f"  id {rule.rule_id} -> {rule.account_name} {render_when_inline(rule.when)} (retired)")
+    for item in plan.rules:
+        if item.kept is not None and item.kept.rule_id in plan.reordered:
+            lines.append(f"  id {item.kept.rule_id} -> {item.kept.account_name}, now rule {item.rule.position}")
+    for item in renoted:
+        assert item.kept is not None
+        lines.append(f"  id {item.kept.rule_id} -> {item.kept.account_name}, note changed")
+    return "\n".join(lines)
+
+
+@cli.command(writes=True)
+@click.argument("file", type=click.File("rb"))
+@click.option("--yes", is_flag=True, help="Apply without asking.")
+@click.pass_obj
+def apply_rules_cmd(make_session, file, yes: bool):
+    try:
+        text = file.read().decode("utf-8")
+    except UnicodeDecodeError as err:
+        raise click.ClickException(f"{file.name} is not valid UTF-8: {err}") from err
+    planned = PlanRuleFile(make_session()).execute(text)
+    if planned.is_err:
+        raise click.ClickException(str(planned.unwrap_err()))
+    plan = planned.unwrap()
+    if plan.is_empty:
+        click.echo("No changes")
+        return
+    summary = _plan_summary(plan)
+    click.echo(summary)
+    if not yes:
+        click.confirm("Apply these changes?", abort=True)
+    applied = ApplyRuleFile(make_session()).execute(text, plan.base)
+    if applied.is_err:
+        raise click.ClickException(str(applied.unwrap_err()))
+    click.echo(f"Applied: {summary.splitlines()[0]}")
 
 
 @cli.command(writes=True)

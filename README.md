@@ -333,6 +333,17 @@ form `{ any_field = "REWE|ALDI|LIDL" }`.
 table. Rule ids never appear. The `base` line at the top fingerprints the rule
 set it was rendered from.
 
+`apply-rules FILE` replaces the rule set with the file's, after printing a
+summary (added, retired, reordered, note changed, unchanged) and asking; `--yes`
+skips the question. `[rule.when]` takes `description`, `counterparty`, `iban`
+and `any_field`, all of which must hold; patterns are case-insensitive and an
+IBAN ignores spaces and case. A rule whose conditions and account are unchanged
+keeps its id, and a note-only edit updates the note; any other change retires
+the old rule and adds a new one. Applying `show-rules` output reports no
+changes. A file whose `base` no longer matches the stored rules is refused;
+delete the `base` line to apply it anyway. The whole apply is one audit-trail
+group, or nothing.
+
 The target must be a leaf account, since only leaves can be posted to.
 `remove-rule` retires a rule rather than erasing it: past classifications keep
 naming the conditions that made them.

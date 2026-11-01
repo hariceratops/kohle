@@ -205,6 +205,28 @@ class MalformedRuleFile(RuleError):
         return f"{where}: {self.problem}" if where else self.problem
 
 
+class RulesChanged(RuleError):
+    def __init__(self, base: str, current: str) -> None:
+        super().__init__()
+        self.base = base
+        self.current = current
+
+    def __str__(self) -> str:
+        return (
+            "the rules changed after this file was rendered; run show-rules or edit-rules again, "
+            "or delete the base line to apply it over the current rules"
+        )
+
+
+class DuplicateRule(RuleError):
+    def __init__(self, rule_id: int) -> None:
+        super().__init__()
+        self.rule_id = rule_id
+
+    def __str__(self) -> str:
+        return f"rule {self.rule_id} already sends these lines to that account"
+
+
 class ClassificationError(Exception):
     pass
 
@@ -375,6 +397,8 @@ RecordEntryError = AccountError | UnitError | JournalError | BaseCurrencyAsCross
 # ledger's own PostingToNonLeafAccount, checked at rule creation rather than at
 # the import it would otherwise break.
 AddRuleError = AccountError | RuleError | JournalError
+
+ApplyRulesError = RuleError | AccountError
 
 BalanceError = AccountError | JournalError
 
