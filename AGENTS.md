@@ -19,8 +19,9 @@ Alembic migrations packaged in `kohle/db/migrations/`, and every other command
 checks its revision first. Ledger-wide settings live in the `settings` table,
 keyed by the registry in `kohle/use_cases/settings.py` (empty today), never in
 environment variables. The Bundesland is not a setting: it is an
-effective-dated history in `state_entries`, and the net-worth-history sampling
-rules are a stored list in `sampling_rule_lists`. Device settings live in `$XDG_CONFIG_HOME/kohle/config.toml`, keyed
+effective-dated history in `state_entries`; spending caps are an
+effective-dated history per expense account in `cap_entries`; and the
+net-worth-history sampling rules are a stored list in `sampling_rule_lists`. Device settings live in `$XDG_CONFIG_HOME/kohle/config.toml`, keyed
 by the separate registry in `kohle/infrastructure/device_config.py`; kohle
 never writes that file.
 
@@ -36,7 +37,8 @@ entry-point group as the importers, each unit bound to exactly one plugin and
 symbol by `set-price-source`. `balance` and `net-worth` value holdings at the
 latest stored close, marking stale and missing prices, through
 `kohle/use_cases/reporting.py`; that module is separate because a test forbids
-`journal.py` from touching prices, and `prices.py` holds the writers.
+`journal.py` from touching prices, and `prices.py` holds the writers. `budget` reads no prices; it lives in
+`kohle/use_cases/budgeting.py`, which the price guard covers like `journal.py`.
 
 Accounts form a tree and everything is an account: bank accounts, virtual
 sub-accounts for earmarked savings, instruments, expense categories, and
