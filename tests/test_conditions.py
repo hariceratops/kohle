@@ -208,11 +208,95 @@ def test_placeholder_semantics() -> None:
     raise NotImplementedError
 
 
-@pytest.mark.skip(reason="TODO: 086 AND/OR stop once decided")
-def test_placeholder_short_circuit() -> None:
-    raise NotImplementedError
+class _Untouchable:
+    """A counterparty whose fields fail the test if evaluation reaches them."""
+
+    @property
+    def name(self) -> str:
+        raise AssertionError("name was read")
+
+    @property
+    def iban(self) -> str:
+        raise AssertionError("iban was read")
 
 
-@pytest.mark.skip(reason="TODO: 086 rewe, edeka without pfand, edeka with pfand")
-def test_placeholder_groceries_example() -> None:
-    raise NotImplementedError
+def test_an_and_stops_at_the_first_failing_key() -> None:
+    predicate = compile_when(When(description="x", counterparty="y"))
+
+    assert not predicate("nothing", _Untouchable(), ONE)  # type: ignore[arg-type]
+
+
+def test_an_or_stops_at_the_first_holding_alternative() -> None:
+    predicate = compile_when(When(any_of=(When(description="match"), When(counterparty="y"))))
+
+    assert predicate("a match", _Untouchable(), ONE)  # type: ignore[arg-type]
+
+
+def test_a_not_over_a_missing_counterparty_holds() -> None:
+    assert compile_when(When(not_=When(counterparty="x")))("d", NONE, ONE)
+    assert compile_when(When(not_=When(iban="DE89")))("d", NONE, ONE)
+    assert not compile_when(When(not_=When(description="d")))("d", NONE, ONE)
+
+
+GROCERIES = When(any_of=(When(description="rewe"), When(counterparty="edeka", not_=When(description="pfand"))))
+
+
+def test_the_groceries_example_matches_rewe_and_edeka_without_pfand() -> None:
+    groceries = compile_when(GROCERIES)
+    edeka = Counterparty("EDEKA Markt", None)
+
+    assert groceries("REWE Markt", NONE, ONE)
+    assert groceries("Einkauf", edeka, ONE)
+    assert not groceries("Pfand Rueckgabe", edeka, ONE)
+    assert not groceries("Einkauf", NONE, ONE)
+
+
+_NESTED = [
+    When(any_of=(When(description="a"), When(iban="DE89"))),
+    When(not_=When(counterparty="x")),
+    GROCERIES,
+    When(
+        amount=AmountRange(Decimal("0.5"), None),
+        any_of=(When(not_=When(any_of=(When(description="a"), When(not_=When(iban="DE89"))))), When(direction=Direction.incoming)),
+        not_=When(any_of=(When(description="b"),)),
+    ),
+]
+
+
+@pytest.mark.parametrize("when", _NESTED)
+def test_nested_conditions_round_trip_in_all_three_forms(when: When) -> None:
+    inline = tomllib.loads("when = " + render_when_inline(when), parse_float=Decimal)["when"]
+    lines = tomllib.loads("\n".join(render_when_lines(when)), parse_float=Decimal)
+
+    assert parse_when(inline).unwrap() == when
+    assert parse_when(lines).unwrap() == when
+    assert parse_stored_when(render_when_inline(when)).unwrap() == when
+
+
+def test_any_renders_one_alternative_per_line_and_inline_on_one() -> None:
+    assert render_when_lines(GROCERIES) == [
+        "any = [",
+        '  { description = "rewe" },',
+        '  { counterparty = "edeka", not = { description = "pfand" } },',
+        "]",
+    ]
+    assert render_when_inline(GROCERIES) == (
+        '{ any = [{ description = "rewe" }, { counterparty = "edeka", not = { description = "pfand" } }] }'
+    )
+
+
+@pytest.mark.parametrize(
+    ("value", "key"),
+    [
+        ({"any": []}, "when.any"),
+        ({"any": {"description": "x"}}, "when.any"),
+        ({"any": [{"description": "x"}, {}]}, "when.any[2]"),
+        ({"not": {}}, "when.not"),
+        ({"not": "x"}, "when.not"),
+        ({"any": [{"description": "x"}, {"not": {"iban": "DE.*"}}]}, "when.any[2].not.iban"),
+    ],
+)
+def test_parse_when_rejects_a_bad_combinator_naming_the_key_path(value: object, key: str) -> None:
+    err = parse_when(value).unwrap_err()
+
+    assert err.key == key

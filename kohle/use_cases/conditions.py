@@ -7,7 +7,7 @@ read back through `parse_stored_when` (design §2, §3).
 import re
 import tomllib
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 from enum import Enum
 
@@ -48,6 +48,8 @@ class When:
     amount: AmountRange | None = None
     direction: Direction | None = None
     any_field: str | None = None
+    any_of: tuple["When", ...] = ()  # the `any` key; () means absent
+    not_: "When | None" = None  # the `not` key
 
 
 def normalise_iban(iban: str) -> str:
@@ -129,11 +131,23 @@ _CONDITION_KEYS = ("description", "counterparty", "iban", "amount", "direction",
 _CHECKS = {"iban": _check_iban, "amount": _check_amount, "direction": _check_direction}
 
 
+def _check_any(value: object, key: str) -> Result[tuple[When, ...], MalformedRuleFile]:
+    if not isinstance(value, list) or not value:
+        return Result.err(MalformedRuleFile(None, key, "must be a non-empty array of tables"))
+    items = []
+    for index, item in enumerate(value, start=1):
+        parsed = parse_when(item, f"{key}[{index}]")
+        if parsed.is_err:
+            return Result.err(parsed.unwrap_err())
+        items.append(parsed.unwrap())
+    return Result.ok(tuple(items))
+
+
 def parse_when(value: object, key: str = "when") -> Result[When, MalformedRuleFile]:
     if not isinstance(value, dict) or not value:
         return Result.err(MalformedRuleFile(None, key, "must be a table with at least one condition"))
     for name in value:
-        if name not in _CONDITION_KEYS:
+        if name not in (*_CONDITION_KEYS, "any", "not"):
             return Result.err(MalformedRuleFile(None, f"{key}.{name}", "is not a known condition"))
     fields: dict[str, object] = {}
     for name in _CONDITION_KEYS:
@@ -143,6 +157,16 @@ def parse_when(value: object, key: str = "when") -> Result[When, MalformedRuleFi
         if checked.is_err:
             return Result.err(checked.unwrap_err())
         fields[name] = checked.unwrap()
+    if "any" in value:
+        checked_any = _check_any(value["any"], f"{key}.any")
+        if checked_any.is_err:
+            return Result.err(checked_any.unwrap_err())
+        fields["any_of"] = checked_any.unwrap()
+    if "not" in value:
+        checked_not = parse_when(value["not"], f"{key}.not")
+        if checked_not.is_err:
+            return Result.err(checked_not.unwrap_err())
+        fields["not_"] = checked_not.unwrap()
     return Result.ok(When(**fields))
 
 
@@ -197,6 +221,10 @@ def _render_parts(when: When) -> list[str]:
         value = getattr(when, name)
         if value is not None:
             parts.append(f"{name} = {_render_value(value)}")
+    if when.any_of:
+        parts.append("any = [" + ", ".join(render_when_inline(item) for item in when.any_of) + "]")
+    if when.not_ is not None:
+        parts.append(f"not = {render_when_inline(when.not_)}")
     return parts
 
 
@@ -205,8 +233,16 @@ def render_when_inline(when: When) -> str:
 
 
 def render_when_lines(when: When) -> list[str]:
-    """The body under `[rule.when]`: one `key = value` line per key."""
-    return _render_parts(when)
+    """The body under `[rule.when]`: one `key = value` line per key, and `any`
+    with one alternative per line."""
+    lines = _render_parts(replace(when, any_of=(), not_=None))
+    if when.any_of:
+        lines.append("any = [")
+        lines.extend(f"  {render_when_inline(item)}," for item in when.any_of)
+        lines.append("]")
+    if when.not_ is not None:
+        lines.append(f"not = {render_when_inline(when.not_)}")
+    return lines
 
 
 def compile_when(when: When) -> Predicate:
@@ -246,4 +282,14 @@ def compile_when(when: When) -> Predicate:
             return any(pattern.search(f) for f in fields if f is not None)
 
         tests.append(any_field)
+    if when.any_of:
+        alternatives = [compile_when(item) for item in when.any_of]
+        tests.append(
+            lambda description, counterparty, amount: any(
+                alternative(description, counterparty, amount) for alternative in alternatives
+            )
+        )
+    if when.not_ is not None:
+        negated = compile_when(when.not_)
+        tests.append(lambda description, counterparty, amount: not negated(description, counterparty, amount))
     return lambda description, counterparty, amount: all(test(description, counterparty, amount) for test in tests)

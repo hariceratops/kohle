@@ -39,6 +39,12 @@ def _error(text: str) -> str:
         ('[[rule]]\naccount = "A"\n[rule.when]\ncounterparty = "  "\n', "rule 1, when.counterparty: must not be empty"),
         ('[[rule]]\naccount = "A"\n[rule.when]\niban = "DE.*"\n', "rule 1, when.iban: must be an IBAN"),
         ('[[rule]]\naccount = "A"\n[rule.when]\niban = 5\n', "rule 1, when.iban: must be a string"),
+        ('[[rule]]\naccount = "A"\n[rule.when]\nany = []\n', "rule 1, when.any: must be a non-empty array"),
+        ('[[rule]]\naccount = "A"\n[rule.when]\nnot = {}\n', "rule 1, when.not: must be a table with at least one"),
+        (
+            '[[rule]]\naccount = "A"\n[rule.when]\nany = [{ description = "x" }, {}]\n',
+            "rule 1, when.any[2]: must be a table with at least one",
+        ),
     ],
 )
 def test_every_rejection_names_the_rule_and_the_key(text: str, message: str) -> None:
@@ -69,6 +75,20 @@ def test_a_valid_file_parses_with_normalised_iban_and_no_note_for_an_empty_one()
     assert parsed == RuleFile(
         "abc", (FileRule(1, "Rent", None, When(counterparty="Vermieter", iban="DE893704")),)
     )
+
+
+def test_a_file_with_any_and_not_in_either_layout_parses_to_the_same_rule() -> None:
+    multiline = (
+        '[[rule]]\naccount = "Groceries"\n[rule.when]\nany = [\n  { description = "rewe" },\n'
+        '  { counterparty = "edeka", not = { description = "pfand" } },\n]\n'
+    )
+    sections = (
+        '[[rule]]\naccount = "Groceries"\n'
+        '[[rule.when.any]]\ndescription = "rewe"\n'
+        '[[rule.when.any]]\ncounterparty = "edeka"\n[rule.when.any.not]\ndescription = "pfand"\n'
+    )
+
+    assert parse_rule_file(multiline).unwrap() == parse_rule_file(sections).unwrap()
 
 
 def test_an_empty_file_is_an_empty_rule_set() -> None:

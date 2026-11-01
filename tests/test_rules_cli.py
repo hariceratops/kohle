@@ -456,6 +456,40 @@ def test_one_iban_splits_by_amount_between_two_accounts(
     assert again.exit_code == 0 and "No changes" in again.output
 
 
+def test_nested_any_and_not_rules_round_trip_through_show_rules_and_classify_lines(
+    session_factory: sessionmaker, tmp_path: Path
+) -> None:
+    runner = CliRunner()
+    _seed(runner, session_factory)
+    text = (
+        '[[rule]]\naccount = "Groceries"\n[rule.when]\nany = [\n  { description = "rewe" },\n'
+        '  { counterparty = "edeka", not = { description = "pfand" } },\n]\n'
+    )
+    assert _apply(runner, session_factory, tmp_path, text, "--yes").exit_code == 0
+
+    shown = runner.invoke(cli, ["show-rules"], obj=session_factory).output
+    again = _apply(runner, session_factory, tmp_path, shown, "--yes")
+
+    assert 'any = [\n  { description = "rewe" },\n  { counterparty = "edeka", not = { description = "pfand" } },\n]\n' in shown
+    assert again.exit_code == 0 and again.output == "No changes\n"
+
+
+def test_an_empty_any_is_refused_naming_the_rule_and_key_and_nothing_is_written(
+    session_factory: sessionmaker, tmp_path: Path
+) -> None:
+    runner = CliRunner()
+    _seed(runner, session_factory)
+    before = _live(session_factory)
+    operations = _count(session_factory, Operation)
+
+    result = _apply(runner, session_factory, tmp_path, '[[rule]]\naccount = "Rent"\n[rule.when]\nany = []\n', "--yes")
+
+    assert result.exit_code == 1
+    assert "rule 1, when.any:" in result.output
+    assert _live(session_factory) == before
+    assert _count(session_factory, Operation) == operations
+
+
 @pytest.mark.skip(reason="TODO: 084/087/088 apply-rules, edit-rules, classify-rules refused; show-rules allowed")
 def test_placeholder_readers() -> None:
     raise NotImplementedError
