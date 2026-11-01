@@ -48,6 +48,7 @@ def _read_argv(tmp_path: Path) -> dict[str, list[str]]:
         "list-sampling-rules": ["list-sampling-rules"],
         "list-states": ["list-states"],
         "list-caps": ["list-caps"],
+        "budget": ["budget"],
         "list-accounts": ["list-accounts"],
         "list-child-accounts": ["list-child-accounts", "Groceries"],
         "list-units": ["list-units"],

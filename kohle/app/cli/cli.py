@@ -26,7 +26,7 @@ from kohle.infrastructure.device_config import (
 )
 from kohle.plugin.plugin_manager import load_plugins, load_price_plugins
 from kohle.use_cases.accounts import AddAccount, ListAccount, ListChildAccounts
-from kohle.use_cases.budgeting import ListCaps, SetCap
+from kohle.use_cases.budgeting import ListCaps, QueryBudget, SetCap
 from kohle.use_cases.bundesland import ListStates, MoveState
 from kohle.use_cases.classification import ListUnclassified, Reclassify
 from kohle.use_cases.journal import (
@@ -1203,6 +1203,47 @@ def net_worth_history_cmd(make_session, start, end, role: str | None, max_age_da
             "role": ", ".join(role.value for role in r.roles) or None,
         }
         for r in res.unwrap()
+    ]
+    click.echo(tabulate(rows, headers="keys", floatfmt=".2f", missingval="-"))
+
+
+@cli.command(name="budget", writes=False)
+@click.option(
+    "--from", "start", type=click.DateTime(formats=["%Y-%m-%d"]), default=None,
+    help="Show periods overlapping from this date; defaults to 1 January of --to's year",
+)
+@click.option(
+    "--to", "end", type=click.DateTime(formats=["%Y-%m-%d"]), default=None,
+    help="Show periods overlapping up to this date, not after today; defaults to today",
+)
+@click.pass_obj
+def budget_cmd(make_session, start, end):
+    today = date.today()  # noqa: DTZ011 - the user's local date, by design
+    end_date = end.date() if end is not None else today
+    start_date = start.date() if start is not None else date(end_date.year, 1, 1)
+    if end_date > today:
+        raise click.BadParameter(f"{end_date.isoformat()} is after today", param_hint="--to")
+    if start_date > end_date:
+        raise click.BadParameter(
+            f"{start_date.isoformat()} is after the last date {end_date.isoformat()}", param_hint="--from"
+        )
+    res = QueryBudget(make_session()).execute(start_date, end_date, today)
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    rows = [
+        {
+            "account": r.account,
+            "from": r.period.start,
+            "to": r.period.end,
+            "cap": r.period.cap,
+            "spent": r.spent,
+            "over/under": r.over,
+            "note": ", ".join(
+                ([*(["over"] if r.is_over else []), *(["short"] if r.period.short else [])])
+                + ([f"partial day {r.day} of {r.period.days}"] if r.day is not None else [])
+            ) or None,
+        }
+        for r in res.unwrap().rows
     ]
     click.echo(tabulate(rows, headers="keys", floatfmt=".2f", missingval="-"))
 

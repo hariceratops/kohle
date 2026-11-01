@@ -3,12 +3,14 @@
 Design §16.4: set-cap, end-cap, list-caps, budget.
 """
 
+from datetime import date
+
 import pytest
 from click.testing import CliRunner
 from sqlalchemy import func, select
 
 from kohle.app.cli.cli import cli
-from kohle.domain.models import Operation
+from kohle.domain.models import Operation, OperationGroup
 
 
 def _run(session_factory, *args: str):
@@ -145,10 +147,86 @@ def test_caps_are_never_written_to_config_toml(session_factory, tmp_path) -> Non
     assert not (tmp_path / "xdg-config" / "kohle" / "config.toml").exists()
 
 
-@pytest.mark.skip(reason="TODO: slice 076 — budget report, pure read")
-def test_placeholder_budget_report() -> None:
-    # TODO: no operations / operation_groups rows added, no price plugin called
-    ...
+def _pin_today(monkeypatch: pytest.MonkeyPatch, pinned: date) -> None:
+    class PinnedDate(date):
+        @classmethod
+        def today(cls) -> "PinnedDate":
+            return cls(pinned.year, pinned.month, pinned.day)
+
+    monkeypatch.setattr("kohle.app.cli.cli.date", PinnedDate)
+
+
+def _spend(session_factory, day: str, amount: str, account: str = "Groceries", refund: bool = False) -> None:
+    sides = ("--from", account, "--to", "Cash") if refund else ("--from", "Cash", "--to", account)
+    result = _run(session_factory, "record", day, "x", amount, *sides)
+    assert result.exit_code == 0, result.output
+
+
+def _count(session_factory, model) -> int:
+    with session_factory() as session:
+        return session.scalar(select(func.count()).select_from(model))
+
+
+def test_budget_compares_spending_with_the_cap_per_period(session_factory, monkeypatch) -> None:
+    _ledger(session_factory)
+    _run(session_factory, "move-state", "--from", "start", "BY")
+    _run(session_factory, "add-account", "Bakery", "--parent", "Food")
+    _run(session_factory, "add-account", "Dairy", "--parent", "Food")
+    _run(session_factory, "set-cap", "Food", "300", "day 1", "--from", "2026-01-01")
+    _spend(session_factory, "2026-01-05", "100", "Bakery")
+    _spend(session_factory, "2026-01-09", "30", "Bakery", refund=True)
+    _spend(session_factory, "2026-02-10", "250", "Bakery")
+    _spend(session_factory, "2026-02-11", "100", "Dairy")
+    _spend(session_factory, "2026-02-11", "999", "Groceries")
+    _pin_today(monkeypatch, date(2026, 2, 12))
+
+    result = _run(session_factory, "budget")
+
+    assert result.exit_code == 0, result.output
+    rows = [line.split(None, 6) for line in result.output.splitlines()[2:]]
+    assert rows == [
+        ["Food", "2026-01-01", "2026-01-31", "300.00", "70.00", "-230.00", "-"],
+        ["Food", "2026-02-01", "2026-02-28", "300.00", "350.00", "50.00", "over, partial day 12 of 28"],
+    ]
+
+
+def test_budget_range_defaults_and_future_periods(session_factory, monkeypatch) -> None:
+    _ledger(session_factory)
+    _run(session_factory, "move-state", "--from", "start", "BY")
+    _run(session_factory, "set-cap", "Food", "300", "day 1", "--from", "2025-11-01")
+    _pin_today(monkeypatch, date(2026, 2, 12))
+
+    default = _run(session_factory, "budget").output.splitlines()[2:]
+    explicit = _run(session_factory, "budget", "--from", "2025-12-15", "--to", "2026-01-05").output.splitlines()[2:]
+
+    assert [line.split()[1] for line in default] == ["2026-01-01", "2026-02-01"]
+    assert [line.split()[1] for line in explicit] == ["2025-12-01", "2026-01-01"]
+
+
+def test_budget_rejects_a_future_to_and_a_reversed_range(session_factory, monkeypatch) -> None:
+    _pin_today(monkeypatch, date(2026, 2, 12))
+
+    assert _run(session_factory, "budget", "--to", "2026-02-13").exit_code == 2
+    assert _run(session_factory, "budget", "--from", "2026-02-02", "--to", "2026-02-01").exit_code == 2
+
+
+def test_budget_is_a_pure_read_and_calls_no_price_plugin(session_factory, monkeypatch) -> None:
+    _ledger(session_factory)
+    _run(session_factory, "move-state", "--from", "start", "BY")
+    _run(session_factory, "set-cap", "Food", "300", "day 1", "--from", "2026-01-01")
+    _spend(session_factory, "2026-01-05", "100", "Groceries")
+    _pin_today(monkeypatch, date(2026, 2, 12))
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("no price plugin may load")
+
+    monkeypatch.setattr("kohle.app.cli.cli.load_price_plugins", boom)
+    before = (_count(session_factory, Operation), _count(session_factory, OperationGroup))
+
+    result = _run(session_factory, "budget")
+
+    assert result.exit_code == 0, result.output
+    assert (_count(session_factory, Operation), _count(session_factory, OperationGroup)) == before
 
 
 @pytest.mark.skip(reason="TODO: slice 077 — Bundesland refusal for working-day rules")

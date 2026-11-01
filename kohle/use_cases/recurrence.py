@@ -256,3 +256,8 @@ def occurrences(
     force on that unshifted date. The shift loop has no guard: a real calendar
     has a working day within days."""
     return list(takewhile(lambda day: day <= end, _ascending(rule, start, state_on)))
+
+
+def next_occurrence(rule: Recurrence, after: date, state_on: Callable[[date], str]) -> date:
+    """The first date the rule lands on strictly after `after`."""
+    return next(_ascending(rule, after + timedelta(days=1), state_on))

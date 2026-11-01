@@ -758,3 +758,4 @@ class InvalidCapAmount(CapError):
 
 
 CapWriteError = CapError | AccountError | InvalidRecurrence
+BudgetError = CapError | AccountError | JournalError | InvalidRecurrence | StateError
