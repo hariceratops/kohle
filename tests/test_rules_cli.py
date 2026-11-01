@@ -2,6 +2,8 @@
 
 import re
 import tomllib
+from datetime import date
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -11,7 +13,14 @@ from sqlalchemy.orm import sessionmaker
 from kohle.app.cli.cli import cli
 from kohle.core.result import Result
 from kohle.domain.domain_errors import RuleError, RulesChanged
-from kohle.domain.models import Operation, OperationGroup, Rule
+from kohle.domain.models import (
+    Classification,
+    JournalEntry,
+    Operation,
+    OperationGroup,
+    Rule,
+)
+from kohle.plugin.importer_plugin import CashRow, StatementImporterPlugin
 from kohle.services.journal_services import Counterparty
 from kohle.use_cases import rules
 from kohle.use_cases.conditions import When, compile_when
@@ -164,8 +173,8 @@ def test_apply_rules_accepts_the_new_conditions_and_matches_them_case_insensitiv
         }
     ]
     predicate = compile_when(When(**shown["rule"][0]["when"]))
-    assert predicate("Miete Mai", Counterparty("Herr Vermieter", "DE89 3704 0044 0532 0130 00"))
-    assert not predicate("Miete Mai", Counterparty("Herr Vermieter", "DE00 0000"))
+    assert predicate("Miete Mai", Counterparty("Herr Vermieter", "DE89 3704 0044 0532 0130 00"), Decimal(-1))
+    assert not predicate("Miete Mai", Counterparty("Herr Vermieter", "DE00 0000"), Decimal(-1))
 
 
 def test_apply_keeps_ids_on_a_move_and_a_note_edit_and_retires_a_changed_rule(
@@ -385,9 +394,66 @@ def test_a_rule_aimed_at_a_parent_account_is_rejected_with_its_position(
     assert "rule 1, account: 'Rent' has sub-accounts" in result.output
 
 
-@pytest.mark.skip(reason="TODO: 085 500 and 2000 to one IBAN land in two accounts")
-def test_placeholder_partner_scenario() -> None:
-    raise NotImplementedError
+def test_one_iban_splits_by_amount_between_two_accounts(
+    session_factory: sessionmaker, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    iban = "DE89370400440532013000"
+    runner = CliRunner()
+    for name, kind in (("Cash", "asset"), ("Household", "expense"), ("Savings", "expense")):
+        runner.invoke(cli, ["add-account", name, "--type", kind], obj=session_factory)
+    runner.invoke(cli, ["add-unit", "EUR", "Euro", "--kind", "currency"], obj=session_factory)
+    text = (
+        f'[[rule]]\naccount = "Household"\n[rule.when]\niban = "{iban}"\n'
+        'amount = { min = 400, max = 600 }\ndirection = "out"\n\n'
+        f'[[rule]]\naccount = "Savings"\n[rule.when]\niban = "{iban}"\n'
+        "amount = { min = 1500 }\ndirection = \"out\"\n"
+    )
+    assert _apply(runner, session_factory, tmp_path, text, "--yes").exit_code == 0
+    rows = [
+        CashRow(
+            entry_date=date(2026, 3, 1),
+            reference="p-1",
+            description="Transfer",
+            amount=Decimal(-500),
+            counterparty_name="Partner",
+            counterparty_iban=iban,
+        ),
+        CashRow(
+            entry_date=date(2026, 3, 2),
+            reference="p-2",
+            description="Transfer",
+            amount=Decimal(-2000),
+            counterparty_name="Partner",
+            counterparty_iban=iban,
+        ),
+    ]
+
+    class _Plugin(StatementImporterPlugin):
+        name = "fake"
+
+        def import_statement(self, statement_path: str):
+            return Result.ok(rows)
+
+    monkeypatch.setattr("kohle.app.cli.cli.load_plugins", lambda: {"fake": _Plugin()})
+    statement = tmp_path / "statement.csv"
+    statement.write_text("")
+
+    result = runner.invoke(cli, ["import-statement", "fake", "Cash", str(statement)], obj=session_factory)
+
+    assert result.exit_code == 0, result.output
+    with session_factory() as session:
+        landed = {
+            entry.reference.split(":")[-1]: classification.final_account.name
+            for classification, entry in session.query(Classification, JournalEntry)
+            .join(JournalEntry, Classification.journal_entry_id == JournalEntry.id)
+            .all()
+        }
+    assert landed == {"p-1": "Household", "p-2": "Savings"}
+    shown = runner.invoke(cli, ["show-rules"], obj=session_factory).output
+    assert "amount = { min = 400, max = 600 }" in shown
+    assert 'direction = "out"' in shown
+    again = _apply(runner, session_factory, tmp_path, shown, "--yes")
+    assert again.exit_code == 0 and "No changes" in again.output
 
 
 @pytest.mark.skip(reason="TODO: 084/087/088 apply-rules, edit-rules, classify-rules refused; show-rules allowed")

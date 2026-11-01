@@ -10,6 +10,8 @@ in-memory objects.
 test_classify_import.py beside the statement-cell shapes it normalises.
 """
 
+from decimal import Decimal
+
 from kohle.services.journal_services import Counterparty
 from kohle.use_cases.conditions import When
 from kohle.use_cases.rules import StoredRule, compile_rules, match_rule
@@ -29,7 +31,7 @@ def _rules(*specs: tuple[int, str, int]) -> list[StoredRule]:
 def test_first_match_wins_and_evaluation_stops_there() -> None:
     compiled = compile_rules(_rules((1, "REWE", 10), (2, "SAGT", 20)))
 
-    matched = match_rule(compiled, "REWE SAGT DANKE", NO_COUNTERPARTY)
+    matched = match_rule(compiled, "REWE SAGT DANKE", NO_COUNTERPARTY, Decimal(-1))
 
     # Both patterns hit this description; the earlier rule is the answer, which
     # is what makes matched_rule_id a single well-defined value.
@@ -51,7 +53,7 @@ def test_equal_priority_rules_resolve_by_the_order_they_arrive_in() -> None:
     # and the service breaks priority ties on id, which is a total order.
     by_id = compile_rules(_rules((3, "AMZN", 10), (9, "AMZN", 20)))
 
-    matched = match_rule(by_id, "AMZN MKTPLACE", NO_COUNTERPARTY)
+    matched = match_rule(by_id, "AMZN MKTPLACE", NO_COUNTERPARTY, Decimal(-1))
 
     assert matched is not None
     assert matched.rule_id == 3
@@ -60,9 +62,9 @@ def test_equal_priority_rules_resolve_by_the_order_they_arrive_in() -> None:
 def test_a_pattern_matches_any_one_field_on_its_own() -> None:
     compiled = compile_rules(_rules((1, "ALDI SUED", 10)))
 
-    assert match_rule(compiled, "Card payment 4711", Counterparty("ALDI SUED", None)) is not None
-    assert match_rule(compiled, "ALDI SUED Filiale 22", NO_COUNTERPARTY) is not None
-    assert match_rule(compiled, "Card payment 4711", Counterparty("REWE", None)) is None
+    assert match_rule(compiled, "Card payment 4711", Counterparty("ALDI SUED", None), Decimal(-1)) is not None
+    assert match_rule(compiled, "ALDI SUED Filiale 22", NO_COUNTERPARTY, Decimal(-1)) is not None
+    assert match_rule(compiled, "Card payment 4711", Counterparty("REWE", None), Decimal(-1)) is None
 
 
 def test_an_anchored_iban_matches_the_iban_field_and_not_a_description() -> None:
@@ -71,22 +73,22 @@ def test_an_anchored_iban_matches_the_iban_field_and_not_a_description() -> None
     # blob", which is the highest-value rule shape for a bank ledger.
     compiled = compile_rules(_rules((1, f"^{IBAN}$", 10)))
 
-    assert match_rule(compiled, "Rent", Counterparty("Landlord", IBAN)) is not None
-    assert match_rule(compiled, f"Standing order to {IBAN}", NO_COUNTERPARTY) is None
+    assert match_rule(compiled, "Rent", Counterparty("Landlord", IBAN), Decimal(-1)) is not None
+    assert match_rule(compiled, f"Standing order to {IBAN}", NO_COUNTERPARTY, Decimal(-1)) is None
 
 
 def test_matching_is_case_insensitive_by_default() -> None:
     compiled = compile_rules(_rules((1, "rewe", 10)))
 
-    assert match_rule(compiled, "REWE SAGT DANKE", NO_COUNTERPARTY) is not None
-    assert match_rule(compiled, "Rewe Markt GmbH", NO_COUNTERPARTY) is not None
+    assert match_rule(compiled, "REWE SAGT DANKE", NO_COUNTERPARTY, Decimal(-1)) is not None
+    assert match_rule(compiled, "Rewe Markt GmbH", NO_COUNTERPARTY, Decimal(-1)) is not None
 
 
 def test_an_inline_flag_restores_case_sensitivity() -> None:
     compiled = compile_rules(_rules((1, "(?-i:REWE)", 10)))
 
-    assert match_rule(compiled, "REWE SAGT DANKE", NO_COUNTERPARTY) is not None
-    assert match_rule(compiled, "Rewe Markt GmbH", NO_COUNTERPARTY) is None
+    assert match_rule(compiled, "REWE SAGT DANKE", NO_COUNTERPARTY, Decimal(-1)) is not None
+    assert match_rule(compiled, "Rewe Markt GmbH", NO_COUNTERPARTY, Decimal(-1)) is None
 
 
 def test_an_absent_counterparty_field_is_skipped_rather_than_matched() -> None:
@@ -94,9 +96,9 @@ def test_an_absent_counterparty_field_is_skipped_rather_than_matched() -> None:
     # and must not crash the import or count as a match.
     compiled = compile_rules(_rules((1, "ALDI", 10)))
 
-    assert match_rule(compiled, "Cash withdrawal", NO_COUNTERPARTY) is None
-    assert match_rule(compiled, "ALDI", NO_COUNTERPARTY) is not None
+    assert match_rule(compiled, "Cash withdrawal", NO_COUNTERPARTY, Decimal(-1)) is None
+    assert match_rule(compiled, "ALDI", NO_COUNTERPARTY, Decimal(-1)) is not None
 
 
 def test_an_empty_rule_set_matches_nothing() -> None:
-    assert match_rule(compile_rules([]), "REWE SAGT DANKE", Counterparty("REWE", IBAN)) is None
+    assert match_rule(compile_rules([]), "REWE SAGT DANKE", Counterparty("REWE", IBAN), Decimal(-1)) is None

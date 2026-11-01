@@ -429,7 +429,7 @@ class ImportStatement(UnitOfWork[int, ImportStatementError]):
                             _optional_str(row.counterparty_name),
                             _optional_str(row.counterparty_iban),
                         )
-                        matched = match_rule(compiled, row.description, counterparty)
+                        matched = match_rule(compiled, row.description, counterparty, amount)
                         # A matched rule whose account has since gained a child fails
                         # the import loudly through validate_lines, rather than falling
                         # back to the bucket: a silent fallback would leave the user's

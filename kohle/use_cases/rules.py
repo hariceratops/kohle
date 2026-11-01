@@ -435,7 +435,7 @@ def compile_rules(rules: Iterable[StoredRule]) -> list[CompiledRule]:
 
 
 def match_rule(
-    compiled: Sequence[CompiledRule], description: str, counterparty: Counterparty
+    compiled: Sequence[CompiledRule], description: str, counterparty: Counterparty, amount: Decimal
 ) -> CompiledRule | None:
     """The first rule whose conditions hold.
 
@@ -443,7 +443,7 @@ def match_rule(
     transaction inside the import loop (design §5.2).
     """
     for rule in compiled:
-        if rule.holds(description, counterparty):
+        if rule.holds(description, counterparty, amount):
             return rule
     return None
 
