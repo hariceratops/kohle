@@ -90,6 +90,14 @@ def render_when_inline(when: When) -> str:
     return "{ " + ", ".join(parts) + " }"
 
 
+def render_when_lines(when: When) -> list[str]:
+    """The body under `[rule.when]`: one `key = value` line per key."""
+    lines = []
+    if when.any_field is not None:
+        lines.append(f"any_field = {toml_string(when.any_field)}")
+    return lines
+
+
 def compile_when(when: When) -> Predicate:
     tests: list[Predicate] = []
     if when.any_field is not None:

@@ -58,6 +58,7 @@ def _read_argv(tmp_path: Path) -> dict[str, list[str]]:
         "balance": ["balance", "Cash"],
         "list-operations": ["list-operations"],
         "list-rules": ["list-rules"],
+        "show-rules": ["show-rules"],
         "list-unclassified": ["list-unclassified"],
         "who-owes-what": ["who-owes-what"],
         "net-worth": ["net-worth"],

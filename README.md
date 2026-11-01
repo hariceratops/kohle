@@ -328,6 +328,11 @@ wins. `add-rule` appends the new rule at the end of that order. `list-rules`
 shows each rule's id, account and conditions, the conditions in the compact
 form `{ any_field = "REWE|ALDI|LIDL" }`.
 
+`show-rules` prints the whole rule set as TOML, in evaluation order: one
+`[[rule]]` per rule with its `account`, an optional `note` and a `[rule.when]`
+table. Rule ids never appear. The `base` line at the top fingerprints the rule
+set it was rendered from.
+
 The target must be a leaf account, since only leaves can be posted to.
 `remove-rule` retires a rule rather than erasing it: past classifications keep
 naming the conditions that made them.

@@ -69,7 +69,7 @@ from kohle.use_cases.reporting import (
     unrealised_gain,
 )
 from kohle.use_cases.conditions import render_when_inline
-from kohle.use_cases.rules import AddRule, ListRules, RemoveRule
+from kohle.use_cases.rules import AddRule, ListRules, RemoveRule, ShowRules
 from kohle.use_cases.sampling import ListSamplingRules, Role, SetSamplingRules
 from kohle.use_cases.settings import ListSettings, SetSettings
 from kohle.use_cases.splitting import (
@@ -765,6 +765,15 @@ def list_rules_cmd(make_session):
         for rule in rules
     ]
     click.echo(tabulate(rows, headers="keys"))
+
+
+@cli.command(writes=False)
+@click.pass_obj
+def show_rules_cmd(make_session):
+    res = ShowRules(make_session()).execute()
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    click.echo(res.unwrap(), nl=False)
 
 
 @cli.command(writes=True)

@@ -1,6 +1,7 @@
 """Layer 1 — the condition language: parse, render, evaluate (design §17.1)."""
 
 import tomllib
+from decimal import Decimal
 
 import pytest
 
@@ -11,6 +12,7 @@ from kohle.use_cases.conditions import (
     parse_stored_when,
     parse_when,
     render_when_inline,
+    render_when_lines,
     toml_string,
 )
 
@@ -86,9 +88,15 @@ def test_placeholder_quoting() -> None:
     raise NotImplementedError
 
 
-@pytest.mark.skip(reason="TODO: 083 parse_when(render(when)) == when, inline and line forms")
-def test_placeholder_round_trip() -> None:
-    raise NotImplementedError
+@pytest.mark.parametrize("pattern", ["REWE", r"\d{4} MIETE", """it's "x" \\d""", "tab\there", "m\u00fcller"])
+def test_a_condition_round_trips_in_both_forms(pattern: str) -> None:
+    when = When(any_field=pattern)
+
+    inline = tomllib.loads("when = " + render_when_inline(when), parse_float=Decimal)["when"]
+    lines = tomllib.loads("\n".join(render_when_lines(when)), parse_float=Decimal)
+
+    assert parse_when(inline).unwrap() == when
+    assert parse_when(lines).unwrap() == when
 
 
 @pytest.mark.skip(reason="TODO: 084-086 each rejection names its key path")

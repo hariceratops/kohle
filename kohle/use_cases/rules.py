@@ -1,3 +1,4 @@
+import hashlib
 import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
@@ -30,6 +31,8 @@ from kohle.use_cases.conditions import (
     compile_when,
     parse_stored_when,
     render_when_inline,
+    render_when_lines,
+    toml_string,
 )
 
 RULE_PRIORITY_STEP = 100
@@ -67,6 +70,40 @@ def stored_rules(ctx: DbTransactionContext) -> Result[list[StoredRule], RuleErro
         return Result.ok(out)
 
     return list_rules_service(ctx).and_then(convert)
+
+
+_RULE_FILE_HEADER = """\
+# kohle classification rules, in priority order: the first rule that matches
+# a line wins. Keys under [rule.when] must all hold; any = [...] needs one of
+# its tables to hold; not = {...} must not hold.
+# Leave `base` as it is: apply-rules uses it to refuse if the stored rules
+# changed after this file was rendered.
+"""
+
+
+def _render_rule_body(rules: Sequence[StoredRule]) -> str:
+    entries = []
+    for rule in rules:
+        lines = ["[[rule]]", f"account = {toml_string(rule.account_name)}"]
+        if rule.note:
+            lines.append(f"note = {toml_string(rule.note)}")
+        lines.append("[rule.when]")
+        lines.extend(render_when_lines(rule.when))
+        entries.append("\n".join(lines) + "\n")
+    return "\n".join(entries)
+
+
+def rule_set_base(rules: Sequence[StoredRule]) -> str:
+    """Fingerprint of the body alone, so ids and priority values, which the
+    file never shows, cannot change it."""
+    return hashlib.sha256(_render_rule_body(rules).encode()).hexdigest()[:16]
+
+
+def render_rule_file(rules: Sequence[StoredRule]) -> str:
+    text = f'{_RULE_FILE_HEADER}base = "{rule_set_base(rules)}"\n'
+    if rules:
+        text += "\n" + _render_rule_body(rules)
+    return text
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,6 +189,14 @@ class AddRule(UnitOfWork[Rule, AddRuleError]):
 class ListRules(UnitOfWork[list[StoredRule], RuleError]):
     def execute(self) -> Result[list[StoredRule], RuleError]:
         return self._run(stored_rules)
+
+
+class ShowRules(UnitOfWork[str, RuleError]):
+    def execute(self) -> Result[str, RuleError]:
+        def use_case(ctx: DbTransactionContext) -> Result[str, RuleError]:
+            return stored_rules(ctx).map(render_rule_file)
+
+        return self._run(use_case)
 
 
 class RemoveRule(UnitOfWork[Rule, RuleError]):
