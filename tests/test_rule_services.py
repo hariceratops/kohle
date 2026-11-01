@@ -30,9 +30,9 @@ def test_list_rules_orders_by_priority_then_id(session: Session) -> None:
     ctx = DbTransactionContext(session)
     groceries = _account(ctx, "Groceries")
 
-    late = add_rule_service(ctx, "LIDL", groceries.id, 200).unwrap()
-    first_of_the_tie = add_rule_service(ctx, "REWE", groceries.id, 100).unwrap()
-    second_of_the_tie = add_rule_service(ctx, "ALDI", groceries.id, 100).unwrap()
+    late = add_rule_service(ctx, '{ any_field = "LIDL" }', groceries.id, 200).unwrap()
+    first_of_the_tie = add_rule_service(ctx, '{ any_field = "REWE" }', groceries.id, 100).unwrap()
+    second_of_the_tie = add_rule_service(ctx, '{ any_field = "ALDI" }', groceries.id, 100).unwrap()
 
     result = list_rules_service(ctx)
     assert result.is_ok
@@ -45,11 +45,21 @@ def test_list_rules_orders_by_priority_then_id(session: Session) -> None:
     ]
 
 
+def test_a_rule_carries_its_optional_note(session: Session) -> None:
+    ctx = DbTransactionContext(session)
+    groceries = _account(ctx, "Groceries")
+
+    plain = add_rule_service(ctx, '{ any_field = "REWE" }', groceries.id, 100).unwrap()
+    noted = add_rule_service(ctx, '{ any_field = "ALDI" }', groceries.id, 200, "weekly shop").unwrap()
+
+    assert (plain.note, noted.note) == (None, "weekly shop")
+
+
 def test_retired_rule_is_absent_from_the_listing(session: Session) -> None:
     ctx = DbTransactionContext(session)
     groceries = _account(ctx, "Groceries")
-    retired = add_rule_service(ctx, "REWE", groceries.id, 100).unwrap()
-    kept = add_rule_service(ctx, "ALDI", groceries.id, 100).unwrap()
+    retired = add_rule_service(ctx, '{ any_field = "REWE" }', groceries.id, 100).unwrap()
+    kept = add_rule_service(ctx, '{ any_field = "ALDI" }', groceries.id, 100).unwrap()
 
     assert remove_rule_service(ctx, retired.id).is_ok
 
@@ -59,23 +69,23 @@ def test_retired_rule_is_absent_from_the_listing(session: Session) -> None:
 def test_remove_retires_the_row_rather_than_deleting_it(session: Session) -> None:
     ctx = DbTransactionContext(session)
     groceries = _account(ctx, "Groceries")
-    rule = add_rule_service(ctx, "REWE", groceries.id, 100).unwrap()
+    rule = add_rule_service(ctx, '{ any_field = "REWE" }', groceries.id, 100).unwrap()
 
     result = remove_rule_service(ctx, rule.id)
     assert result.is_ok
     assert result.unwrap().deleted_at is not None
 
-    # The pattern text is what keeps a past classification interpretable, so
+    # The condition text is what keeps a past classification interpretable, so
     # the row has to survive the removal.
     stored = session.query(Rule).filter(Rule.id == rule.id).one()
-    assert stored.pattern == "REWE"
+    assert stored.condition == '{ any_field = "REWE" }'
     assert stored.deleted_at is not None
 
 
 def test_removing_an_already_retired_rule_reports_it_missing(session: Session) -> None:
     ctx = DbTransactionContext(session)
     groceries = _account(ctx, "Groceries")
-    rule = add_rule_service(ctx, "REWE", groceries.id, 100).unwrap()
+    rule = add_rule_service(ctx, '{ any_field = "REWE" }', groceries.id, 100).unwrap()
     assert remove_rule_service(ctx, rule.id).is_ok
 
     result = remove_rule_service(ctx, rule.id)

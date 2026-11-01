@@ -16,7 +16,7 @@ from kohle.domain.domain_errors import (
     StateNotASetting,
     UnknownDeviceKey,
 )
-from kohle.domain.models import DEFAULT_RULE_PRIORITY, START, AccountType, UnitKind
+from kohle.domain.models import START, AccountType, UnitKind
 from kohle.infrastructure.device_config import (
     DEVICE_KEYS,
     DeviceConfig,
@@ -68,6 +68,7 @@ from kohle.use_cases.reporting import (
     summarise,
     unrealised_gain,
 )
+from kohle.use_cases.conditions import render_when_inline
 from kohle.use_cases.rules import AddRule, ListRules, RemoveRule
 from kohle.use_cases.sampling import ListSamplingRules, Role, SetSamplingRules
 from kohle.use_cases.settings import ListSettings, SetSettings
@@ -732,19 +733,14 @@ def list_operations_cmd(make_session):
 @cli.command(writes=True)
 @click.argument("pattern")
 @click.argument("account")
-@click.option(
-    "--priority",
-    type=int,
-    default=DEFAULT_RULE_PRIORITY,
-    help="Lower numbers are evaluated first; ties break on rule id",
-)
 @click.pass_obj
-def add_rule_cmd(make_session, pattern: str, account: str, priority: int):
+def add_rule_cmd(make_session, pattern: str, account: str):
     add_rule = AddRule(make_session())
-    res = add_rule.execute(pattern, account, priority)
+    res = add_rule.execute(pattern, account)
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
-    click.echo(f"Added rule {res.unwrap().id}: {pattern} -> {account} (priority {priority})")
+    rule = res.unwrap()
+    click.echo(f"Added rule {rule.id}: {rule.condition} -> {account}")
 
 
 @cli.command(writes=False)
@@ -762,10 +758,9 @@ def list_rules_cmd(make_session):
     # rules fire in is only useful if it is the order they are printed in.
     rows = [
         {
-            "id": rule.id,
-            "priority": rule.priority,
-            "pattern": rule.pattern,
-            "account": rule.account.name,
+            "id": rule.rule_id,
+            "account": rule.account_name,
+            "conditions": render_when_inline(rule.when),
         }
         for rule in rules
     ]

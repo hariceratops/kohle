@@ -11,10 +11,10 @@ from kohle.infrastructure.transaction_context import DbTransactionContext
 
 @crud_create
 def add_rule_service(
-    ctx: DbTransactionContext, pattern: str, account_id: int, priority: int
+    ctx: DbTransactionContext, condition: str, account_id: int, priority: int, note: str | None = None
 ) -> Result[Rule, RuleError]:
     def op(session: Session) -> Rule:
-        rule = Rule(pattern=pattern, account_id=account_id, priority=priority)
+        rule = Rule(condition=condition, account_id=account_id, priority=priority, note=note)
         session.add(rule)
         return rule
 
@@ -49,7 +49,7 @@ def remove_rule_service(ctx: DbTransactionContext, rule_id: int) -> Result[Rule,
     refuses it for any rule a classification already names — that is, for every
     rule anyone would want to remove. ON DELETE SET NULL would be worse still,
     rewriting "rule 7 sent this here" into "no rule matched" undetectably. The
-    surviving pattern text is what keeps a past correction interpretable.
+    surviving condition text is what keeps a past correction interpretable.
     """
 
     def op(session: Session) -> Rule | None:

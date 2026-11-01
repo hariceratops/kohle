@@ -185,6 +185,26 @@ class RuleNotFoundError(RuleError):
         return f"Rule id {self.rule_id} not found"
 
 
+class MalformedRuleFile(RuleError):
+    """One problem in a rule's conditions, named by rule position and key, as
+    MalformedStatementRow names a row and a field."""
+
+    def __init__(self, position: int | None, key: str | None, problem: str) -> None:
+        super().__init__()
+        self.position = position
+        self.key = key
+        self.problem = problem
+
+    def at(self, position: int) -> "MalformedRuleFile":
+        return MalformedRuleFile(position, self.key, self.problem)
+
+    def __str__(self) -> str:
+        where = ", ".join(
+            part for part in (f"rule {self.position}" if self.position is not None else None, self.key) if part
+        )
+        return f"{where}: {self.problem}" if where else self.problem
+
+
 class ClassificationError(Exception):
     pass
 

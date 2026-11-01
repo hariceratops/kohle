@@ -10,7 +10,7 @@ from kohle.domain.domain_errors import (
     PostingToNonLeafAccount,
     RuleError,
 )
-from kohle.domain.models import DEFAULT_RULE_PRIORITY, Rule
+from kohle.domain.models import Rule
 from kohle.infrastructure.transaction_context import DbTransactionContext
 from kohle.infrastructure.uow import UnitOfWork
 from kohle.services.account_services import (
@@ -23,60 +23,92 @@ from kohle.services.rule_services import (
     list_rules_service,
     remove_rule_service,
 )
+from kohle.use_cases.conditions import (
+    PATTERN_FLAGS,
+    Predicate,
+    When,
+    compile_when,
+    parse_stored_when,
+    render_when_inline,
+)
 
-# Matching is case-insensitive because bank exports are inconsistently cased —
-# REWE SAGT DANKE and Rewe Markt GmbH are the same payee and a user writing
-# 'rewe' means both. (?-i:...) restores case sensitivity within a pattern.
-PATTERN_FLAGS = re.IGNORECASE
+RULE_PRIORITY_STEP = 100
+
+
+@dataclass(frozen=True, slots=True)
+class StoredRule:
+    """A live rule with its condition parsed. ORM rows do not cross the
+    session, so everything a caller needs is copied out."""
+
+    rule_id: int
+    priority: int
+    account_id: int
+    account_name: str
+    when: When
+    note: str | None
+
+
+def stored_rules(ctx: DbTransactionContext) -> Result[list[StoredRule], RuleError]:
+    """Live rules in evaluation order, `list_rules_service`'s `(priority, id)`.
+
+    A stored condition that fails to parse can only come from a hand edit; it
+    fails loudly rather than being skipped, since skipping would quietly
+    disable a rule."""
+
+    def convert(rules: list[Rule]) -> Result[list[StoredRule], RuleError]:
+        out = []
+        for rule in rules:
+            when = parse_stored_when(rule.condition)
+            if when.is_err:
+                return Result.err(RuleError(f"stored rule {rule.id}: {when.unwrap_err()}"))
+            out.append(
+                StoredRule(rule.id, rule.priority, rule.account_id, rule.account.name, when.unwrap(), rule.note)
+            )
+        return Result.ok(out)
+
+    return list_rules_service(ctx).and_then(convert)
 
 
 @dataclass(frozen=True, slots=True)
 class CompiledRule:
-    """A rule with its pattern already compiled, carrying the two ids the
-    classification record needs. An ORM Rule cannot hold a re.Pattern, and the
-    compilation has to happen once per import rather than once per row."""
+    """A rule with its conditions already compiled, carrying the two ids the
+    classification record needs. The compilation has to happen once per import
+    rather than once per row."""
 
     rule_id: int
     account_id: int
-    pattern: re.Pattern[str]
+    holds: Predicate
 
 
-def compile_rules(rules: Iterable[Rule]) -> list[CompiledRule]:
+def compile_rules(rules: Iterable[StoredRule]) -> list[CompiledRule]:
     """Compile a rule set in the order the caller supplies it.
 
     Order-dependent and must not sort: `list_rules_service`'s
     `(priority, id)` ordering is the evaluation contract, and `match_rule`
     takes the first hit (design §2.3).
 
-    Returns a plain list rather than a Result: every pattern here compiled
-    when its rule was created, so a failure means the database was edited by
-    hand, and `re.error` propagating into the transaction boundary rolls the
-    import back with the message intact.
+    Returns a plain list rather than a Result: `stored_rules` has already
+    validated every pattern, so compilation cannot fail.
     """
-    return [CompiledRule(rule.id, rule.account_id, re.compile(rule.pattern, PATTERN_FLAGS)) for rule in rules]
+    return [CompiledRule(rule.rule_id, rule.account_id, compile_when(rule.when)) for rule in rules]
 
 
 def match_rule(
     compiled: Sequence[CompiledRule], description: str, counterparty: Counterparty
 ) -> CompiledRule | None:
-    """The first rule whose pattern hits the description or either counterparty
-    field, matched per field so that an anchored pattern means "this exact
-    IBAN" rather than "start and end of a blob".
+    """The first rule whose conditions hold.
 
     Pure and session-free: making this a unit of work would open a second
     transaction inside the import loop (design §5.2).
     """
-    fields = (description, counterparty.name, counterparty.iban)
     for rule in compiled:
-        if any(rule.pattern.search(field) for field in fields if field is not None):
+        if rule.holds(description, counterparty):
             return rule
     return None
 
 
 class AddRule(UnitOfWork[Rule, AddRuleError]):
-    def execute(
-        self, pattern: str, account_name: str, priority: int = DEFAULT_RULE_PRIORITY
-    ) -> Result[Rule, AddRuleError]:
+    def execute(self, pattern: str, account_name: str) -> Result[Rule, AddRuleError]:
         def use_case(ctx: DbTransactionContext) -> Result[Rule, AddRuleError]:
             text = pattern.strip()
             if not text:
@@ -100,7 +132,16 @@ class AddRule(UnitOfWork[Rule, AddRuleError]):
                         # broken import into a refused rule.
                         Result.err(PostingToNonLeafAccount(account.id))
                         if has_children
-                        else add_rule_service(ctx, text, account.id, priority)
+                        else stored_rules(ctx).and_then(lambda live:
+                            add_rule_service(
+                                ctx,
+                                render_when_inline(When(any_field=text)),
+                                account.id,
+                                # The list is in evaluation order, so the last
+                                # rule holds the highest priority.
+                                live[-1].priority + RULE_PRIORITY_STEP if live else RULE_PRIORITY_STEP,
+                            )
+                        )
                     )
                 )
             )
@@ -108,12 +149,9 @@ class AddRule(UnitOfWork[Rule, AddRuleError]):
         return self._run(use_case)
 
 
-class ListRules(UnitOfWork[list[Rule], RuleError]):
-    def execute(self) -> Result[list[Rule], RuleError]:
-        def use_case(ctx: DbTransactionContext) -> Result[list[Rule], RuleError]:
-            return list_rules_service(ctx)
-
-        return self._run(use_case)
+class ListRules(UnitOfWork[list[StoredRule], RuleError]):
+    def execute(self) -> Result[list[StoredRule], RuleError]:
+        return self._run(stored_rules)
 
 
 class RemoveRule(UnitOfWork[Rule, RuleError]):

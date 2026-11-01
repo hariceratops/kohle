@@ -307,7 +307,7 @@ An imported line that matches no rule lands in `Unclassified Expense` or
 
 ```bash
 kohle-cli add-rule 'REWE|ALDI|LIDL' Groceries
-kohle-cli add-rule '^DE89370400440532013000$' Rent --priority 10
+kohle-cli add-rule '^DE89370400440532013000$' Rent
 kohle-cli list-rules
 kohle-cli remove-rule 3
 ```
@@ -323,14 +323,14 @@ $ kohle-cli add-rule 'REWE[' Groceries
 Error: Invalid rule pattern 'REWE[': unterminated character set at position 4
 ```
 
-Rules are evaluated lowest `priority` first, ties broken by id, and the first
-match wins — which is the order `list-rules` prints them in. `--priority`
-defaults to 100, leaving room to slot a rule either side of an existing one
-without renumbering.
+Rules are evaluated in the order `list-rules` prints them, and the first match
+wins. `add-rule` appends the new rule at the end of that order. `list-rules`
+shows each rule's id, account and conditions, the conditions in the compact
+form `{ any_field = "REWE|ALDI|LIDL" }`.
 
 The target must be a leaf account, since only leaves can be posted to.
 `remove-rule` retires a rule rather than erasing it: past classifications keep
-naming the pattern that made them.
+naming the conditions that made them.
 
 Rules are applied while a statement is imported: each row takes the account its
 first matching rule names, and a row matching nothing lands in its unclassified

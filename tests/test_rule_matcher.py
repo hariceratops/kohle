@@ -10,17 +10,20 @@ in-memory objects.
 test_classify_import.py beside the statement-cell shapes it normalises.
 """
 
-from kohle.domain.models import Rule
 from kohle.services.journal_services import Counterparty
-from kohle.use_cases.rules import compile_rules, match_rule
+from kohle.use_cases.conditions import When
+from kohle.use_cases.rules import StoredRule, compile_rules, match_rule
 
 NO_COUNTERPARTY = Counterparty(None, None)
 IBAN = "DE89370400440532013000"
 
 
-def _rules(*specs: tuple[int, str, int]) -> list[Rule]:
+def _rules(*specs: tuple[int, str, int]) -> list[StoredRule]:
     """Rules in the order `list_rules_service` would return them."""
-    return [Rule(id=rule_id, pattern=pattern, account_id=account_id) for rule_id, pattern, account_id in specs]
+    return [
+        StoredRule(rule_id, rule_id * 100, account_id, f"account {account_id}", When(any_field=pattern), None)
+        for rule_id, pattern, account_id in specs
+    ]
 
 
 def test_first_match_wins_and_evaluation_stops_there() -> None:

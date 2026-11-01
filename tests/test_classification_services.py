@@ -36,7 +36,7 @@ class _Ledger:
         self.groceries = add_account_service(ctx, "Groceries", AccountType.expense).unwrap().id
         self.bucket = add_account_service(ctx, "Unclassified Expense", AccountType.expense).unwrap().id
         self.eur = add_unit_service(ctx, "EUR", "Euro", UnitKind.currency).unwrap().id
-        self.rule = add_rule_service(ctx, "REWE", self.groceries, 100).unwrap().id
+        self.rule = add_rule_service(ctx, '{ any_field = "REWE" }', self.groceries, 100).unwrap().id
 
     def entry(self, ctx: DbTransactionContext, reference: str, counterpart_id: int) -> int:
         value = Decimal(80)

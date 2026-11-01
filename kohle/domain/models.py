@@ -198,30 +198,28 @@ class JournalLine(base, Archivable):
         return f"<JournalLine(id={self.id}, entry_id={self.entry_id}, account_id={self.account_id}, {side} {self.quantity}@{self.unit_price})>"
 
 
-DEFAULT_RULE_PRIORITY = 100
-
-
 class Rule(base, Archivable):
-    """Sends an imported line to an account when its pattern matches the line's
-    description or either counterparty field."""
+    """Sends an imported line to an account when its conditions hold."""
 
     __tablename__ = "rules"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    pattern: Mapped[str] = mapped_column(String, nullable=False)
+    # The rule's `when` table as one canonical TOML inline table. Immutable,
+    # like account_id: a classification's matched_rule_id must keep meaning
+    # what matched.
+    condition: Mapped[str] = mapped_column(String, nullable=False)
     account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"), nullable=False)
-    # Sparse default, so a rule can be inserted either side of an existing one
-    # without renumbering the set.
-    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=DEFAULT_RULE_PRIORITY)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False)
+    note: Mapped[str | None] = mapped_column(String, nullable=True)
 
     account: Mapped["Account"] = relationship("Account")
 
     # Deliberately unconstrained: retired rules stay in the table, so a unique
-    # pattern would stop a retired rule from being recreated, and a duplicate
+    # condition would stop a retired rule from being recreated, and a duplicate
     # rule is dead weight rather than a conflict — first match wins.
 
     def __repr__(self) -> str:
-        return f"<Rule(id={self.id}, pattern={self.pattern!r}, priority={self.priority}, account_id={self.account_id})>"
+        return f"<Rule(id={self.id}, condition={self.condition!r}, priority={self.priority}, account_id={self.account_id})>"
 
 
 class Classification(base, Archivable):
