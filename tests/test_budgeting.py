@@ -168,6 +168,37 @@ def test_an_entry_identical_to_the_one_in_force_does_not_cut() -> None:
     ]
 
 
+def test_an_end_entry_leaves_no_periods_and_cuts_the_running_one() -> None:
+    cap = _cap("300", "day 1", date(2026, 1, 1))
+
+    at_boundary = cap_periods([cap, CapChange(date(2026, 4, 1), None)], _state, date(2026, 6, 30))
+    mid_period = cap_periods([cap, CapChange(date(2026, 4, 10), None)], _state, date(2026, 6, 30))
+
+    assert [(p.start, p.end, p.short) for p in at_boundary] == [
+        (date(2026, 1, 1), date(2026, 1, 31), False),
+        (date(2026, 2, 1), date(2026, 2, 28), False),
+        (date(2026, 3, 1), date(2026, 3, 31), False),
+    ]
+    assert [(p.start, p.end, p.short) for p in mid_period][-1] == (date(2026, 4, 1), date(2026, 4, 9), True)
+    assert len(mid_period) == 4
+
+
+def test_a_cap_set_again_after_an_end_entry_starts_fresh() -> None:
+    history = [
+        _cap("300", "day 1", date(2026, 1, 1)),
+        CapChange(date(2026, 2, 1), None),
+        _cap("300", "day 1", date(2026, 3, 15)),
+    ]
+
+    periods = cap_periods(history, _state, date(2026, 4, 30))
+
+    assert [(p.start, p.end, p.short) for p in periods] == [
+        (date(2026, 1, 1), date(2026, 1, 31), False),
+        (date(2026, 3, 15), date(2026, 3, 31), True),
+        (date(2026, 4, 1), date(2026, 4, 30), False),
+    ]
+
+
 @pytest.mark.skip(reason="TODO: slice 080 — covered / uncapped / unclassified split")
 def test_placeholder_attribution() -> None:
     # TODO: child of capped parent counts toward the parent, not the uncapped row

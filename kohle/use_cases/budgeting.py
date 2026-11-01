@@ -15,6 +15,7 @@ from kohle.domain.domain_errors import (
     CapError,
     CapWriteError,
     InvalidCapAmount,
+    NoCapInForce,
     UncappableAccount,
 )
 from kohle.domain.models import Account, AccountType, CapEntry, JournalLine
@@ -129,6 +130,35 @@ class SetCap(UnitOfWork[CapEntry, CapWriteError]):
         return self._run(use_case)
 
 
+class EndCap(UnitOfWork[CapEntry, CapWriteError]):
+    def execute(self, account_name: str, effective_from: date) -> Result[CapEntry, CapWriteError]:
+        def use_case(ctx: DbTransactionContext) -> Result[CapEntry, CapWriteError]:
+            accounts_res = budget_accounts(ctx)
+            if accounts_res.is_err:
+                return Result.err(accounts_res.unwrap_err())
+            account_res = check_cappable(accounts_res.unwrap(), account_name)
+            if account_res.is_err:
+                return Result.err(account_res.unwrap_err())
+            account = account_res.unwrap()
+
+            entries_res = list_cap_entries_service(ctx)
+            if entries_res.is_err:
+                return Result.err(entries_res.unwrap_err())
+            latest = next(
+                (
+                    e for e in reversed(entries_res.unwrap())
+                    if e.account_id == account.id and e.effective_from <= effective_from
+                ),
+                None,
+            )
+            # An end entry at D itself is a replay; an earlier one leaves nothing to end.
+            if latest is None or (latest.amount is None and latest.effective_from < effective_from):
+                return Result.err(NoCapInForce(account_name, effective_from))
+            return put_cap_entry_service(ctx, account.id, effective_from, None, None)
+
+        return self._run(use_case)
+
+
 class ListCaps(UnitOfWork[list[CapEntry], CapError]):
     def execute(self) -> Result[list[CapEntry], CapError]:
         def use_case(ctx: DbTransactionContext) -> Result[list[CapEntry], CapError]:
@@ -145,10 +175,11 @@ class Cap:
 
 @dataclass(frozen=True, slots=True)
 class CapChange:
-    """One entry of an account's cap history, with its rule parsed."""
+    """One entry of an account's cap history, with its rule parsed. `cap` None
+    is an end entry: no cap from `effective_from`."""
 
     effective_from: date
-    cap: Cap
+    cap: Cap | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,6 +201,8 @@ def cap_periods(history: Sequence[CapChange], state_on: Callable[[date], str], t
     entries = [c for i, c in enumerate(history) if i == 0 or c.cap != history[i - 1].cap]
     periods: list[Period] = []
     for i, entry in enumerate(entries):
+        if entry.cap is None:
+            continue
         span_end = entries[i + 1].effective_from - timedelta(days=1) if i + 1 < len(entries) else None
         rule = entry.cap.recurrence
         start = entry.effective_from
@@ -251,6 +284,7 @@ class QueryBudget(UnitOfWork[BudgetReport, BudgetError]):
             histories: dict[int, list[CapChange]] = defaultdict(list)
             for entry in entries_res.unwrap():
                 if entry.amount is None or entry.rule is None:
+                    histories[entry.account_id].append(CapChange(entry.effective_from, None))
                     continue
                 parsed = parse_recurrence(entry.rule)
                 if parsed.is_err:

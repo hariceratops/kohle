@@ -757,5 +757,15 @@ class InvalidCapAmount(CapError):
         return f"invalid cap amount {self.amount}; expected a number of 0 or more"
 
 
+class NoCapInForce(CapError):
+    def __init__(self, name: str, on: date) -> None:
+        super().__init__()
+        self.name = name
+        self.on = on
+
+    def __str__(self) -> str:
+        return f"{self.name} has no cap in force on {self.on}; list-caps shows its history"
+
+
 CapWriteError = CapError | AccountError | InvalidRecurrence
 BudgetError = CapError | AccountError | JournalError | InvalidRecurrence | StateError

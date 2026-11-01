@@ -36,6 +36,7 @@ _WRITE_ARGV: dict[str, list[str]] = {
     "set-sampling-rules": ["set-sampling-rules", "salary: last day"],
     "move-state": ["move-state", "--from", "start", "BY"],
     "set-cap": ["set-cap", "Groceries", "300", "day 1", "--from", "2026-01-01"],
+    "end-cap": ["end-cap", "Groceries", "--from", "2026-06-01"],
 }
 
 

@@ -26,7 +26,7 @@ from kohle.infrastructure.device_config import (
 )
 from kohle.plugin.plugin_manager import load_plugins, load_price_plugins
 from kohle.use_cases.accounts import AddAccount, ListAccount, ListChildAccounts
-from kohle.use_cases.budgeting import ListCaps, QueryBudget, SetCap
+from kohle.use_cases.budgeting import EndCap, ListCaps, QueryBudget, SetCap
 from kohle.use_cases.bundesland import ListStates, MoveState
 from kohle.use_cases.classification import ListUnclassified, Reclassify
 from kohle.use_cases.journal import (
@@ -397,6 +397,18 @@ def set_cap_cmd(make_session, effective_from: datetime, account: str, amount: De
         raise click.ClickException(str(res.unwrap_err()))
     entry = res.unwrap()
     click.echo(f"Set cap on {account} from {entry.effective_from.isoformat()}: {entry.amount:.2f}, {entry.rule}")
+
+
+@cli.command(writes=True)
+@click.option("--from", "effective_from", type=click.DateTime(formats=["%Y-%m-%d"]), required=True,
+              help="YYYY-MM-DD: the first day with no cap")
+@click.argument("account")
+@click.pass_obj
+def end_cap_cmd(make_session, effective_from: datetime, account: str):
+    res = EndCap(make_session()).execute(account, effective_from.date())
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    click.echo(f"Ended cap on {account} from {res.unwrap().effective_from.isoformat()}")
 
 
 @cli.command(writes=False)

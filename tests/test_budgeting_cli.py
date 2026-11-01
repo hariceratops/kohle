@@ -272,7 +272,103 @@ def test_budget_needs_no_bundesland_for_non_shifting_kinds(session_factory, monk
     assert result.output.splitlines()[2].split()[0] == "Food"
 
 
-@pytest.mark.skip(reason="TODO: slice 079 — end-cap")
-def test_placeholder_end_cap() -> None:
-    # TODO: end-cap from D; lines dated D or later land in the uncapped row
-    ...
+def test_end_cap_is_one_operation_listed_and_a_replay_writes_nothing(session_factory) -> None:
+    _ledger(session_factory)
+    _run(session_factory, "set-cap", "Groceries", "300", "day 1", "--from", "2026-01-01")
+    before = _operations(session_factory)
+
+    result = _run(session_factory, "end-cap", "Groceries", "--from", "2026-04-01")
+    replay = _run(session_factory, "end-cap", "Groceries", "--from", "2026-04-01")
+
+    assert result.output == "Ended cap on Groceries from 2026-04-01\n"
+    assert replay.exit_code == 0, replay.output
+    assert _operations(session_factory) == before + 1
+    with session_factory() as session:
+        last = session.scalars(select(Operation).order_by(Operation.id.desc())).first()
+        assert (last.entity_type, last.action) == ("cap_entries", "create")
+    listed = _run(session_factory, "list-caps").output.splitlines()[2:]
+    assert [line.split(None, 3) for line in listed] == [
+        ["Groceries", "2026-01-01", "300.00", "day 1"],
+        ["Groceries", "2026-04-01", "-", "no cap"],
+    ]
+
+
+def test_end_cap_on_a_date_holding_a_cap_replaces_it(session_factory) -> None:
+    _ledger(session_factory)
+    _run(session_factory, "set-cap", "Groceries", "300", "day 1", "--from", "2026-01-01")
+    _run(session_factory, "set-cap", "Groceries", "400", "day 1", "--from", "2026-03-10")
+
+    result = _run(session_factory, "end-cap", "Groceries", "--from", "2026-03-10")
+
+    assert result.exit_code == 0, result.output
+    listed = _run(session_factory, "list-caps").output.splitlines()[2:]
+    assert [line.split(None, 3)[1:] for line in listed] == [
+        ["2026-01-01", "300.00", "day 1"],
+        ["2026-03-10", "-", "no cap"],
+    ]
+
+
+@pytest.mark.parametrize(
+    ("setup", "args", "fragments"),
+    [
+        (False, ["Groceries", "--from", "2026-05-01"], ["Groceries has no cap in force on 2026-05-01", "list-caps"]),
+        (True, ["Groceries", "--from", "2025-12-31"], ["no cap in force on 2025-12-31"]),
+        (True, ["Nowhere", "--from", "2026-05-01"], ["no such account", "Food, Groceries"]),
+        (True, ["Salary", "--from", "2026-05-01"], ["it is an income account"]),
+    ],
+    ids=["never capped", "before the first cap", "unknown account", "income account"],
+)
+def test_a_refused_end_cap_writes_nothing_and_names_the_bad_part(session_factory, setup, args, fragments) -> None:
+    _ledger(session_factory)
+    if setup:
+        _run(session_factory, "set-cap", "Groceries", "300", "day 1", "--from", "2026-01-01")
+        _run(session_factory, "end-cap", "Groceries", "--from", "2026-03-01")
+    listed, operations = _run(session_factory, "list-caps").output, _operations(session_factory)
+
+    result = _run(session_factory, "end-cap", *args)
+
+    assert result.exit_code == 1, result.output
+    for fragment in fragments:
+        assert fragment in result.output
+    assert _run(session_factory, "list-caps").output == listed
+    assert _operations(session_factory) == operations
+
+
+def test_end_cap_after_an_earlier_end_is_refused(session_factory) -> None:
+    _ledger(session_factory)
+    _run(session_factory, "set-cap", "Groceries", "300", "day 1", "--from", "2026-01-01")
+    _run(session_factory, "end-cap", "Groceries", "--from", "2026-03-01")
+    operations = _operations(session_factory)
+
+    result = _run(session_factory, "end-cap", "Groceries", "--from", "2026-06-01")
+
+    assert result.exit_code == 1
+    assert "no cap in force on 2026-06-01" in result.output
+    assert _operations(session_factory) == operations
+
+
+def test_end_cap_needs_a_valid_from(session_factory) -> None:
+    _ledger(session_factory)
+
+    missing = _run(session_factory, "end-cap", "Groceries")
+    bad = _run(session_factory, "end-cap", "Groceries", "--from", "2026-13-01")
+
+    assert missing.exit_code == 2 and bad.exit_code == 2
+
+
+def test_budget_shows_no_periods_from_the_end_date_and_cuts_the_running_one(session_factory, monkeypatch) -> None:
+    _ledger(session_factory)
+    _run(session_factory, "set-cap", "Groceries", "300", "day 1", "--from", "2026-01-01")
+    _run(session_factory, "end-cap", "Groceries", "--from", "2026-03-10")
+    _spend(session_factory, "2026-03-20", "50")
+    _pin_today(monkeypatch, date(2026, 5, 12))
+
+    result = _run(session_factory, "budget")
+
+    assert result.exit_code == 0, result.output
+    rows = [line.split(None, 6) for line in result.output.splitlines()[2:]]
+    assert [r[:4] + [r[6]] for r in rows] == [
+        ["Groceries", "2026-01-01", "2026-01-31", "300.00", "-"],
+        ["Groceries", "2026-02-01", "2026-02-28", "300.00", "-"],
+        ["Groceries", "2026-03-01", "2026-03-09", "300.00", "short"],
+    ]
