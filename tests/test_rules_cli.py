@@ -490,9 +490,26 @@ def test_an_empty_any_is_refused_naming_the_rule_and_key_and_nothing_is_written(
     assert _count(session_factory, Operation) == operations
 
 
-@pytest.mark.skip(reason="TODO: 084/087/088 apply-rules, edit-rules, classify-rules refused; show-rules allowed")
-def test_placeholder_readers() -> None:
-    raise NotImplementedError
+def test_rule_writing_commands_are_refused_on_a_reader_and_show_rules_runs(
+    session_factory: sessionmaker, write_config, tmp_path: Path
+) -> None:
+    runner = CliRunner()
+    _seed(runner, session_factory)
+    config = write_config('ledger.mode = "reader"\n')
+    groups = _count(session_factory, OperationGroup)
+    refusal = f"Error: this device is configured as a reader; `ledger.mode` is set in {config}\n"
+
+    for argv in (
+        ["apply-rules", _write(tmp_path, ""), "--yes"],
+        ["edit-rules"],
+        ["classify-rules", "--yes"],
+    ):
+        result = runner.invoke(cli, argv, obj=session_factory)
+        assert result.exit_code == 1
+        assert result.output == refusal
+
+    assert runner.invoke(cli, ["show-rules"], obj=session_factory).exit_code == 0
+    assert _count(session_factory, OperationGroup) == groups
 
 
 class _Editor:

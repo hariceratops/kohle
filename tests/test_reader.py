@@ -31,6 +31,7 @@ _WRITE_ARGV: dict[str, list[str]] = {
     # comes before the body ever reads it.
     "apply-rules": ["apply-rules", str(STATEMENT), "--yes"],
     "edit-rules": ["edit-rules"],
+    "classify-rules": ["classify-rules", "--yes"],
     "reclassify": ["reclassify", "1", "Groceries"],
     "add-group": ["add-group", "Flat"],
     "split-line": ["split-line", "1", "--mine", "5", "--share", "Anna:5"],

@@ -231,6 +231,11 @@ class ClassificationError(Exception):
     pass
 
 
+class ClassifyPlanChanged(ClassificationError):
+    def __str__(self) -> str:
+        return "the ledger changed since the preview; run classify-rules again"
+
+
 class NoClassificationForEntry(ClassificationError):
     """Raised by `reclassify` and `split-line` for an unknown entry id or one
     that was never classified — hand-entered `record`/`record-split` entries
@@ -399,6 +404,8 @@ RecordEntryError = AccountError | UnitError | JournalError | BaseCurrencyAsCross
 AddRuleError = AccountError | RuleError | JournalError
 
 ApplyRulesError = RuleError | AccountError
+
+ClassifyRulesError = AccountError | JournalError | ClassificationError | RuleError
 
 BalanceError = AccountError | JournalError
 

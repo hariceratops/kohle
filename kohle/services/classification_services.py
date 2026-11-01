@@ -1,10 +1,11 @@
 from collections.abc import Iterable
 
+from sqlalchemy import exists
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from kohle.core.result import Result
 from kohle.domain.domain_errors import ClassificationError, NoClassificationForEntry
-from kohle.domain.models import Classification, JournalEntry
+from kohle.domain.models import Classification, JournalEntry, Split
 from kohle.infrastructure.crud import crud_create, crud_retrieve, crud_update
 from kohle.infrastructure.transaction_context import DbTransactionContext
 
@@ -121,6 +122,65 @@ def unclassified_classifications_service(
                 selectinload(Classification.entry).selectinload(JournalEntry.lines),
             )
             .filter(Classification.final_account_id.in_(list(bucket_account_ids)))
+            .order_by(JournalEntry.entry_date.asc(), Classification.journal_entry_id.asc())
+            .all()
+        )
+
+    return ctx.run(op).map_err(lambda err: ClassificationError(str(err)))
+
+
+@crud_update
+def set_rerun_outcome_service(
+    ctx: DbTransactionContext, classification_id: int, final_account_id: int, rule_id: int
+) -> Result[Classification, ClassificationError]:
+    """Record a classify-rules move: final_account_id and rerun_rule_id are
+    set, corrected stays false because no human made the call.
+
+    proposed_account_id and matched_rule_id are untouched: reclassify and
+    split-line locate the original line through proposed_account_id."""
+
+    def op(session: Session) -> Classification | None:
+        classification = session.get(Classification, classification_id)
+        if classification is not None:
+            classification.final_account_id = final_account_id
+            classification.rerun_rule_id = rule_id
+        return classification
+
+    return (
+        ctx.run(op)
+        .map_err(lambda err: ClassificationError(str(err)))
+        .and_then(lambda classification:
+            Result.ok(classification)
+            if classification is not None
+            else Result.err(ClassificationError(f"Classification id {classification_id} not found"))
+        )
+    )
+
+
+@crud_retrieve
+def rerun_candidates_service(
+    ctx: DbTransactionContext, bucket_account_ids: Iterable[int]
+) -> Result[list[Classification], ClassificationError]:
+    """The untouched fall-throughs: still on a bucket, and neither a rule nor
+    a human nor an earlier classify-rules run has decided them. Split lines
+    are left out because reclassify refuses them (the bucket no longer holds
+    the full amount)."""
+
+    def op(session: Session) -> list[Classification]:
+        return (
+            session.query(Classification)
+            .join(JournalEntry, Classification.journal_entry_id == JournalEntry.id)
+            .options(
+                joinedload(Classification.final_account),
+                selectinload(Classification.entry).selectinload(JournalEntry.lines),
+            )
+            .filter(
+                Classification.final_account_id.in_(list(bucket_account_ids)),
+                Classification.matched_rule_id.is_(None),
+                Classification.rerun_rule_id.is_(None),
+                Classification.corrected.is_(False),
+                ~exists().where(Split.journal_entry_id == Classification.journal_entry_id),
+            )
             .order_by(JournalEntry.entry_date.asc(), Classification.journal_entry_id.asc())
             .all()
         )

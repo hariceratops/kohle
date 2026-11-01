@@ -680,3 +680,61 @@ def test_downgrade_refuses_rather_than_dropping_a_note_or_a_richer_condition(mig
         command.downgrade(config, BEFORE_RULE_CONDITIONS)
     assert "classification rule" in str(exc_info.value)
     assert "condition" in {r[1] for r in sqlite3.connect(db).execute("PRAGMA table_info(rules)")}
+
+
+BEFORE_RERUN_RULE = "c9e1a7d35b02"
+
+
+def _seed_classification(db: Path, matched: str, rerun: str) -> None:
+    _exec(
+        db,
+        "INSERT INTO accounts (id, name, type, iban, parent_id, created_at) "
+        "VALUES (2, 'Groceries', 'expense', NULL, NULL, '2026-01-01')",
+        "INSERT INTO rules (id, condition, account_id, priority, created_at) "
+        "VALUES (1, '{ any_field = \"REWE\" }', 2, 100, '2026-01-01')",
+        "INSERT INTO journal_entries (id, entry_date, reference, description, created_at) "
+        "VALUES (1, '2026-03-01', 'ref-1', 'REWE', '2026-01-01')",
+        "INSERT INTO classifications "
+        "(id, journal_entry_id, proposed_account_id, matched_rule_id, rerun_rule_id, final_account_id, corrected, created_at) "
+        f"VALUES (1, 1, 2, {matched}, {rerun}, 2, 0, '2026-01-01')",
+    )
+
+
+def test_rerun_rule_column_has_its_foreign_key_and_check(migrated_db) -> None:
+    _, db = migrated_db
+    conn = sqlite3.connect(db)
+    columns = {r[1] for r in conn.execute("PRAGMA table_info(classifications)")}
+    foreign_keys = {(r[2], r[3]) for r in conn.execute("PRAGMA foreign_key_list(classifications)")}
+    ddl = conn.execute("SELECT sql FROM sqlite_master WHERE name = 'classifications'").fetchone()[0]
+    conn.close()
+
+    assert "rerun_rule_id" in columns
+    assert ("rules", "rerun_rule_id") in foreign_keys
+    assert "ck_classification_one_rule" in ddl
+    with pytest.raises(sqlite3.IntegrityError):
+        _seed_classification(db, matched="1", rerun="1")
+
+
+def test_rerun_rule_round_trips_when_no_line_was_moved(migrated_db) -> None:
+    config, db = migrated_db
+    _seed_classification(db, matched="1", rerun="NULL")
+
+    command.downgrade(config, BEFORE_RERUN_RULE)
+
+    conn = sqlite3.connect(db)
+    columns = {r[1] for r in conn.execute("PRAGMA table_info(classifications)")}
+    rows = conn.execute("SELECT id, matched_rule_id FROM classifications").fetchall()
+    conn.close()
+    assert "rerun_rule_id" not in columns
+    assert rows == [(1, 1)]
+
+
+def test_downgrade_refuses_rather_than_dropping_a_rerun_rule(migrated_db) -> None:
+    config, db = migrated_db
+    _seed_classification(db, matched="NULL", rerun="1")
+
+    with pytest.raises(RuntimeError) as exc_info:
+        command.downgrade(config, BEFORE_RERUN_RULE)
+
+    assert "moved by classify-rules" in str(exc_info.value)
+    assert "rerun_rule_id" in {r[1] for r in sqlite3.connect(db).execute("PRAGMA table_info(classifications)")}

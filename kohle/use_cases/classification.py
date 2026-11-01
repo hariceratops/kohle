@@ -6,27 +6,37 @@ from uuid import uuid4
 from kohle.core.result import Result
 from kohle.domain.domain_errors import (
     AccountNotFoundError,
+    ClassifyPlanChanged,
+    ClassifyRulesError,
     EntryAlreadySplit,
+    JournalError,
     ListUnclassifiedError,
     NoSplitForEntry,
+    PostingToNonLeafAccount,
     ReclassifyError,
 )
 from kohle.domain.models import Classification, JournalEntry
 from kohle.infrastructure.transaction_context import DbTransactionContext
 from kohle.infrastructure.uow import UnitOfWork
-from kohle.services.account_services import get_account_by_name_service
+from kohle.services.account_services import (
+    account_has_children_service,
+    get_account_by_name_service,
+)
 from kohle.services.classification_services import (
     classification_by_entry_service,
+    rerun_candidates_service,
     set_classification_outcome_service,
+    set_rerun_outcome_service,
     unclassified_classifications_service,
 )
-from kohle.services.journal_services import LineSpec
+from kohle.services.journal_services import Counterparty, LineSpec
 from kohle.services.split_services import split_by_entry_service
 from kohle.use_cases.journal import (
     UNCLASSIFIED_EXPENSE,
     UNCLASSIFIED_INCOME,
     post_entry,
 )
+from kohle.use_cases.rules import compile_rules, match_rule, stored_rules
 
 # classification.py may import from journal.py (post_entry, the bucket names)
 # and reaches split_by_entry_service in the services layer directly, never
@@ -96,6 +106,34 @@ class ListUnclassified(UnitOfWork[list[UnclassifiedLine], ListUnclassifiedError]
         return self._run(use_case)
 
 
+def _post_correction(
+    ctx: DbTransactionContext, classification: Classification, to_account_id: int, description: str
+) -> Result[JournalEntry, JournalError]:
+    """Reverse the line out of final_account_id and post it onto the target.
+
+    The one place a line moves between accounts after import. The original
+    counterpart line to mirror is located by proposed_account_id: after a
+    first move the original entry still carries its line there, not on the
+    final account.
+    """
+    entry = classification.entry
+    original_line = next(line for line in entry.lines if line.account_id == classification.proposed_account_id)
+    lines = [
+        LineSpec(
+            classification.final_account_id, original_line.unit_id, original_line.quantity,
+            original_line.unit_price, is_debit=not original_line.is_debit,
+        ),
+        LineSpec(
+            to_account_id, original_line.unit_id, original_line.quantity,
+            original_line.unit_price, is_debit=original_line.is_debit,
+        ),
+    ]
+    # Dated the original entry's date, not today: balance and
+    # entries-in-period are period queries, and dating the correction
+    # today would leave the original period permanently misreported.
+    return post_entry(ctx, entry.entry_date, uuid4().hex, description, lines)
+
+
 class Reclassify(UnitOfWork[JournalEntry, ReclassifyError]):
     """Corrects a classified line by posting a reversing pair, never by
     editing the original entry (design §7.1).
@@ -132,27 +170,8 @@ class Reclassify(UnitOfWork[JournalEntry, ReclassifyError]):
             right_account = account_res.unwrap()
 
             entry = classification.entry
-            original_line = next(
-                line for line in entry.lines if line.account_id == classification.proposed_account_id
-            )
-            wrong_account_id = classification.final_account_id
-
-            lines = [
-                LineSpec(
-                    wrong_account_id, original_line.unit_id, original_line.quantity,
-                    original_line.unit_price, is_debit=not original_line.is_debit,
-                ),
-                LineSpec(
-                    right_account.id, original_line.unit_id, original_line.quantity,
-                    original_line.unit_price, is_debit=original_line.is_debit,
-                ),
-            ]
-
-            # Dated the original entry's date, not today: balance and
-            # entries-in-period are period queries, and dating the correction
-            # today would leave the original period permanently misreported.
-            adjusting_entry_res = post_entry(
-                ctx, entry.entry_date, uuid4().hex, f"Reclassify: {entry.description}", lines
+            adjusting_entry_res = _post_correction(
+                ctx, classification, right_account.id, f"Reclassify: {entry.description}"
             )
             if adjusting_entry_res.is_err:
                 return Result.err(adjusting_entry_res.unwrap_err())
@@ -162,5 +181,114 @@ class Reclassify(UnitOfWork[JournalEntry, ReclassifyError]):
                 return Result.err(outcome_res.unwrap_err())
 
             return Result.ok(adjusting_entry_res.unwrap())
+
+        return self._run(use_case)
+
+
+@dataclass(frozen=True, slots=True)
+class RerunMove:
+    """One line classify-rules would move, with what the preview shows."""
+
+    entry_id: int
+    entry_date: date
+    description: str
+    amount: Decimal  # signed, as the rules saw it
+    bucket_name: str
+    rule_id: int
+    account_id: int
+    account_name: str
+
+    @property
+    def key(self) -> tuple[int, int, int]:
+        return (self.entry_id, self.rule_id, self.account_id)
+
+
+def _rule_amount(classification: Classification) -> Decimal:
+    """The signed amount the import gave the rules: the counterpart line is
+    debited exactly when the amount was negative."""
+    line = next(line for line in classification.entry.lines if line.account_id == classification.proposed_account_id)
+    return -line.value if line.is_debit else line.value
+
+
+def _plan_moves(ctx: DbTransactionContext) -> Result[list[RerunMove], ClassifyRulesError]:
+    bucket_ids = []
+    for bucket_name in (UNCLASSIFIED_EXPENSE, UNCLASSIFIED_INCOME):
+        account_res = get_account_by_name_service(ctx, bucket_name)
+        if account_res.is_err:
+            err = account_res.unwrap_err()
+            if isinstance(err, AccountNotFoundError):
+                # Nothing imported yet is emptiness; the strict lookup keeps
+                # this read from creating the buckets.
+                return Result.ok([])
+            return Result.err(err)
+        bucket_ids.append(account_res.unwrap().id)
+
+    candidates_res = rerun_candidates_service(ctx, bucket_ids)
+    if candidates_res.is_err:
+        return Result.err(candidates_res.unwrap_err())
+    rules_res = stored_rules(ctx)
+    if rules_res.is_err:
+        return Result.err(rules_res.unwrap_err())
+    rules = rules_res.unwrap()
+    compiled = compile_rules(rules)
+    account_names = {rule.account_id: rule.account_name for rule in rules}
+
+    moves = []
+    for classification in candidates_res.unwrap():
+        entry = classification.entry
+        counterparty = Counterparty(entry.counterparty_name, entry.counterparty_iban)
+        amount = _rule_amount(classification)
+        matched = match_rule(compiled, entry.description, counterparty, amount)
+        # A rule aimed at the bucket the line is already in moves nothing.
+        if matched is None or matched.account_id == classification.final_account_id:
+            continue
+        moves.append(
+            RerunMove(
+                entry.id, entry.entry_date, entry.description, amount, classification.final_account.name,
+                matched.rule_id, matched.account_id, account_names[matched.account_id],
+            )
+        )
+
+    # Checked before any preview, so it never promises a move the apply would
+    # refuse, and the failure matches the import's.
+    for account_id in sorted({move.account_id for move in moves}):
+        has_children = account_has_children_service(ctx, account_id)
+        if has_children.is_err:
+            return Result.err(has_children.unwrap_err())
+        if has_children.unwrap():
+            return Result.err(PostingToNonLeafAccount(account_id))
+    return Result.ok(moves)
+
+
+class PlanClassifyRules(UnitOfWork[list[RerunMove], ClassifyRulesError]):
+    def execute(self) -> Result[list[RerunMove], ClassifyRulesError]:
+        return self._run(_plan_moves)
+
+
+class ApplyClassifyRules(UnitOfWork[list[RerunMove], ClassifyRulesError]):
+    def execute(self, expected: list[RerunMove]) -> Result[list[RerunMove], ClassifyRulesError]:
+        def use_case(ctx: DbTransactionContext) -> Result[list[RerunMove], ClassifyRulesError]:
+            # Re-planned inside the writing transaction: the preview was made in
+            # another one, and any import, reclassify or rule change since then
+            # shows up as a difference.
+            planned = _plan_moves(ctx)
+            if planned.is_err:
+                return planned
+            moves = planned.unwrap()
+            if [move.key for move in moves] != [move.key for move in expected]:
+                return Result.err(ClassifyPlanChanged())
+
+            for move in moves:
+                classification_res = classification_by_entry_service(ctx, move.entry_id)
+                if classification_res.is_err:
+                    return Result.err(classification_res.unwrap_err())
+                classification = classification_res.unwrap()
+                posted = _post_correction(ctx, classification, move.account_id, f"Classify: {move.description}")
+                if posted.is_err:
+                    return Result.err(posted.unwrap_err())
+                outcome = set_rerun_outcome_service(ctx, classification.id, move.account_id, move.rule_id)
+                if outcome.is_err:
+                    return Result.err(outcome.unwrap_err())
+            return Result.ok(moves)
 
         return self._run(use_case)

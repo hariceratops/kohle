@@ -32,7 +32,12 @@ from kohle.plugin.plugin_manager import load_plugins, load_price_plugins
 from kohle.use_cases.accounts import AddAccount, ListAccount, ListChildAccounts
 from kohle.use_cases.budgeting import EndCap, ListCaps, QueryBudget, SetCap
 from kohle.use_cases.bundesland import ListStates, MoveState
-from kohle.use_cases.classification import ListUnclassified, Reclassify
+from kohle.use_cases.classification import (
+    ApplyClassifyRules,
+    ListUnclassified,
+    PlanClassifyRules,
+    Reclassify,
+)
 from kohle.use_cases.journal import (
     BASE_CURRENCY,
     CrossUnitLine,
@@ -933,6 +938,38 @@ def list_unclassified_cmd(make_session):
         for line in lines
     ]
     click.echo(tabulate(rows, headers="keys", floatfmt=".2f"))
+
+
+@cli.command(writes=True)
+@click.option("--yes", is_flag=True, help="Apply without asking.")
+@click.pass_obj
+def classify_rules_cmd(make_session, yes: bool):
+    planned = PlanClassifyRules(make_session()).execute()
+    if planned.is_err:
+        raise click.ClickException(str(planned.unwrap_err()))
+    moves = planned.unwrap()
+    if not moves:
+        click.echo("No unclassified line matches a rule")
+        return
+    rows = [
+        {
+            "entry_id": move.entry_id,
+            "date": move.entry_date,
+            "description": move.description,
+            "amount": move.amount,
+            "from": move.bucket_name,
+            "to": move.account_name,
+            "rule": move.rule_id,
+        }
+        for move in moves
+    ]
+    click.echo(tabulate(rows, headers="keys", floatfmt=".2f"))
+    if not yes:
+        click.confirm(f"Move {len(moves)} line(s)?", abort=True)
+    applied = ApplyClassifyRules(make_session()).execute(moves)
+    if applied.is_err:
+        raise click.ClickException(str(applied.unwrap_err()))
+    click.echo(f"Moved {len(moves)} line(s)")
 
 
 @cli.command(writes=True)
