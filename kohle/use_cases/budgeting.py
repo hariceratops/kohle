@@ -3,6 +3,7 @@ Reads no prices, so the price guard covers it like journal.py."""
 
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
@@ -249,6 +250,36 @@ class BudgetRow:
 @dataclass(frozen=True, slots=True)
 class BudgetReport:
     rows: list[BudgetRow]
+    unclassified: Decimal
+    uncapped: Decimal
+
+
+def in_force(history: Sequence[CapChange], day: date) -> Cap | None:
+    """The cap in force on `day`; None before the first entry or under an end entry."""
+    return next((c.cap for c in reversed(history) if c.effective_from <= day), None)
+
+
+def uncapped_spent(
+    capped: Sequence[CappedAccount],
+    cappable: AbstractSet[int],
+    lines: Sequence[JournalLine],
+    start: date,
+    end: date,
+) -> Decimal:
+    """Net spending on cappable accounts in [start, end] by lines that no cap
+    covered on their own date, on the account or any ancestor."""
+    return net_spent(
+        (
+            line for line in lines
+            if line.account_id in cappable
+            and not any(
+                line.account_id in c.covers and in_force(c.history, line.entry.entry_date) is not None
+                for c in capped
+            )
+        ),
+        start,
+        end,
+    )
 
 
 def period_rows(
@@ -276,7 +307,8 @@ class QueryBudget(UnitOfWork[BudgetReport, BudgetError]):
             accounts_res = budget_accounts(ctx)
             if accounts_res.is_err:
                 return Result.err(accounts_res.unwrap_err())
-            by_id = {a.id: a.name for a in accounts_res.unwrap().accounts.values()}
+            partition = accounts_res.unwrap()
+            by_id = {a.id: a.name for a in partition.accounts.values()}
 
             entries_res = list_cap_entries_service(ctx)
             if entries_res.is_err:
@@ -298,7 +330,7 @@ class QueryBudget(UnitOfWork[BudgetReport, BudgetError]):
                 ids_res = descendant_account_ids_service(ctx, account_id)
                 if ids_res.is_err:
                     return Result.err(ids_res.unwrap_err())
-                capped.append(CappedAccount(by_id[account_id], histories[account_id], frozenset(ids_res.unwrap())))
+                capped.append(CappedAccount(by_id[account_id], histories[account_id], frozenset(ids_res.unwrap()) - partition.unclassified))
 
             states_res = list_state_entries_service(ctx)
             if states_res.is_err:
@@ -311,12 +343,15 @@ class QueryBudget(UnitOfWork[BudgetReport, BudgetError]):
             # Only a shifting kind calls state_on, and with no start entry the refusal above ruled those out.
             state_on = lambda day: lookup_res.unwrap()(day)
 
-            covered = set().union(*(c.covers for c in capped))
-            lines_res = account_lines_service(ctx, covered)
+            cappable = {a.id for a in partition.cappable()}
+            wanted = set().union(*(c.covers for c in capped)) | cappable | partition.unclassified
+            lines_res = account_lines_service(ctx, wanted)
             if lines_res.is_err:
                 return Result.err(lines_res.unwrap_err())
 
-            rows = period_rows(capped, lines_res.unwrap(), state_on, start, end, today)
-            return Result.ok(BudgetReport(rows))
+            lines = lines_res.unwrap()
+            rows = period_rows(capped, lines, state_on, start, end, today)
+            unclassified = net_spent((l for l in lines if l.account_id in partition.unclassified), start, end)
+            return Result.ok(BudgetReport(rows, unclassified, uncapped_spent(capped, cappable, lines, start, end)))
 
         return self._run(use_case)

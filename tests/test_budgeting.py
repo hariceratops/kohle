@@ -6,16 +6,16 @@ Design §16.2. Worked examples are the spec's Testable list, with its numbers.
 from datetime import date
 from decimal import Decimal
 
-import pytest
-
 from kohle.domain.models import JournalEntry, JournalLine, Unit, UnitKind
 from kohle.use_cases.budgeting import (
     Cap,
     CapChange,
     CappedAccount,
     cap_periods,
+    in_force,
     net_spent,
     period_rows,
+    uncapped_spent,
 )
 from kohle.use_cases.recurrence import Yearly, parse_recurrence
 
@@ -199,7 +199,58 @@ def test_a_cap_set_again_after_an_end_entry_starts_fresh() -> None:
     ]
 
 
-@pytest.mark.skip(reason="TODO: slice 080 — covered / uncapped / unclassified split")
-def test_placeholder_attribution() -> None:
-    # TODO: child of capped parent counts toward the parent, not the uncapped row
-    ...
+def _ids_line(account_id: int, day: date, quantity: str = "10", is_debit: bool = True) -> JournalLine:
+    return _line(day, quantity, is_debit, account_id)
+
+
+PARENT_CAP = CappedAccount("Food", [_cap("300", "day 1", date(2026, 1, 1))], frozenset({1, 2}))
+RANGE = (date(2026, 1, 1), date(2026, 12, 31))
+
+
+def test_in_force_is_the_latest_entry_on_or_before_the_day() -> None:
+    history = [_cap("300", "day 1", date(2026, 1, 1)), CapChange(date(2026, 4, 1), None), _cap("500", "day 1", date(2026, 6, 1))]
+
+    assert in_force(history, date(2025, 12, 31)) is None
+    assert in_force(history, date(2026, 3, 31)) == history[0].cap
+    assert in_force(history, date(2026, 4, 1)) is None
+    assert in_force(history, date(2026, 6, 1)) == history[2].cap
+
+
+def test_a_line_on_a_child_of_a_capped_parent_is_not_uncapped() -> None:
+    lines = [_ids_line(1, date(2026, 2, 1)), _ids_line(2, date(2026, 2, 2)), _ids_line(3, date(2026, 2, 3), "7")]
+
+    assert uncapped_spent([PARENT_CAP], {1, 2, 3}, lines, *RANGE) == Decimal(7)
+
+
+def test_after_an_end_entry_lines_from_the_end_date_on_are_uncapped_and_earlier_ones_are_not() -> None:
+    capped = CappedAccount("Food", [_cap("300", "day 1", date(2026, 1, 1)), CapChange(date(2026, 4, 10), None)], frozenset({1}))
+    lines = [_ids_line(1, date(2026, 4, 9), "1"), _ids_line(1, date(2026, 4, 10), "2"), _ids_line(1, date(2026, 5, 1), "4")]
+
+    assert uncapped_spent([capped], {1}, lines, *RANGE) == Decimal(6)
+
+
+def test_a_line_before_a_caps_first_date_is_uncapped() -> None:
+    lines = [_ids_line(1, date(2025, 12, 31), "5"), _ids_line(1, date(2026, 1, 1), "9")]
+
+    assert uncapped_spent([PARENT_CAP], {1}, lines, date(2025, 1, 1), date(2026, 12, 31)) == Decimal(5)
+
+
+def test_uncapped_spent_leaves_out_accounts_outside_the_cappable_set_and_dates_outside_the_range() -> None:
+    lines = [
+        _ids_line(9, date(2026, 2, 1), "100"),
+        _ids_line(5, date(2026, 2, 1), "3"),
+        _ids_line(5, date(2026, 2, 1), "1", is_debit=False),
+        _ids_line(5, date(2027, 1, 1), "50"),
+    ]
+
+    assert uncapped_spent([], {5}, lines, *RANGE) == Decimal(2)
+
+
+def test_a_line_under_two_capped_ancestors_counts_toward_both_and_is_not_uncapped() -> None:
+    capped = [PARENT_CAP, CappedAccount("Bakery", [_cap("50", "day 1", date(2026, 1, 1))], frozenset({2}))]
+    lines = [_ids_line(2, date(2026, 1, 15), "20")]
+
+    rows = period_rows(capped, lines, _state, date(2026, 1, 1), date(2026, 1, 31), date(2026, 2, 1))
+
+    assert [(r.account, r.spent) for r in rows] == [("Food", Decimal(20)), ("Bakery", Decimal(20))]
+    assert uncapped_spent(capped, {1, 2}, lines, *RANGE) == Decimal(0)

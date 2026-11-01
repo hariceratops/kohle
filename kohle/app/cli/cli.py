@@ -1242,6 +1242,7 @@ def budget_cmd(make_session, start, end):
     res = QueryBudget(make_session()).execute(start_date, end_date, today)
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
+    report = res.unwrap()
     rows = [
         {
             "account": r.account,
@@ -1255,8 +1256,13 @@ def budget_cmd(make_session, start, end):
                 + ([f"partial day {r.day} of {r.period.days}"] if r.day is not None else [])
             ) or None,
         }
-        for r in res.unwrap().rows
+        for r in report.rows
     ]
+    for label, spent in (("Unclassified Expense", report.unclassified), ("(uncapped)", report.uncapped)):
+        rows.append({
+            "account": label, "from": start_date, "to": end_date, "cap": None,
+            "spent": spent, "over/under": None, "note": None,
+        })
     click.echo(tabulate(rows, headers="keys", floatfmt=".2f", missingval="-"))
 
 

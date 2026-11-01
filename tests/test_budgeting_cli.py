@@ -162,6 +162,15 @@ def _spend(session_factory, day: str, amount: str, account: str = "Groceries", r
     assert result.exit_code == 0, result.output
 
 
+def _summary(output: str) -> list[tuple[str, str, str, str]]:
+    """(account, from, to, spent) of the two closing rows."""
+    parsed = []
+    for line in output.splitlines()[-2:]:
+        *account, start, end, _cap, spent, _over, _note = line.split()
+        parsed.append((" ".join(account), start, end, spent))
+    return parsed
+
+
 def _count(session_factory, model) -> int:
     with session_factory() as session:
         return session.scalar(select(func.count()).select_from(model))
@@ -183,10 +192,14 @@ def test_budget_compares_spending_with_the_cap_per_period(session_factory, monke
     result = _run(session_factory, "budget")
 
     assert result.exit_code == 0, result.output
-    rows = [line.split(None, 6) for line in result.output.splitlines()[2:]]
+    rows = [line.split(None, 6) for line in result.output.splitlines()[2:-2]]
     assert rows == [
         ["Food", "2026-01-01", "2026-01-31", "300.00", "70.00", "-230.00", "-"],
         ["Food", "2026-02-01", "2026-02-28", "300.00", "350.00", "50.00", "over, partial day 12 of 28"],
+    ]
+    assert _summary(result.output) == [
+        ("Unclassified Expense", "2026-01-01", "2026-02-12", "0.00"),
+        ("(uncapped)", "2026-01-01", "2026-02-12", "999.00"),
     ]
 
 
@@ -196,8 +209,8 @@ def test_budget_range_defaults_and_future_periods(session_factory, monkeypatch) 
     _run(session_factory, "set-cap", "Food", "300", "day 1", "--from", "2025-11-01")
     _pin_today(monkeypatch, date(2026, 2, 12))
 
-    default = _run(session_factory, "budget").output.splitlines()[2:]
-    explicit = _run(session_factory, "budget", "--from", "2025-12-15", "--to", "2026-01-05").output.splitlines()[2:]
+    default = _run(session_factory, "budget").output.splitlines()[2:-2]
+    explicit = _run(session_factory, "budget", "--from", "2025-12-15", "--to", "2026-01-05").output.splitlines()[2:-2]
 
     assert [line.split()[1] for line in default] == ["2026-01-01", "2026-02-01"]
     assert [line.split()[1] for line in explicit] == ["2025-12-01", "2026-01-01"]
@@ -210,7 +223,7 @@ def test_a_future_cap_is_listed_but_not_in_budget_until_it_starts(session_factor
     _run(session_factory, "set-cap", "Food", "500", "day 1", "--from", "2026-06-01")
     _pin_today(monkeypatch, date(2026, 2, 12))
 
-    budget = _run(session_factory, "budget", "--from", "2026-01-01").output.splitlines()[2:]
+    budget = _run(session_factory, "budget", "--from", "2026-01-01").output.splitlines()[2:-2]
     listed = _run(session_factory, "list-caps").output
 
     assert [line.split()[1:4] for line in budget] == [
@@ -366,9 +379,70 @@ def test_budget_shows_no_periods_from_the_end_date_and_cuts_the_running_one(sess
     result = _run(session_factory, "budget")
 
     assert result.exit_code == 0, result.output
-    rows = [line.split(None, 6) for line in result.output.splitlines()[2:]]
+    rows = [line.split(None, 6) for line in result.output.splitlines()[2:-2]]
     assert [r[:4] + [r[6]] for r in rows] == [
         ["Groceries", "2026-01-01", "2026-01-31", "300.00", "-"],
         ["Groceries", "2026-02-01", "2026-02-28", "300.00", "-"],
         ["Groceries", "2026-03-01", "2026-03-09", "300.00", "short"],
     ]
+    assert _summary(result.output)[1] == ("(uncapped)", "2026-01-01", "2026-05-12", "50.00")
+
+
+def test_budget_always_shows_both_summary_rows_even_with_no_caps_and_no_spending(session_factory, monkeypatch) -> None:
+    _ledger(session_factory)
+    _pin_today(monkeypatch, date(2026, 2, 12))
+
+    result = _run(session_factory, "budget")
+
+    assert result.exit_code == 0, result.output
+    assert _summary(result.output) == [
+        ("Unclassified Expense", "2026-01-01", "2026-02-12", "0.00"),
+        ("(uncapped)", "2026-01-01", "2026-02-12", "0.00"),
+    ]
+
+
+def test_an_unclassified_line_is_only_in_the_unclassified_row(session_factory, monkeypatch) -> None:
+    _ledger(session_factory)
+    _run(session_factory, "set-cap", "Food", "300", "day 1", "--from", "2026-01-01")
+    _spend(session_factory, "2026-01-05", "40", "Unclassified Expense")
+    _spend(session_factory, "2026-01-06", "15", "Groceries")
+    _pin_today(monkeypatch, date(2026, 2, 12))
+
+    result = _run(session_factory, "budget")
+
+    assert [(a, spent) for a, _, _, spent in _summary(result.output)] == [
+        ("Unclassified Expense", "40.00"),
+        ("(uncapped)", "15.00"),
+    ]
+
+
+def test_summary_rows_cover_only_the_requested_range(session_factory, monkeypatch) -> None:
+    _ledger(session_factory)
+    _spend(session_factory, "2026-01-05", "40", "Unclassified Expense")
+    _spend(session_factory, "2026-02-05", "7", "Unclassified Expense")
+    _spend(session_factory, "2026-01-06", "15", "Groceries")
+    _spend(session_factory, "2026-02-06", "3", "Groceries")
+    _pin_today(monkeypatch, date(2026, 2, 12))
+
+    result = _run(session_factory, "budget", "--from", "2026-02-01", "--to", "2026-02-10")
+
+    assert _summary(result.output) == [
+        ("Unclassified Expense", "2026-02-01", "2026-02-10", "7.00"),
+        ("(uncapped)", "2026-02-01", "2026-02-10", "3.00"),
+    ]
+
+
+def test_net_worth_history_is_unchanged_by_caps_and_budget(session_factory, monkeypatch) -> None:
+    _ledger(session_factory)
+    _run(session_factory, "move-state", "--from", "start", "BY")
+    _spend(session_factory, "2026-01-05", "40")
+    _pin_today(monkeypatch, date(2026, 2, 12))
+    args = ("net-worth-history", "--from", "2026-01-01", "--to", "2026-02-12")
+    before = _run(session_factory, *args)
+    assert before.exit_code == 0, before.output
+
+    _run(session_factory, "set-cap", "Food", "300", "day 1", "--from", "2026-01-01")
+    _run(session_factory, "end-cap", "Food", "--from", "2026-02-01")
+    _run(session_factory, "budget")
+
+    assert _run(session_factory, *args).output == before.output
