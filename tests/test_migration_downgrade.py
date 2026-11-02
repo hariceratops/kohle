@@ -37,6 +37,7 @@ BEFORE_SETTINGS = "d4e7a8c15b92"
 BEFORE_SAMPLING_RULES = "e5a1c3b7d902"
 BEFORE_STATE_ENTRIES = "f6b2d4c8e013"
 BEFORE_CAP_ENTRIES = "a7c3e9d5b124"
+BEFORE_RULE_CONDITIONS = "b8d4f0a6c235"
 
 
 @pytest.fixture
@@ -221,8 +222,8 @@ def test_downgrade_refuses_rather_than_dropping_the_rule_set(migrated_db) -> Non
         db,
         "INSERT INTO accounts (id, name, type, iban, parent_id, created_at) "
         "VALUES (2, 'Groceries', 'expense', NULL, NULL, '2026-01-01')",
-        "INSERT INTO rules (id, pattern, account_id, priority, created_at) "
-        "VALUES (1, 'REWE', 2, 100, '2026-01-01')",
+        "INSERT INTO rules (id, condition, account_id, priority, created_at) "
+        "VALUES (1, '{ any_field = \"REWE\" }', 2, 100, '2026-01-01')",
     )
 
     with pytest.raises(RuntimeError) as exc_info:
@@ -249,8 +250,8 @@ def test_downgrade_refuses_rather_than_dropping_classifications(migrated_db) -> 
         db,
         "INSERT INTO accounts (id, name, type, iban, parent_id, created_at) "
         "VALUES (3, 'Groceries', 'expense', NULL, NULL, '2026-01-01')",
-        "INSERT INTO rules (id, pattern, account_id, priority, created_at) "
-        "VALUES (1, 'ALDI', 3, 100, '2026-01-01')",
+        "INSERT INTO rules (id, condition, account_id, priority, created_at) "
+        "VALUES (1, '{ any_field = \"ALDI\" }', 3, 100, '2026-01-01')",
         "INSERT INTO classifications "
         "(id, journal_entry_id, proposed_account_id, matched_rule_id, final_account_id, "
         "corrected, created_at) "
@@ -579,3 +580,161 @@ def test_an_end_entry_must_null_amount_and_rule_together(migrated_db) -> None:
 
     with pytest.raises(sqlite3.IntegrityError):
         _exec(db, "INSERT INTO cap_entries (account_id, effective_from, amount) VALUES (2, '2026-01-01', 5)")
+
+
+_AWKWARD_PATTERNS = ["REWE", r"\d{4} MIETE", """it's "x" \\d""", "^DE89370400440532013000$", "tab\there"]
+
+
+@pytest.fixture
+def before_rule_conditions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Config, Path]:
+    db = tmp_path / "kohle.db"
+    db.touch()
+    monkeypatch.setenv("KOHLE_DB", str(db))
+    config = alembic_config()
+    command.upgrade(config, BEFORE_RULE_CONDITIONS)
+    return config, db
+
+
+def _seed_old_rules(db: Path) -> None:
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "INSERT INTO accounts (id, name, type, iban, parent_id, created_at) "
+        "VALUES (2, 'Groceries', 'expense', NULL, NULL, '2026-01-01')"
+    )
+    for position, pattern in enumerate(_AWKWARD_PATTERNS, start=1):
+        conn.execute(
+            "INSERT INTO rules (id, pattern, account_id, priority, created_at, deleted_at) "
+            "VALUES (?, ?, 2, ?, '2026-01-01', ?)",
+            (position, pattern, 100 + position, "2026-02-01" if position == 2 else None),
+        )
+    conn.execute(
+        "INSERT INTO units (id, kind, identifier, name, created_at) VALUES (1, 'currency', 'EUR', 'Euro', '2026-01-01')"
+    )
+    conn.execute(
+        "INSERT INTO journal_entries (id, entry_date, reference, description, created_at) "
+        "VALUES (1, '2026-03-01', 'ref-1', 'REWE', '2026-01-01')"
+    )
+    conn.execute(
+        "INSERT INTO classifications "
+        "(id, journal_entry_id, proposed_account_id, matched_rule_id, final_account_id, corrected, created_at) "
+        "VALUES (1, 1, 2, 3, 2, 0, '2026-01-01')"
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_rules_become_one_any_field_condition_keeping_id_and_classification(before_rule_conditions) -> None:
+    from kohle.use_cases.conditions import When, parse_stored_when
+
+    config, db = before_rule_conditions
+    _seed_old_rules(db)
+
+    command.upgrade(config, "head")
+
+    conn = sqlite3.connect(db)
+    rows = conn.execute("SELECT id, condition, account_id, priority, deleted_at, note FROM rules ORDER BY id").fetchall()
+    matched = conn.execute("SELECT matched_rule_id FROM classifications").fetchall()
+    columns = {r[1] for r in conn.execute("PRAGMA table_info(rules)")}
+    conn.close()
+    assert "pattern" not in columns
+    assert [r[0] for r in rows] == [1, 2, 3, 4, 5]
+    assert [r[2:4] for r in rows] == [(2, 101), (2, 102), (2, 103), (2, 104), (2, 105)]
+    assert [r[4] is not None for r in rows] == [False, True, False, False, False]
+    assert [r[5] for r in rows] == [None] * 5
+    assert [parse_stored_when(r[1]).unwrap() for r in rows] == [When(any_field=p) for p in _AWKWARD_PATTERNS]
+    assert matched == [(3,)]
+
+
+def test_rule_conditions_round_trip_when_every_rule_is_a_plain_pattern(before_rule_conditions) -> None:
+    config, db = before_rule_conditions
+    _seed_old_rules(db)
+    command.upgrade(config, "head")
+
+    command.downgrade(config, BEFORE_RULE_CONDITIONS)
+
+    conn = sqlite3.connect(db)
+    rows = conn.execute("SELECT id, pattern FROM rules ORDER BY id").fetchall()
+    conn.close()
+    assert rows == list(enumerate(_AWKWARD_PATTERNS, start=1))
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "UPDATE rules SET note = 'x' WHERE id = 1",
+        "UPDATE rules SET condition = '{ any_field = \"a\", other = \"b\" }' WHERE id = 1",
+    ],
+)
+def test_downgrade_refuses_rather_than_dropping_a_note_or_a_richer_condition(migrated_db, statement) -> None:
+    config, db = migrated_db
+    _exec(
+        db,
+        "INSERT INTO accounts (id, name, type, iban, parent_id, created_at) "
+        "VALUES (2, 'Groceries', 'expense', NULL, NULL, '2026-01-01')",
+        "INSERT INTO rules (id, condition, account_id, priority, created_at) "
+        "VALUES (1, '{ any_field = \"REWE\" }', 2, 100, '2026-01-01')",
+        statement,
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        command.downgrade(config, BEFORE_RULE_CONDITIONS)
+    assert "classification rule" in str(exc_info.value)
+    assert "condition" in {r[1] for r in sqlite3.connect(db).execute("PRAGMA table_info(rules)")}
+
+
+BEFORE_RERUN_RULE = "c9e1a7d35b02"
+
+
+def _seed_classification(db: Path, matched: str, rerun: str) -> None:
+    _exec(
+        db,
+        "INSERT INTO accounts (id, name, type, iban, parent_id, created_at) "
+        "VALUES (2, 'Groceries', 'expense', NULL, NULL, '2026-01-01')",
+        "INSERT INTO rules (id, condition, account_id, priority, created_at) "
+        "VALUES (1, '{ any_field = \"REWE\" }', 2, 100, '2026-01-01')",
+        "INSERT INTO journal_entries (id, entry_date, reference, description, created_at) "
+        "VALUES (1, '2026-03-01', 'ref-1', 'REWE', '2026-01-01')",
+        "INSERT INTO classifications "
+        "(id, journal_entry_id, proposed_account_id, matched_rule_id, rerun_rule_id, final_account_id, corrected, created_at) "
+        f"VALUES (1, 1, 2, {matched}, {rerun}, 2, 0, '2026-01-01')",
+    )
+
+
+def test_rerun_rule_column_has_its_foreign_key_and_check(migrated_db) -> None:
+    _, db = migrated_db
+    conn = sqlite3.connect(db)
+    columns = {r[1] for r in conn.execute("PRAGMA table_info(classifications)")}
+    foreign_keys = {(r[2], r[3]) for r in conn.execute("PRAGMA foreign_key_list(classifications)")}
+    ddl = conn.execute("SELECT sql FROM sqlite_master WHERE name = 'classifications'").fetchone()[0]
+    conn.close()
+
+    assert "rerun_rule_id" in columns
+    assert ("rules", "rerun_rule_id") in foreign_keys
+    assert "ck_classification_one_rule" in ddl
+    with pytest.raises(sqlite3.IntegrityError):
+        _seed_classification(db, matched="1", rerun="1")
+
+
+def test_rerun_rule_round_trips_when_no_line_was_moved(migrated_db) -> None:
+    config, db = migrated_db
+    _seed_classification(db, matched="1", rerun="NULL")
+
+    command.downgrade(config, BEFORE_RERUN_RULE)
+
+    conn = sqlite3.connect(db)
+    columns = {r[1] for r in conn.execute("PRAGMA table_info(classifications)")}
+    rows = conn.execute("SELECT id, matched_rule_id FROM classifications").fetchall()
+    conn.close()
+    assert "rerun_rule_id" not in columns
+    assert rows == [(1, 1)]
+
+
+def test_downgrade_refuses_rather_than_dropping_a_rerun_rule(migrated_db) -> None:
+    config, db = migrated_db
+    _seed_classification(db, matched="NULL", rerun="1")
+
+    with pytest.raises(RuntimeError) as exc_info:
+        command.downgrade(config, BEFORE_RERUN_RULE)
+
+    assert "moved by classify-rules" in str(exc_info.value)
+    assert "rerun_rule_id" in {r[1] for r in sqlite3.connect(db).execute("PRAGMA table_info(classifications)")}

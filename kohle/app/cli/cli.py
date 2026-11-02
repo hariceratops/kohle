@@ -1,3 +1,5 @@
+import os
+import tempfile
 import tomllib
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
@@ -13,10 +15,12 @@ from kohle.domain.domain_errors import (
     AccountNotFoundError,
     DeviceIsReader,
     DeviceKeyNotASetting,
+    MalformedRuleFile,
+    RulesChanged,
     StateNotASetting,
     UnknownDeviceKey,
 )
-from kohle.domain.models import DEFAULT_RULE_PRIORITY, START, AccountType, UnitKind
+from kohle.domain.models import START, AccountType, UnitKind
 from kohle.infrastructure.device_config import (
     DEVICE_KEYS,
     DeviceConfig,
@@ -28,7 +32,13 @@ from kohle.plugin.plugin_manager import load_plugins, load_price_plugins
 from kohle.use_cases.accounts import AddAccount, ListAccount, ListChildAccounts
 from kohle.use_cases.budgeting import EndCap, ListCaps, QueryBudget, SetCap
 from kohle.use_cases.bundesland import ListStates, MoveState
-from kohle.use_cases.classification import ListUnclassified, Reclassify
+from kohle.use_cases.classification import (
+    ApplyClassifyRules,
+    ListUnclassified,
+    PlanClassifyRules,
+    Reclassify,
+)
+from kohle.use_cases.conditions import render_when_inline
 from kohle.use_cases.journal import (
     BASE_CURRENCY,
     CrossUnitLine,
@@ -68,7 +78,15 @@ from kohle.use_cases.reporting import (
     summarise,
     unrealised_gain,
 )
-from kohle.use_cases.rules import AddRule, ListRules, RemoveRule
+from kohle.use_cases.rules import (
+    AddRule,
+    ApplyRuleFile,
+    ListRules,
+    PlanRuleFile,
+    RemoveRule,
+    RulePlan,
+    ShowRules,
+)
 from kohle.use_cases.sampling import ListSamplingRules, Role, SetSamplingRules
 from kohle.use_cases.settings import ListSettings, SetSettings
 from kohle.use_cases.splitting import (
@@ -732,19 +750,14 @@ def list_operations_cmd(make_session):
 @cli.command(writes=True)
 @click.argument("pattern")
 @click.argument("account")
-@click.option(
-    "--priority",
-    type=int,
-    default=DEFAULT_RULE_PRIORITY,
-    help="Lower numbers are evaluated first; ties break on rule id",
-)
 @click.pass_obj
-def add_rule_cmd(make_session, pattern: str, account: str, priority: int):
+def add_rule_cmd(make_session, pattern: str, account: str):
     add_rule = AddRule(make_session())
-    res = add_rule.execute(pattern, account, priority)
+    res = add_rule.execute(pattern, account)
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
-    click.echo(f"Added rule {res.unwrap().id}: {pattern} -> {account} (priority {priority})")
+    rule = res.unwrap()
+    click.echo(f"Added rule {rule.id}: {rule.condition} -> {account}")
 
 
 @cli.command(writes=False)
@@ -762,14 +775,139 @@ def list_rules_cmd(make_session):
     # rules fire in is only useful if it is the order they are printed in.
     rows = [
         {
-            "id": rule.id,
-            "priority": rule.priority,
-            "pattern": rule.pattern,
-            "account": rule.account.name,
+            "id": rule.rule_id,
+            "account": rule.account_name,
+            "conditions": render_when_inline(rule.when),
         }
         for rule in rules
     ]
     click.echo(tabulate(rows, headers="keys"))
+
+
+@cli.command(writes=False)
+@click.pass_obj
+def show_rules_cmd(make_session):
+    res = ShowRules(make_session()).execute()
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    click.echo(res.unwrap(), nl=False)
+
+
+def _plan_summary(plan: RulePlan) -> str:
+    renoted = plan.renoted
+    lines = [
+        f"{len(plan.added)} added, {len(plan.retired)} retired, {len(plan.reordered)} reordered, "
+        f"{len(renoted)} note changed, {plan.unchanged} unchanged"
+    ]
+    for item in plan.added:
+        lines.append(f"  rule {item.rule.position} (new) -> {item.rule.account} {render_when_inline(item.rule.when)}")
+    for rule in plan.retired:
+        lines.append(f"  id {rule.rule_id} -> {rule.account_name} {render_when_inline(rule.when)} (retired)")
+    for item in plan.rules:
+        if item.kept is not None and item.kept.rule_id in plan.reordered:
+            lines.append(f"  id {item.kept.rule_id} -> {item.kept.account_name}, now rule {item.rule.position}")
+    for item in renoted:
+        assert item.kept is not None
+        lines.append(f"  id {item.kept.rule_id} -> {item.kept.account_name}, note changed")
+    return "\n".join(lines)
+
+
+@cli.command(writes=True)
+@click.argument("file", type=click.File("rb"))
+@click.option("--yes", is_flag=True, help="Apply without asking.")
+@click.pass_obj
+def apply_rules_cmd(make_session, file, yes: bool):
+    try:
+        text = file.read().decode("utf-8")
+    except UnicodeDecodeError as err:
+        raise click.ClickException(f"{file.name} is not valid UTF-8: {err}") from err
+    planned = PlanRuleFile(make_session()).execute(text)
+    if planned.is_err:
+        raise click.ClickException(str(planned.unwrap_err()))
+    plan = planned.unwrap()
+    if plan.is_empty:
+        click.echo("No changes")
+        return
+    summary = _plan_summary(plan)
+    click.echo(summary)
+    if not yes:
+        click.confirm("Apply these changes?", abort=True)
+    applied = ApplyRuleFile(make_session()).execute(text, plan.base)
+    if applied.is_err:
+        raise click.ClickException(str(applied.unwrap_err()))
+    click.echo(f"Applied: {summary.splitlines()[0]}")
+
+
+_BANNER_MARKER = "# !! "
+_BANNER_HEIGHT = 2
+
+
+def _with_banner(body: str, err: MalformedRuleFile) -> str:
+    message = " ".join(str(err).split())
+    return (
+        f"{_BANNER_MARKER}kohle: not applied. Fix the problem below and save, or quit without saving to abort.\n"
+        f"{_BANNER_MARKER}{message}\n{body}"
+    )
+
+
+def _strip_banner(text: str) -> str:
+    lines = text.splitlines(keepends=True)
+    while lines and lines[0].startswith(_BANNER_MARKER):
+        lines.pop(0)
+    return "".join(lines)
+
+
+def _save_recovery_file(body: str) -> str:
+    fd, path = tempfile.mkstemp(prefix="kohle-rules-", suffix=".toml")
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(body)
+    return path
+
+
+def _rules_failure(err: Exception, body: str) -> click.ClickException:
+    if isinstance(err, RulesChanged):
+        return click.ClickException(f"{err}\nyour edits are saved in {_save_recovery_file(body)}")
+    return click.ClickException(str(err))
+
+
+@cli.command(writes=True)
+@click.pass_obj
+def edit_rules_cmd(make_session):
+    editor = os.environ.get("VISUAL") or os.environ.get("EDITOR")
+    if not editor:
+        raise click.ClickException("no editor: set $VISUAL or $EDITOR, or use show-rules and apply-rules")
+    shown = ShowRules(make_session()).execute()
+    if shown.is_err:
+        raise click.ClickException(str(shown.unwrap_err()))
+    text = shown.unwrap()
+
+    while True:
+        edited = click.edit(text, editor=editor, extension=".toml", require_save=True)
+        if edited is None:
+            click.echo("No changes; nothing applied")
+            return
+        body = _strip_banner(edited)
+        # The placeholder has the banner's height so a TOML syntax error's line
+        # number matches the buffer the user sees when the editor reopens.
+        planned = PlanRuleFile(make_session()).execute("#\n" * _BANNER_HEIGHT + body)
+        if planned.is_ok:
+            plan = planned.unwrap()
+            break
+        err = planned.unwrap_err()
+        if not isinstance(err, MalformedRuleFile):
+            raise _rules_failure(err, body)
+        text = _with_banner(body, err)
+
+    if plan.is_empty:
+        click.echo("No changes")
+        return
+    summary = _plan_summary(plan)
+    click.echo(summary)
+    click.confirm("Apply these changes?", abort=True)
+    applied = ApplyRuleFile(make_session()).execute(body, plan.base)
+    if applied.is_err:
+        raise _rules_failure(applied.unwrap_err(), body)
+    click.echo(f"Applied: {summary.splitlines()[0]}")
 
 
 @cli.command(writes=True)
@@ -808,6 +946,38 @@ def list_unclassified_cmd(make_session):
         for line in lines
     ]
     click.echo(tabulate(rows, headers="keys", floatfmt=".2f"))
+
+
+@cli.command(writes=True)
+@click.option("--yes", is_flag=True, help="Apply without asking.")
+@click.pass_obj
+def classify_rules_cmd(make_session, yes: bool):
+    planned = PlanClassifyRules(make_session()).execute()
+    if planned.is_err:
+        raise click.ClickException(str(planned.unwrap_err()))
+    moves = planned.unwrap()
+    if not moves:
+        click.echo("No unclassified line matches a rule")
+        return
+    rows = [
+        {
+            "entry_id": move.entry_id,
+            "date": move.entry_date,
+            "description": move.description,
+            "amount": move.amount,
+            "from": move.bucket_name,
+            "to": move.account_name,
+            "rule": move.rule_id,
+        }
+        for move in moves
+    ]
+    click.echo(tabulate(rows, headers="keys", floatfmt=".2f"))
+    if not yes:
+        click.confirm(f"Move {len(moves)} line(s)?", abort=True)
+    applied = ApplyClassifyRules(make_session()).execute(moves)
+    if applied.is_err:
+        raise click.ClickException(str(applied.unwrap_err()))
+    click.echo(f"Moved {len(moves)} line(s)")
 
 
 @cli.command(writes=True)

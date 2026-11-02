@@ -59,6 +59,15 @@ Functions return
 `Result[T, E]` rather than raising; domain errors are `Exception` subclasses
 used as error values and are not thrown.
 
+Classification rules store their condition tree as canonical TOML text
+(`rules.condition`) beside an `account_id` foreign key, and the
+`kohle/use_cases/conditions.py` module parses, renders and compiles it. The
+condition and the account are immutable: a change retires the rule and adds a
+new one, and only the priority and note are ever updated. `match_rule` is pure
+and session-free, so the import loop opens no second transaction. A
+`classify-rules` move is recorded in `classifications.rerun_rule_id`, never as
+a correction.
+
 ## Overrides
 
 Broad exception catching at transaction boundaries: `DbTransactionContext.run`

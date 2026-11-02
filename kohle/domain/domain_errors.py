@@ -185,8 +185,55 @@ class RuleNotFoundError(RuleError):
         return f"Rule id {self.rule_id} not found"
 
 
+class MalformedRuleFile(RuleError):
+    """One problem in a rule's conditions, named by rule position and key, as
+    MalformedStatementRow names a row and a field."""
+
+    def __init__(self, position: int | None, key: str | None, problem: str) -> None:
+        super().__init__()
+        self.position = position
+        self.key = key
+        self.problem = problem
+
+    def at(self, position: int) -> "MalformedRuleFile":
+        return MalformedRuleFile(position, self.key, self.problem)
+
+    def __str__(self) -> str:
+        where = ", ".join(
+            part for part in (f"rule {self.position}" if self.position is not None else None, self.key) if part
+        )
+        return f"{where}: {self.problem}" if where else self.problem
+
+
+class RulesChanged(RuleError):
+    def __init__(self, base: str, current: str) -> None:
+        super().__init__()
+        self.base = base
+        self.current = current
+
+    def __str__(self) -> str:
+        return (
+            "the rules changed after this file was rendered; run show-rules or edit-rules again, "
+            "or delete the base line to apply it over the current rules"
+        )
+
+
+class DuplicateRule(RuleError):
+    def __init__(self, rule_id: int) -> None:
+        super().__init__()
+        self.rule_id = rule_id
+
+    def __str__(self) -> str:
+        return f"rule {self.rule_id} already sends these lines to that account"
+
+
 class ClassificationError(Exception):
     pass
+
+
+class ClassifyPlanChanged(ClassificationError):
+    def __str__(self) -> str:
+        return "the ledger changed since the preview; run classify-rules again"
 
 
 class NoClassificationForEntry(ClassificationError):
@@ -355,6 +402,10 @@ RecordEntryError = AccountError | UnitError | JournalError | BaseCurrencyAsCross
 # ledger's own PostingToNonLeafAccount, checked at rule creation rather than at
 # the import it would otherwise break.
 AddRuleError = AccountError | RuleError | JournalError
+
+ApplyRulesError = RuleError | AccountError
+
+ClassifyRulesError = AccountError | JournalError | ClassificationError | RuleError
 
 BalanceError = AccountError | JournalError
 

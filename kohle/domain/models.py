@@ -198,30 +198,28 @@ class JournalLine(base, Archivable):
         return f"<JournalLine(id={self.id}, entry_id={self.entry_id}, account_id={self.account_id}, {side} {self.quantity}@{self.unit_price})>"
 
 
-DEFAULT_RULE_PRIORITY = 100
-
-
 class Rule(base, Archivable):
-    """Sends an imported line to an account when its pattern matches the line's
-    description or either counterparty field."""
+    """Sends an imported line to an account when its conditions hold."""
 
     __tablename__ = "rules"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    pattern: Mapped[str] = mapped_column(String, nullable=False)
+    # The rule's `when` table as one canonical TOML inline table. Immutable,
+    # like account_id: a classification's matched_rule_id must keep meaning
+    # what matched.
+    condition: Mapped[str] = mapped_column(String, nullable=False)
     account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"), nullable=False)
-    # Sparse default, so a rule can be inserted either side of an existing one
-    # without renumbering the set.
-    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=DEFAULT_RULE_PRIORITY)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False)
+    note: Mapped[str | None] = mapped_column(String, nullable=True)
 
     account: Mapped["Account"] = relationship("Account")
 
     # Deliberately unconstrained: retired rules stay in the table, so a unique
-    # pattern would stop a retired rule from being recreated, and a duplicate
+    # condition would stop a retired rule from being recreated, and a duplicate
     # rule is dead weight rather than a conflict — first match wins.
 
     def __repr__(self) -> str:
-        return f"<Rule(id={self.id}, pattern={self.pattern!r}, priority={self.priority}, account_id={self.account_id})>"
+        return f"<Rule(id={self.id}, condition={self.condition!r}, priority={self.priority}, account_id={self.account_id})>"
 
 
 class Classification(base, Archivable):
@@ -230,7 +228,8 @@ class Classification(base, Archivable):
     The labelled record a later ML phase trains on, which is why it is written
     from the first line ever classified: it cannot be reconstructed from the
     ledger afterwards. At import both account columns hold the same value on
-    both paths — they diverge only when a human corrects the line, and that
+    both paths — they diverge only when a human corrects the line or classify-rules
+    moves it (rerun_rule_id records which), and that
     divergence is the entire record, so they must not be collapsed into one.
     """
 
@@ -243,13 +242,18 @@ class Classification(base, Archivable):
     # meaningful value rather than a tombstone, which is why a removed rule is
     # retired rather than deleted.
     matched_rule_id: Mapped[int | None] = mapped_column(ForeignKey("rules.id"), nullable=True)
+    # The rule a classify-rules run moved this line with, set only on a line
+    # that fell through at import. Not folded into matched_rule_id:
+    # proposed_account_id must stay where the import entry put the line,
+    # because reclassify and split-line find the original line through it.
+    rerun_rule_id: Mapped[int | None] = mapped_column(ForeignKey("rules.id"), nullable=True)
     final_account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"), nullable=False)
     # Not derivable from proposed != final: correcting a line back onto the
     # account it started on leaves them equal on a row a human did touch.
     corrected: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     entry: Mapped["JournalEntry"] = relationship("JournalEntry")
-    matched_rule: Mapped["Rule | None"] = relationship("Rule")
+    matched_rule: Mapped["Rule | None"] = relationship("Rule", foreign_keys=[matched_rule_id])
     # Only the final account gets a relationship; the proposed one is never
     # displayed, and an unused relationship is a lazy load waiting to fire
     # after the session has closed. Both sides need foreign_keys= because they
@@ -261,6 +265,9 @@ class Classification(base, Archivable):
     # read needs no max-per-entry subquery.
     __table_args__ = (
         UniqueConstraint("journal_entry_id", name="uq_classification_journal_entry"),
+        # COALESCE(matched_rule_id, rerun_rule_id) is "the rule responsible",
+        # which is only well defined if at most one is set.
+        CheckConstraint("matched_rule_id IS NULL OR rerun_rule_id IS NULL", name="ck_classification_one_rule"),
     )
 
     def __repr__(self) -> str:

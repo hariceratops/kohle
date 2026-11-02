@@ -47,9 +47,8 @@ from kohle.services.journal_services import (
     existing_references_service,
     query_lines_by_period_service,
 )
-from kohle.services.rule_services import list_rules_service
 from kohle.services.unit_services import get_unit_by_identifier_service
-from kohle.use_cases.rules import compile_rules, match_rule
+from kohle.use_cases.rules import compile_rules, match_rule, stored_rules
 from kohle.use_cases.units import get_or_create_unit
 
 BASE_CURRENCY = "EUR"
@@ -415,7 +414,7 @@ class ImportStatement(UnitOfWork[int, ImportStatementError]):
 
             # Loaded and compiled once for the whole statement: a query per row
             # is N x M, and re.compile per row recompiles a fixed rule set.
-            rules_res = list_rules_service(ctx)
+            rules_res = stored_rules(ctx)
             if rules_res.is_err:
                 return Result.err(rules_res.unwrap_err())
             compiled = compile_rules(rules_res.unwrap())
@@ -430,7 +429,7 @@ class ImportStatement(UnitOfWork[int, ImportStatementError]):
                             _optional_str(row.counterparty_name),
                             _optional_str(row.counterparty_iban),
                         )
-                        matched = match_rule(compiled, row.description, counterparty)
+                        matched = match_rule(compiled, row.description, counterparty, amount)
                         # A matched rule whose account has since gained a child fails
                         # the import loudly through validate_lines, rather than falling
                         # back to the bucket: a silent fallback would leave the user's

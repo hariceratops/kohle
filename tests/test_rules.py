@@ -18,20 +18,21 @@ from kohle.domain.domain_errors import (
     PostingToNonLeafAccount,
     RuleNotFoundError,
 )
-from kohle.domain.models import DEFAULT_RULE_PRIORITY, AccountType, Operation, Rule
+from kohle.domain.models import AccountType, Operation, Rule
 from kohle.use_cases.accounts import AddAccount
+from kohle.use_cases.conditions import When
 from kohle.use_cases.operations import ListOperations
-from kohle.use_cases.rules import AddRule, ListRules, RemoveRule
+from kohle.use_cases.rules import RULE_PRIORITY_STEP, AddRule, ListRules, RemoveRule
 
 
 def test_add_rule_success(session: Session) -> None:
     AddAccount(session).execute("Groceries", AccountType.expense)
 
-    result = AddRule(session).execute("REWE", "Groceries", 50)
+    result = AddRule(session).execute("REWE", "Groceries")
     assert result.is_ok
     rule = result.unwrap()
-    assert rule.pattern == "REWE"
-    assert rule.priority == 50
+    assert rule.condition == '{ any_field = "REWE" }'
+    assert rule.priority == RULE_PRIORITY_STEP
 
     operations = ListOperations(session).execute().unwrap()
     assert operations[0] == Operation(
@@ -78,24 +79,35 @@ def test_add_rule_rejects_a_non_leaf_account(session: Session) -> None:
     assert isinstance(result.unwrap_err(), PostingToNonLeafAccount)
 
 
-def test_add_rule_defaults_the_priority(session: Session) -> None:
+def test_add_rule_appends_after_the_last_live_rule(session: Session) -> None:
     AddAccount(session).execute("Groceries", AccountType.expense)
 
-    result = AddRule(session).execute("REWE", "Groceries")
-    assert result.is_ok
-    assert result.unwrap().priority == DEFAULT_RULE_PRIORITY
+    first = AddRule(session).execute("REWE", "Groceries").unwrap()
+    second = AddRule(session).execute("ALDI", "Groceries").unwrap()
+    third = AddRule(session).execute("LIDL", "Groceries").unwrap()
+
+    assert [first.priority, second.priority, third.priority] == [100, 200, 300]
+
+
+def test_add_rule_appends_after_the_last_live_rule_not_a_retired_one(session: Session) -> None:
+    AddAccount(session).execute("Groceries", AccountType.expense)
+    AddRule(session).execute("REWE", "Groceries")
+    last = AddRule(session).execute("ALDI", "Groceries").unwrap()
+    RemoveRule(session).execute(last.id)
+
+    assert AddRule(session).execute("LIDL", "Groceries").unwrap().priority == 200
 
 
 def test_list_rules_renders_them_in_evaluation_order(session: Session) -> None:
     AddAccount(session).execute("Groceries", AccountType.expense)
-    AddRule(session).execute(".", "Groceries", 900)
-    AddRule(session).execute("REWE", "Groceries", 10)
+    AddRule(session).execute(".", "Groceries")
+    AddRule(session).execute("REWE", "Groceries")
 
     rules = ListRules(session).execute().unwrap()
-    assert [rule.pattern for rule in rules] == ["REWE", "."]
+    assert [rule.when for rule in rules] == [When(any_field="."), When(any_field="REWE")]
     # The account name is read after the session closes, so the listing has to
     # arrive with it already loaded.
-    assert [rule.account.name for rule in rules] == ["Groceries", "Groceries"]
+    assert [rule.account_name for rule in rules] == ["Groceries", "Groceries"]
 
 
 def test_remove_rule_retires_a_rule_that_has_already_fired(session: Session) -> None:
@@ -106,9 +118,9 @@ def test_remove_rule_retires_a_rule_that_has_already_fired(session: Session) -> 
     assert result.is_ok
 
     assert ListRules(session).execute().unwrap() == []
-    # Retired, not gone: a classification that named this rule keeps a pattern
+    # Retired, not gone: a classification that named this rule keeps a condition
     # to explain itself with.
-    assert session.query(Rule).filter(Rule.id == rule.id).one().pattern == "REWE"
+    assert session.query(Rule).filter(Rule.id == rule.id).one().condition == '{ any_field = "REWE" }'
 
     # A soft delete is recorded as a delete, not as an update of deleted_at:
     # the audit trail exists to say what happened.

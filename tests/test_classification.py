@@ -43,7 +43,7 @@ def test_lists_the_fallen_through_line_and_omits_the_matched_one(session: Sessio
     bucket = add_account_service(ctx, UNCLASSIFIED_EXPENSE, AccountType.expense).unwrap().id
     add_account_service(ctx, UNCLASSIFIED_INCOME, AccountType.income)
     eur = add_unit_service(ctx, "EUR", "Euro", UnitKind.currency).unwrap().id
-    rule = add_rule_service(ctx, "REWE", groceries, 100).unwrap().id
+    rule = add_rule_service(ctx, '{ any_field = "REWE" }', groceries, 100).unwrap().id
 
     def post(reference: str, counterpart_id: int, description: str) -> int:
         value = Decimal(80)

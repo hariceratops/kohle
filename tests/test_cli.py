@@ -797,15 +797,29 @@ def test_list_rules_renders_evaluation_order_with_the_id_remove_rule_takes(
     runner = CliRunner()
     runner.invoke(cli, ["add-account", "Groceries", "--type", "expense"], obj=session_factory)
     runner.invoke(cli, ["add-account", "Misc", "--type", "expense"], obj=session_factory)
-    runner.invoke(cli, ["add-rule", ".", "Misc", "--priority", "900"], obj=session_factory)
-    runner.invoke(cli, ["add-rule", "REWE|ALDI", "Groceries", "--priority", "10"], obj=session_factory)
+    runner.invoke(cli, ["add-rule", ".", "Misc"], obj=session_factory)
+    runner.invoke(cli, ["add-rule", "REWE|ALDI", "Groceries"], obj=session_factory)
 
     result = runner.invoke(cli, ["list-rules"], obj=session_factory)
 
     assert result.exit_code == 0
-    assert result.output.splitlines()[0].split() == ["id", "priority", "pattern", "account"]
-    rows = [line.split() for line in result.output.splitlines()[2:]]
-    assert rows == [["2", "10", "REWE|ALDI", "Groceries"], ["1", "900", ".", "Misc"]]
+    assert result.output.splitlines()[0].split() == ["id", "account", "conditions"]
+    rows = [line.split(maxsplit=2) for line in result.output.splitlines()[2:]]
+    assert rows == [
+        ["1", "Misc", '{ any_field = "." }'],
+        ["2", "Groceries", '{ any_field = "REWE|ALDI" }'],
+    ]
+
+
+def test_add_rule_has_no_priority_option_and_reports_the_condition(session_factory: sessionmaker) -> None:
+    runner = CliRunner()
+    runner.invoke(cli, ["add-account", "Groceries", "--type", "expense"], obj=session_factory)
+
+    refused = runner.invoke(cli, ["add-rule", "REWE", "Groceries", "--priority", "10"], obj=session_factory)
+    added = runner.invoke(cli, ["add-rule", "REWE|ALDI", "Groceries"], obj=session_factory)
+
+    assert refused.exit_code == 2
+    assert added.output.strip() == 'Added rule 1: { any_field = "REWE|ALDI" } -> Groceries'
 
 
 def test_list_rules_empty_says_so_instead_of_printing_a_blank_line(

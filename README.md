@@ -303,40 +303,147 @@ handle-failure` works and a redirect captures results rather than errors.
 ### Classification rules
 
 An imported line that matches no rule lands in `Unclassified Expense` or
-`Unclassified Income`. A rule sends it somewhere better:
+`Unclassified Income`. A rule sends it somewhere better. A rule is a set of
+conditions and a target account; the first rule whose conditions all hold wins.
 
 ```bash
 kohle-cli add-rule 'REWE|ALDI|LIDL' Groceries
-kohle-cli add-rule '^DE89370400440532013000$' Rent --priority 10
 kohle-cli list-rules
 kohle-cli remove-rule 3
 ```
 
-The pattern is a Python regular expression, matched case-insensitively against
-the description, the counterparty name and the counterparty IBAN, each on its
-own — which is what makes `^DE89...$` mean "this exact counterparty IBAN".
-`(?-i:REWE)` restores case sensitivity inside a pattern. A malformed pattern is
-refused when the rule is created, naming the position:
+`add-rule PATTERN ACCOUNT` is the quick form for the common case: it creates a
+rule whose only condition is `any_field = PATTERN` (below) and prints
+`Added rule 3: { any_field = "REWE|ALDI|LIDL" } -> Groceries`. Anything richer
+is written in the rule file with `edit-rules` or `apply-rules`. A malformed
+pattern is refused when the rule is created, naming the position:
 
 ```
 $ kohle-cli add-rule 'REWE[' Groceries
 Error: Invalid rule pattern 'REWE[': unterminated character set at position 4
 ```
 
-Rules are evaluated lowest `priority` first, ties broken by id, and the first
-match wins — which is the order `list-rules` prints them in. `--priority`
-defaults to 100, leaving room to slot a rule either side of an existing one
-without renumbering.
+Adding a rule with the same conditions and account as a live one is refused
+(`rule 3 already sends these lines to that account`). The target must be a leaf
+account, since only leaves can be posted to.
 
-The target must be a leaf account, since only leaves can be posted to.
-`remove-rule` retires a rule rather than erasing it: past classifications keep
-naming the pattern that made them.
+#### Conditions
+
+A rule's `when` table holds one or more of these keys, and **all** of them must
+hold. Patterns are Python regular expressions, matched with `search` and
+case-insensitively; `(?-i:REWE)` restores case sensitivity inside a pattern.
+
+| Key | Holds when |
+|---|---|
+| `description` | the pattern matches the line's description |
+| `counterparty` | the pattern matches the counterparty name |
+| `iban` | the counterparty IBAN equals the value, ignoring spaces and case; not a pattern |
+| `amount` | the absolute amount is within `{ min = 400, max = 600 }`, bounds inclusive, either one optional |
+| `direction` | `"in"` for money received, `"out"` for money spent; a zero amount is neither |
+| `any_field` | the pattern matches the description, the counterparty name or the counterparty IBAN, each on its own, so `^DE89...$` means "this exact IBAN" |
+| `any` | at least one of the listed tables holds (OR) |
+| `not` | the table does not hold |
+
+A line with no counterparty fails `counterparty` and `iban`, so `not` over them
+holds. Amount bounds are exact decimals and are never negative: the range is on
+the absolute amount, and `direction` carries the sign.
+
+#### The rule file
+
+`show-rules` prints the whole rule set as TOML, in evaluation order, and
+`apply-rules` and `edit-rules` read the same layout:
+
+```toml
+base = "3f9c1a2b7d4e5f60"
+
+[[rule]]
+account = "Rent"
+note = "landlord, not the deposit"
+[rule.when]
+iban = "DE89370400440532013000"
+amount = { min = 400, max = 600 }
+direction = "out"
+
+[[rule]]
+account = "Groceries"
+[rule.when]
+any = [
+  { counterparty = "REWE|ALDI" },
+  { description = "LIDL", amount = { max = 200 } },
+]
+not = { description = "Pfand" }
+```
+
+Each `[[rule]]` has an `account`, an optional `note` and a `[rule.when]` table;
+rules are evaluated top to bottom. `any` is an array of tables and `not` a
+table, and either may nest. Each OR alternative, and each `not` table, must be
+written on a single line, because TOML inline tables cannot span lines. Rule
+ids never appear in the file. A rule with no conditions, an unknown key, an
+unknown or non-leaf account, or an invalid pattern is refused, naming the rule
+and key (`rule 2, when.any[1].iban: ...`).
+
+`base` fingerprints the rule set the file was rendered from. A file whose `base`
+no longer matches the stored rules is refused; delete the `base` line to apply
+it over the current rules anyway.
+
+`apply-rules FILE` replaces the rule set with the file's, after printing a
+summary and asking `Apply these changes?`; `--yes` skips the question:
+
+```
+1 added, 1 retired, 1 reordered, 0 note changed, 4 unchanged
+  rule 2 (new) -> Groceries { any_field = "EDEKA" }
+  id 5 -> Groceries { description = "Pfand" } (retired)
+  id 7 -> Rent, now rule 1
+```
+
+Rules have a content-based identity: a rule whose conditions and account are
+unchanged keeps its id, wherever it moves in the file, and a note-only edit
+updates the note. Any other change to the conditions or the account retires the
+old rule and adds a new one, so a past classification keeps naming the
+conditions that made it. A retired rule is never revived: a file that restores
+its content adds a new rule. Applying `show-rules` output reports `No
+changes`, and two rules with the same conditions and account in one file are
+refused. The whole apply is one audit-trail group, or nothing.
+
+`edit-rules` opens the same file in `$VISUAL` or `$EDITOR`, then shows the
+summary and asks before applying. Saving nothing prints `No changes; nothing
+applied`. A mistake reopens the editor with the problem in a banner at the top
+of the file; quit without saving to abort. If the stored rules changed while you
+edited, your text is saved to a file named in the error rather than lost.
+
+`list-rules` prints `id`, `account` and `conditions` per rule, in evaluation
+order, the conditions in the compact form `{ any_field = "REWE|ALDI|LIDL" }`;
+notes are not shown. `remove-rule` retires a rule rather than erasing it.
 
 Rules are applied while a statement is imported: each row takes the account its
 first matching rule names, and a row matching nothing lands in its unclassified
 bucket exactly as it did before any rule existed. If a rule's target has since
 gained a child account the import fails naming it, rather than quietly falling
 back to the bucket and leaving the rule silently disabled.
+
+```bash
+kohle-cli classify-rules
+```
+
+Runs the current rules over the lines still sitting in an unclassified bucket
+and moves those that now match. Only untouched fall-throughs are considered:
+lines already matched by a rule, corrected by hand, moved by an earlier run or
+split are left alone. It prints a preview, then asks `Move N line(s)?` (`--yes`
+skips the question):
+
+```
+  entry_id  date        description        amount  from                  to         rule
+----------  ----------  -----------------  ------  --------------------  ---------  ----
+        42  2026-09-03  REWE SAGT DANKE    -23.40  Unclassified Expense  Groceries     3
+```
+
+Each move posts a reversing pair like `reclassify`, dated at the original entry.
+It is recorded in the classification's `rerun_rule_id` and does not set
+`corrected`, so a rule's move is never mistaken for a human's. Nothing to move
+prints `No unclassified line matches a rule`.
+
+The command names above are flat for now and may change under the
+`cli-command-naming` work.
 
 Every imported row is recorded either way — what was proposed, which rule
 matched (none, for a fall-through), where it landed, and whether a human has
