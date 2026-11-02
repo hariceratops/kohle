@@ -1,4 +1,4 @@
-"""Layer 2/3 — add-rule, show-rules, apply-rules, edit-rules through the CLI (design §17.3, §17.4, §17.6)."""
+"""Layer 2/3 — show-rules, apply-rules, edit-rules through the CLI (design §17.3, §17.4, §17.6)."""
 
 import re
 import tomllib
@@ -24,30 +24,15 @@ from kohle.plugin.importer_plugin import CashRow, StatementImporterPlugin
 from kohle.services.journal_services import Counterparty
 from kohle.use_cases import rules
 from kohle.use_cases.conditions import When, compile_when
-from kohle.use_cases.rules import ApplyRuleFile, ListRules, PlanRuleFile
-
-
-def test_add_rule_appends_to_the_end_of_the_order_and_has_no_priority_option(
-    session_factory: sessionmaker,
-) -> None:
-    runner = CliRunner()
-    runner.invoke(cli, ["add-account", "Groceries", "--type", "expense"], obj=session_factory)
-    for pattern in ("REWE", "ALDI", "LIDL"):
-        assert runner.invoke(cli, ["add-rule", pattern, "Groceries"], obj=session_factory).exit_code == 0
-    runner.invoke(cli, ["remove-rule", "2"], obj=session_factory)
-    runner.invoke(cli, ["add-rule", "EDEKA", "Groceries"], obj=session_factory)
-
-    listing = runner.invoke(cli, ["list-rules"], obj=session_factory).output.splitlines()[2:]
-
-    assert [line.split()[0] for line in listing] == ["1", "3", "4"]
-    assert runner.invoke(cli, ["add-rule", "X", "Groceries", "--priority", "1"], obj=session_factory).exit_code == 2
+from kohle.use_cases.rules import ApplyRuleFile, PlanRuleFile, ShowRules
+from tests.rule_helpers import add_rule
 
 
 def _seed(runner: CliRunner, session_factory: sessionmaker) -> None:
     for name in ("Groceries", "Rent"):
         runner.invoke(cli, ["add-account", name, "--type", "expense"], obj=session_factory)
-    runner.invoke(cli, ["add-rule", "REWE|ALDI", "Groceries"], obj=session_factory)
-    runner.invoke(cli, ["add-rule", r"^DE89\d+$", "Rent"], obj=session_factory)
+    add_rule(session_factory(), "REWE|ALDI", "Groceries")
+    add_rule(session_factory(), r"^DE89\d+$", "Rent")
 
 
 def test_show_rules_prints_the_set_as_toml_in_evaluation_order_without_ids(
@@ -74,12 +59,20 @@ def test_show_rules_base_depends_on_content_only(session_factory: sessionmaker) 
     _seed(runner, session_factory)
     before = tomllib.loads(runner.invoke(cli, ["show-rules"], obj=session_factory).output)["base"]
 
-    runner.invoke(cli, ["add-rule", "LIDL", "Groceries"], obj=session_factory)
-    changed = tomllib.loads(runner.invoke(cli, ["show-rules"], obj=session_factory).output)["base"]
-    runner.invoke(cli, ["remove-rule", "3"], obj=session_factory)
-    runner.invoke(cli, ["add-rule", "LIDL", "Groceries"], obj=session_factory)
-    runner.invoke(cli, ["remove-rule", "4"], obj=session_factory)
-    restored = tomllib.loads(runner.invoke(cli, ["show-rules"], obj=session_factory).output)["base"]
+    # Without its base line the original is applied over the current rules.
+    shown = runner.invoke(cli, ["show-rules"], obj=session_factory).output
+    without_base = re.sub(r"^base = .*\n", "", shown, flags=re.MULTILINE)
+
+    def base() -> str:
+        return tomllib.loads(runner.invoke(cli, ["show-rules"], obj=session_factory).output)["base"]
+
+    add_rule(session_factory(), "LIDL", "Groceries")
+    changed = base()
+    ApplyRuleFile(session_factory()).execute(without_base, changed).unwrap()
+    add_rule(session_factory(), "LIDL", "Groceries")
+    assert base() == changed
+    ApplyRuleFile(session_factory()).execute(without_base, changed).unwrap()
+    restored = base()
 
     assert changed != before
     assert restored == before
@@ -116,27 +109,12 @@ def _apply(runner: CliRunner, session_factory: sessionmaker, tmp_path: Path, tex
     return runner.invoke(cli, ["apply-rules", _write(tmp_path, text), *args], obj=session_factory, **kwargs)
 
 
-def test_add_rule_refuses_a_duplicate_of_a_live_rule_only(session_factory: sessionmaker) -> None:
-    runner = CliRunner()
-    _seed(runner, session_factory)
-
-    duplicate = runner.invoke(cli, ["add-rule", "REWE|ALDI", "Groceries"], obj=session_factory)
-    other_account = runner.invoke(cli, ["add-rule", "REWE|ALDI", "Rent"], obj=session_factory)
-    runner.invoke(cli, ["remove-rule", "1"], obj=session_factory)
-    after_retiring = runner.invoke(cli, ["add-rule", "REWE|ALDI", "Groceries"], obj=session_factory)
-
-    assert duplicate.exit_code == 1
-    assert "rule 1 already sends these lines to that account" in duplicate.output
-    assert other_account.exit_code == 0
-    assert after_retiring.exit_code == 0
-
-
 def test_show_rules_piped_to_apply_rules_reports_no_changes_and_writes_nothing(
     session_factory: sessionmaker, tmp_path: Path
 ) -> None:
     runner = CliRunner()
     _seed(runner, session_factory)
-    runner.invoke(cli, ["add-rule", "LIDL", "Groceries"], obj=session_factory)
+    add_rule(session_factory(), "LIDL", "Groceries")
     shown = runner.invoke(cli, ["show-rules"], obj=session_factory).output
     groups = _count(session_factory, OperationGroup)
     operations = _count(session_factory, Operation)
@@ -182,7 +160,7 @@ def test_apply_keeps_ids_on_a_move_and_a_note_edit_and_retires_a_changed_rule(
 ) -> None:
     runner = CliRunner()
     _seed(runner, session_factory)
-    runner.invoke(cli, ["add-rule", "LIDL", "Groceries"], obj=session_factory)
+    add_rule(session_factory(), "LIDL", "Groceries")
     text = (
         '[[rule]]\naccount = "Groceries"\n[rule.when]\nany_field = "LIDL"\n'
         '[[rule]]\naccount = "Groceries"\nnote = "weekly"\n[rule.when]\nany_field = "REWE|ALDI"\n'
@@ -225,7 +203,7 @@ def test_apply_rules_refuses_when_the_stored_rules_changed_after_the_file_was_re
     runner = CliRunner()
     _seed(runner, session_factory)
     rendered = runner.invoke(cli, ["show-rules"], obj=session_factory).output
-    runner.invoke(cli, ["add-rule", "LIDL", "Groceries"], obj=session_factory)
+    add_rule(session_factory(), "LIDL", "Groceries")
     before = _live(session_factory)
     groups = _count(session_factory, OperationGroup)
 
@@ -244,7 +222,7 @@ def test_a_change_between_plan_and_apply_is_refused_with_nothing_written(
     _seed(runner, session_factory)
     text = '[[rule]]\naccount = "Rent"\n[rule.when]\nany_field = "NEW"\n'
     plan = PlanRuleFile(session_factory()).execute(text).unwrap()
-    runner.invoke(cli, ["add-rule", "LIDL", "Groceries"], obj=session_factory)
+    add_rule(session_factory(), "LIDL", "Groceries")
     before = _live(session_factory)
 
     result = ApplyRuleFile(session_factory()).execute(text, plan.base)
@@ -292,7 +270,7 @@ def test_a_fault_on_the_second_add_rolls_everything_back(
     groups = _count(session_factory, OperationGroup)
     operations = _count(session_factory, Operation)
 
-    result = ApplyRuleFile(session_factory()).execute(text, rules.rule_set_base(_stored(session_factory)))
+    result = ApplyRuleFile(session_factory()).execute(text, _base(session_factory))
 
     assert str(result.unwrap_err()) == "disk on fire"
     assert len(calls) == 2
@@ -301,10 +279,10 @@ def test_a_fault_on_the_second_add_rolls_everything_back(
     assert _count(session_factory, Operation) == operations
 
 
-def _stored(session_factory: sessionmaker):
+def _base(session_factory: sessionmaker) -> str:
     session = session_factory()
     try:
-        return ListRules(session).execute().unwrap()
+        return tomllib.loads(ShowRules(session).execute().unwrap())["base"]
     finally:
         session.close()
 
@@ -689,7 +667,7 @@ def test_a_rule_added_while_editing_is_refused_and_the_users_text_is_saved(
     edited_text = {}
 
     def capture(text: str) -> str:
-        assert CliRunner().invoke(cli, ["add-rule", "LIDL", "Groceries"], obj=session_factory).exit_code == 0
+        add_rule(session_factory(), "LIDL", "Groceries")
         edited_text["value"] = text + "\n" + _NEW_RULE
         return edited_text["value"]
 

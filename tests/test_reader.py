@@ -13,7 +13,6 @@ from kohle.db.schema import open_ledger
 from kohle.domain.models import Account, AccountType, OperationGroup
 from kohle.use_cases.accounts import AddAccount
 
-
 STATEMENT = Path(__file__).parent / "fixtures" / "deutsche_bank_statement.csv"
 
 _WRITE_ARGV: dict[str, list[str]] = {
@@ -25,8 +24,6 @@ _WRITE_ARGV: dict[str, list[str]] = {
     "import-statement": ["import-statement", "deutsche-bank", "Cash", str(STATEMENT)],
     "record": ["record", "2026-03-02", "Rewe", "10", "--from", "Cash", "--to", "Groceries"],
     "record-split": ["record-split", "2026-03-02", "Rewe", "--line", "Cash:10:EUR:1:credit", "--line", "Groceries:10:EUR:1:debit"],
-    "add-rule": ["add-rule", "ALDI", "Groceries"],
-    "remove-rule": ["remove-rule", "1"],
     # click opens FILE before invoke runs, so it has to exist; the refusal
     # comes before the body ever reads it.
     "apply-rules": ["apply-rules", str(STATEMENT), "--yes"],
@@ -62,7 +59,6 @@ def _read_argv(tmp_path: Path) -> dict[str, list[str]]:
         "entries-in-period": ["entries-in-period", "Cash", "2026-03-01", "2026-03-31"],
         "balance": ["balance", "Cash"],
         "list-operations": ["list-operations"],
-        "list-rules": ["list-rules"],
         "show-rules": ["show-rules"],
         "list-unclassified": ["list-unclassified"],
         "who-owes-what": ["who-owes-what"],

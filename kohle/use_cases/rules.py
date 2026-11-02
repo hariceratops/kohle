@@ -1,5 +1,4 @@
 import hashlib
-import re
 import tomllib
 from bisect import bisect_left
 from collections import deque
@@ -11,13 +10,8 @@ from itertools import pairwise
 from kohle.core.result import Result
 from kohle.domain.domain_errors import (
     AccountNotFoundError,
-    AddRuleError,
     ApplyRulesError,
-    DuplicateRule,
-    EmptyRulePattern,
-    InvalidRulePattern,
     MalformedRuleFile,
-    PostingToNonLeafAccount,
     RuleError,
     RulesChanged,
 )
@@ -36,7 +30,6 @@ from kohle.services.rule_services import (
     update_rule_service,
 )
 from kohle.use_cases.conditions import (
-    PATTERN_FLAGS,
     Predicate,
     When,
     compile_when,
@@ -448,76 +441,9 @@ def match_rule(
     return None
 
 
-def _add_unless_duplicate(
-    ctx: DbTransactionContext, live: Sequence[StoredRule], when: When, account_id: int
-) -> Result[Rule, RuleError]:
-    for rule in live:
-        if rule.when == when and rule.account_id == account_id:
-            return Result.err(DuplicateRule(rule.rule_id))
-    return add_rule_service(
-        ctx,
-        render_when_inline(when),
-        account_id,
-        # The list is in evaluation order, so the last rule holds the highest
-        # priority.
-        live[-1].priority + RULE_PRIORITY_STEP if live else RULE_PRIORITY_STEP,
-    )
-
-
-class AddRule(UnitOfWork[Rule, AddRuleError]):
-    def execute(self, pattern: str, account_name: str) -> Result[Rule, AddRuleError]:
-        def use_case(ctx: DbTransactionContext) -> Result[Rule, AddRuleError]:
-            text = pattern.strip()
-            if not text:
-                return Result.err(EmptyRulePattern())
-
-            try:
-                # Compiled to reject a malformed pattern here rather than at the
-                # import it would otherwise break. The compiled object is
-                # discarded: the matcher compiles the rule set of the day.
-                re.compile(text, PATTERN_FLAGS)
-            except re.error as err:
-                return Result.err(InvalidRulePattern(text, str(err)))
-
-            account_res = get_account_by_name_service(ctx, account_name)
-            if account_res.is_err:
-                return Result.err(account_res.unwrap_err())
-            account = account_res.unwrap()
-            children_res = account_has_children_service(ctx, account.id)
-            if children_res.is_err:
-                return Result.err(children_res.unwrap_err())
-            # A rule aimed at a parent can only ever produce entries
-            # validate_lines refuses, so refusing the rule turns a broken import
-            # into a refused rule.
-            if children_res.unwrap():
-                return Result.err(PostingToNonLeafAccount(account.id))
-            live_res = stored_rules(ctx)
-            if live_res.is_err:
-                return Result.err(live_res.unwrap_err())
-            added = _add_unless_duplicate(ctx, live_res.unwrap(), When(any_field=text), account.id)
-            if added.is_err:
-                return Result.err(added.unwrap_err())
-            return Result.ok(added.unwrap())
-
-        return self._run(use_case)
-
-
-class ListRules(UnitOfWork[list[StoredRule], RuleError]):
-    def execute(self) -> Result[list[StoredRule], RuleError]:
-        return self._run(stored_rules)
-
-
 class ShowRules(UnitOfWork[str, RuleError]):
     def execute(self) -> Result[str, RuleError]:
         def use_case(ctx: DbTransactionContext) -> Result[str, RuleError]:
             return stored_rules(ctx).map(render_rule_file)
-
-        return self._run(use_case)
-
-
-class RemoveRule(UnitOfWork[Rule, RuleError]):
-    def execute(self, rule_id: int) -> Result[Rule, RuleError]:
-        def use_case(ctx: DbTransactionContext) -> Result[Rule, RuleError]:
-            return remove_rule_service(ctx, rule_id)
 
         return self._run(use_case)

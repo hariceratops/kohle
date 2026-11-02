@@ -360,8 +360,8 @@ def test_changing_rules_never_reclassifies_anything(ledger: _Ledger) -> None:
     classifications = ledger.count(Classification)
 
     ledger.apply_rules(_rules_file(("Groceries", "ONE")))
-    assert ledger.cli("add-rule", "TWO", "Rent").exit_code == 0
-    assert ledger.cli("remove-rule", "2").exit_code == 0
+    ledger.apply_rules(_rules_file(("Groceries", "ONE"), ("Rent", "TWO")))
+    ledger.apply_rules(_rules_file(("Groceries", "ONE")))
 
     assert ledger.count(JournalEntry) == entries
     assert ledger.count(Classification) == classifications

@@ -17,7 +17,7 @@ from kohle.domain.models import AccountType, Operation, OperationGroup
 from kohle.use_cases.accounts import AddAccount
 from kohle.use_cases.classification import ListUnclassified, Reclassify
 from kohle.use_cases.journal import ImportStatement, QueryAccountBalance
-from kohle.use_cases.rules import AddRule
+from tests.rule_helpers import add_rule
 
 
 def test_classification_scenario(session: Session, cash_rows, statement_row) -> None:
@@ -26,8 +26,8 @@ def test_classification_scenario(session: Session, cash_rows, statement_row) -> 
     AddAccount(session).execute("Books", AccountType.expense)
 
     # Step 1: a couple of rules against leaf expense accounts.
-    assert AddRule(session).execute("REWE", "Groceries").is_ok
-    assert AddRule(session).execute("AMZN", "Books").is_ok
+    add_rule(session, "REWE", "Groceries")
+    add_rule(session, "AMZN", "Books")
 
     groups_before_import = session.scalar(select(func.count()).select_from(OperationGroup))
 

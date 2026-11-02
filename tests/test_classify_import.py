@@ -31,7 +31,7 @@ from kohle.use_cases.journal import (
     RecordSplitEntry,
     _optional_str,
 )
-from kohle.use_cases.rules import AddRule
+from tests.rule_helpers import add_rule
 
 
 def _ledger(session: Session) -> None:
@@ -153,7 +153,7 @@ def _two_rows(cash_rows, statement_row):
 
 def test_a_matched_row_posts_to_its_rule_target(session: Session, cash_rows, statement_row) -> None:
     _ledger(session)
-    rule = AddRule(session).execute("ALDI", "Groceries").unwrap()
+    rule = add_rule(session, "ALDI", "Groceries")
 
     assert ImportStatement(session).execute("Checking", _two_rows(cash_rows, statement_row)).unwrap() == 2
 
@@ -168,7 +168,7 @@ def test_a_row_matching_nothing_still_lands_in_the_bucket(
     session: Session, cash_rows, statement_row
 ) -> None:
     _ledger(session)
-    AddRule(session).execute("ALDI", "Groceries")
+    add_rule(session, "ALDI", "Groceries")
 
     assert ImportStatement(session).execute("Checking", _two_rows(cash_rows, statement_row)).unwrap() == 2
 
@@ -196,7 +196,7 @@ def test_importing_the_same_statement_twice_still_imports_nothing(
     session: Session, cash_rows, statement_row
 ) -> None:
     _ledger(session)
-    AddRule(session).execute("ALDI", "Groceries")
+    add_rule(session, "ALDI", "Groceries")
     df = _two_rows(cash_rows, statement_row)
 
     assert ImportStatement(session).execute("Checking", df).unwrap() == 2
@@ -213,7 +213,7 @@ def test_a_rule_target_that_has_gained_a_child_fails_the_import(
     # falling back to the bucket: a silent fallback would leave the user's
     # rules disabled with nothing saying why (design §5.3).
     _ledger(session)
-    AddRule(session).execute("ALDI", "Groceries")
+    add_rule(session, "ALDI", "Groceries")
     AddAccount(session).execute("Organic", AccountType.expense, parent_name="Groceries")
 
     result = ImportStatement(session).execute("Checking", _two_rows(cash_rows, statement_row))
@@ -230,7 +230,7 @@ def test_one_import_produces_one_group_holding_every_write(
     # statement half-imported (design §5.2).
     AddAccount(session_factory()).execute("Checking", AccountType.asset, "DE1")
     AddAccount(session_factory()).execute("Groceries", AccountType.expense)
-    AddRule(session_factory()).execute("ALDI", "Groceries")
+    add_rule(session_factory(), "ALDI", "Groceries")
 
     with session_factory() as session:
         groups_before = session.scalar(select(func.count()).select_from(OperationGroup))
@@ -261,8 +261,8 @@ def test_a_row_failing_mid_import_leaves_nothing_behind(
     AddAccount(session_factory()).execute("Checking", AccountType.asset, "DE1")
     AddAccount(session_factory()).execute("Groceries", AccountType.expense)
     AddAccount(session_factory()).execute("Kiosk", AccountType.expense)
-    AddRule(session_factory()).execute("ALDI", "Groceries")
-    AddRule(session_factory()).execute("Kiosk", "Kiosk")
+    add_rule(session_factory(), "ALDI", "Groceries")
+    add_rule(session_factory(), "Kiosk", "Kiosk")
     # The second row's rule target stops being a leaf, so the import fails
     # after the first row has already been written.
     AddAccount(session_factory()).execute("Snacks", AccountType.expense, parent_name="Kiosk")

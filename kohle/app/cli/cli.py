@@ -79,11 +79,8 @@ from kohle.use_cases.reporting import (
     unrealised_gain,
 )
 from kohle.use_cases.rules import (
-    AddRule,
     ApplyRuleFile,
-    ListRules,
     PlanRuleFile,
-    RemoveRule,
     RulePlan,
     ShowRules,
 )
@@ -747,43 +744,6 @@ def list_operations_cmd(make_session):
     click.echo(tabulate(rows, headers="keys"))
 
 
-@cli.command(writes=True)
-@click.argument("pattern")
-@click.argument("account")
-@click.pass_obj
-def add_rule_cmd(make_session, pattern: str, account: str):
-    add_rule = AddRule(make_session())
-    res = add_rule.execute(pattern, account)
-    if res.is_err:
-        raise click.ClickException(str(res.unwrap_err()))
-    rule = res.unwrap()
-    click.echo(f"Added rule {rule.id}: {rule.condition} -> {account}")
-
-
-@cli.command(writes=False)
-@click.pass_obj
-def list_rules_cmd(make_session):
-    list_rules = ListRules(make_session())
-    res = list_rules.execute()
-    if res.is_err:
-        raise click.ClickException(str(res.unwrap_err()))
-    rules = res.unwrap()
-    if not rules:
-        click.echo("No rules")
-        return
-    # Rendered in evaluation order, with the id remove-rule takes: the order
-    # rules fire in is only useful if it is the order they are printed in.
-    rows = [
-        {
-            "id": rule.rule_id,
-            "account": rule.account_name,
-            "conditions": render_when_inline(rule.when),
-        }
-        for rule in rules
-    ]
-    click.echo(tabulate(rows, headers="keys"))
-
-
 @cli.command(writes=False)
 @click.pass_obj
 def show_rules_cmd(make_session):
@@ -910,17 +870,6 @@ def edit_rules_cmd(make_session):
     click.echo(f"Applied: {summary.splitlines()[0]}")
 
 
-@cli.command(writes=True)
-@click.argument("rule_id", type=int)
-@click.pass_obj
-def remove_rule_cmd(make_session, rule_id: int):
-    remove_rule = RemoveRule(make_session())
-    res = remove_rule.execute(rule_id)
-    if res.is_err:
-        raise click.ClickException(str(res.unwrap_err()))
-    click.echo(f"Removed rule {rule_id}")
-
-
 @cli.command(writes=False)
 @click.pass_obj
 def list_unclassified_cmd(make_session):
@@ -932,8 +881,7 @@ def list_unclassified_cmd(make_session):
     if not lines:
         click.echo("No unclassified lines")
         return
-    # entry_id first, matching list-rules printing the id remove-rule takes:
-    # it is reclassify's handle onto the line (design §2.4).
+    # entry_id first: it is reclassify's handle onto the line (design §2.4).
     rows = [
         {
             "entry_id": line.entry_id,
