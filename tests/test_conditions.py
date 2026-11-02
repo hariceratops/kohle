@@ -198,16 +198,6 @@ def test_a_condition_round_trips_in_both_forms(pattern: str) -> None:
     assert parse_when(lines).unwrap() == when
 
 
-@pytest.mark.skip(reason="TODO: 084-086 each rejection names its key path")
-def test_placeholder_rejections() -> None:
-    raise NotImplementedError
-
-
-@pytest.mark.skip(reason="TODO: 082-086 one test per row of design §3.2, None counterparty, amount bounds, zero amount")
-def test_placeholder_semantics() -> None:
-    raise NotImplementedError
-
-
 class _Untouchable:
     """A counterparty whose fields fail the test if evaluation reaches them."""
 

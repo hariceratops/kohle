@@ -7,6 +7,7 @@ read back through `parse_stored_when` (design §2, §3).
 import re
 import tomllib
 from collections.abc import Callable
+from typing import Any
 from dataclasses import dataclass, replace
 from decimal import Decimal
 from enum import Enum
@@ -128,7 +129,7 @@ def _check_direction(value: object, key: str) -> Result[Direction, MalformedRule
 
 
 _CONDITION_KEYS = ("description", "counterparty", "iban", "amount", "direction", "any_field")
-_CHECKS = {"iban": _check_iban, "amount": _check_amount, "direction": _check_direction}
+_CHECKS: dict[str, Callable[[object, str], Result[Any, MalformedRuleFile]]] = {"iban": _check_iban, "amount": _check_amount, "direction": _check_direction}
 
 
 def _check_any(value: object, key: str) -> Result[tuple[When, ...], MalformedRuleFile]:
@@ -149,7 +150,7 @@ def parse_when(value: object, key: str = "when") -> Result[When, MalformedRuleFi
     for name in value:
         if name not in (*_CONDITION_KEYS, "any", "not"):
             return Result.err(MalformedRuleFile(None, f"{key}.{name}", "is not a known condition"))
-    fields: dict[str, object] = {}
+    fields: dict[str, Any] = {}
     for name in _CONDITION_KEYS:
         if name not in value:
             continue

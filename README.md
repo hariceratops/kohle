@@ -360,7 +360,7 @@ base = "3f9c1a2b7d4e5f60"
 account = "Rent"
 note = "landlord, not the deposit"
 [rule.when]
-iban = "DE89 3704 0044 0532 0130 00"
+iban = "DE89370400440532013000"
 amount = { min = 400, max = 600 }
 direction = "out"
 

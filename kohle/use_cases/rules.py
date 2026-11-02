@@ -465,8 +465,8 @@ def _add_unless_duplicate(
 
 
 class AddRule(UnitOfWork[Rule, AddRuleError]):
-    def execute(self, pattern: str, account_name: str) -> Result[Rule, RuleError]:
-        def use_case(ctx: DbTransactionContext) -> Result[Rule, RuleError]:
+    def execute(self, pattern: str, account_name: str) -> Result[Rule, AddRuleError]:
+        def use_case(ctx: DbTransactionContext) -> Result[Rule, AddRuleError]:
             text = pattern.strip()
             if not text:
                 return Result.err(EmptyRulePattern())
@@ -479,22 +479,25 @@ class AddRule(UnitOfWork[Rule, AddRuleError]):
             except re.error as err:
                 return Result.err(InvalidRulePattern(text, str(err)))
 
-            return (
-                get_account_by_name_service(ctx, account_name)
-                .and_then(lambda account:
-                    account_has_children_service(ctx, account.id)
-                    .and_then(lambda has_children:
-                        # A rule aimed at a parent can only ever produce entries
-                        # validate_lines refuses, so refusing the rule turns a
-                        # broken import into a refused rule.
-                        Result.err(PostingToNonLeafAccount(account.id))
-                        if has_children
-                        else stored_rules(ctx).and_then(lambda live:
-                            _add_unless_duplicate(ctx, live, When(any_field=text), account.id)
-                        )
-                    )
-                )
-            )
+            account_res = get_account_by_name_service(ctx, account_name)
+            if account_res.is_err:
+                return Result.err(account_res.unwrap_err())
+            account = account_res.unwrap()
+            children_res = account_has_children_service(ctx, account.id)
+            if children_res.is_err:
+                return Result.err(children_res.unwrap_err())
+            # A rule aimed at a parent can only ever produce entries
+            # validate_lines refuses, so refusing the rule turns a broken import
+            # into a refused rule.
+            if children_res.unwrap():
+                return Result.err(PostingToNonLeafAccount(account.id))
+            live_res = stored_rules(ctx)
+            if live_res.is_err:
+                return Result.err(live_res.unwrap_err())
+            added = _add_unless_duplicate(ctx, live_res.unwrap(), When(any_field=text), account.id)
+            if added.is_err:
+                return Result.err(added.unwrap_err())
+            return Result.ok(added.unwrap())
 
         return self._run(use_case)
 

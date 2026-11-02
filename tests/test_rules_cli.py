@@ -360,8 +360,8 @@ def test_an_empty_file_shows_the_retired_count_before_anything_is_applied(
         ('[[rule]]\naccount = "Nowhere"\n[rule.when]\ndescription = "x"\n', "rule 1, account: no account named 'Nowhere'"),
         ('[[rule]]\naccount = "Rent"\nwhen = {}\n', "rule 1, when: must be a table with at least one condition"),
         (
-            '[[rule]]\naccount = "Rent"\n[rule.when]\ndescription = "x"\n'
-            '[[rule]]\naccount = "Rent"\n[rule.when]\ndescription = "x"\n',
+            ('[[rule]]\naccount = "Rent"\n[rule.when]\ndescription = "x"\n'
+             '[[rule]]\naccount = "Rent"\n[rule.when]\ndescription = "x"\n'),
             "rule 2: has the same account and conditions as rule 1",
         ),
         ('[[rule]]\naccount = \n', "not valid TOML"),

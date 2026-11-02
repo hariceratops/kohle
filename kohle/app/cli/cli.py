@@ -38,6 +38,7 @@ from kohle.use_cases.classification import (
     PlanClassifyRules,
     Reclassify,
 )
+from kohle.use_cases.conditions import render_when_inline
 from kohle.use_cases.journal import (
     BASE_CURRENCY,
     CrossUnitLine,
@@ -77,8 +78,15 @@ from kohle.use_cases.reporting import (
     summarise,
     unrealised_gain,
 )
-from kohle.use_cases.conditions import render_when_inline
-from kohle.use_cases.rules import AddRule, ApplyRuleFile, ListRules, PlanRuleFile, RemoveRule, RulePlan, ShowRules
+from kohle.use_cases.rules import (
+    AddRule,
+    ApplyRuleFile,
+    ListRules,
+    PlanRuleFile,
+    RemoveRule,
+    RulePlan,
+    ShowRules,
+)
 from kohle.use_cases.sampling import ListSamplingRules, Role, SetSamplingRules
 from kohle.use_cases.settings import ListSettings, SetSettings
 from kohle.use_cases.splitting import (
