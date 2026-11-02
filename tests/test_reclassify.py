@@ -25,7 +25,7 @@ from kohle.services.classification_services import add_classification_service
 from kohle.services.journal_services import LineSpec, add_journal_entry_service
 from kohle.services.rule_services import add_rule_service
 from kohle.services.unit_services import add_unit_service
-from kohle.use_cases.classification import Reclassify
+from kohle.use_cases.classification import ListUnclassified, Reclassify
 from kohle.use_cases.journal import QueryAccountBalance
 
 
@@ -200,3 +200,19 @@ def test_a_double_reclassify_lands_the_amount_on_the_final_account(session: Sess
     assert classification.final_account_id == ledger.groceries
     assert classification.proposed_account_id == ledger.bucket
     assert classification.corrected is True
+
+
+def test_a_rule_classified_line_reclassified_into_the_bucket_is_listed_as_unclassified(session: Session) -> None:
+    ctx = DbTransactionContext(session)
+    ledger = _Ledger(ctx)
+    add_account_service(ctx, "Unclassified Income", AccountType.income)
+    entry_id = ledger.entry(ctx, "ref-1", ledger.books)
+    _classify(ctx, ledger, entry_id, ledger.books, ledger.rule)
+    session.commit()
+    assert Reclassify(session).execute(entry_id, "Unclassified Expense").is_ok
+
+    result = ListUnclassified(session).execute()
+
+    assert result.is_ok
+    [line] = result.unwrap()
+    assert (line.entry_id, line.amount, line.account_name) == (entry_id, Decimal(80), "Unclassified Expense")

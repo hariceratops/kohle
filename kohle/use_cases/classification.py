@@ -58,8 +58,10 @@ def _to_unclassified_line(classification: Classification) -> UnclassifiedLine:
     entry = classification.entry
     # Both lines of an import entry carry the same value by construction, but
     # picking the line by account rather than by position stays correct if an
-    # entry ever grows past two lines.
-    line = next(line for line in entry.lines if line.account_id == classification.final_account_id)
+    # entry ever grows past two lines. The account is proposed_account_id, not
+    # final_account_id: a line reclassified into a bucket has no entry line on
+    # the bucket, while the proposed account's line is always there.
+    line = next(line for line in entry.lines if line.account_id == classification.proposed_account_id)
     return UnclassifiedLine(
         entry_id=entry.id,
         entry_date=entry.entry_date,
