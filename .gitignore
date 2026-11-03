@@ -6,3 +6,7 @@ kohle.db
 kohle.egg-info/
 .venv
 kohle.db.bak-*
+
+# Built documentation
+site/
+site-dev/
