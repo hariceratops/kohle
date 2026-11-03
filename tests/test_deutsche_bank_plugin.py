@@ -21,14 +21,14 @@ from kohle.domain.models import AccountType, Classification, JournalEntry
 from kohle.plugin.importer_plugin import StatementUnreadable
 from kohle.use_cases.accounts import AddAccount
 from kohle.use_cases.journal import ImportStatement
-from kohle.use_cases.rules import AddRule
+from tests.rule_helpers import add_rule
 
 FIXTURE = Path(__file__).parent / "fixtures" / "deutsche_bank_statement.csv"
 
 def test_deutsche_bank_import_ledger_rows_unchanged(session: Session) -> None:
     AddAccount(session).execute("Checking", AccountType.asset, "DE1")
     AddAccount(session).execute("Groceries", AccountType.expense)
-    AddRule(session).execute("ALDI", "Groceries").unwrap()
+    add_rule(session, "ALDI", "Groceries")
 
     rows = DeustcheBankStatementImporter().import_statement(str(FIXTURE)).unwrap()
     assert ImportStatement(session).execute("Checking", rows).unwrap() == 4

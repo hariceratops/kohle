@@ -306,25 +306,16 @@ An imported line that matches no rule lands in `Unclassified Expense` or
 `Unclassified Income`. A rule sends it somewhere better. A rule is a set of
 conditions and a target account; the first rule whose conditions all hold wins.
 
+Rules live in one file, edited as a whole:
+
 ```bash
-kohle-cli add-rule 'REWE|ALDI|LIDL' Groceries
-kohle-cli list-rules
-kohle-cli remove-rule 3
+kohle-cli edit-rules
 ```
 
-`add-rule PATTERN ACCOUNT` is the quick form for the common case: it creates a
-rule whose only condition is `any_field = PATTERN` (below) and prints
-`Added rule 3: { any_field = "REWE|ALDI|LIDL" } -> Groceries`. Anything richer
-is written in the rule file with `edit-rules` or `apply-rules`. A malformed
-pattern is refused when the rule is created, naming the position:
-
-```
-$ kohle-cli add-rule 'REWE[' Groceries
-Error: Invalid rule pattern 'REWE[': unterminated character set at position 4
-```
-
-Adding a rule with the same conditions and account as a live one is refused
-(`rule 3 already sends these lines to that account`). The target must be a leaf
+A single regular expression over the description, counterparty name and IBAN
+is the simplest rule, `any_field = "REWE|ALDI|LIDL"` (below). A malformed
+pattern, an unknown account, or an account with sub-accounts is refused when
+the file is applied, naming the rule and key. The target must be a leaf
 account, since only leaves can be posted to.
 
 #### Conditions
@@ -400,20 +391,17 @@ Rules have a content-based identity: a rule whose conditions and account are
 unchanged keeps its id, wherever it moves in the file, and a note-only edit
 updates the note. Any other change to the conditions or the account retires the
 old rule and adds a new one, so a past classification keeps naming the
-conditions that made it. A retired rule is never revived: a file that restores
-its content adds a new rule. Applying `show-rules` output reports `No
-changes`, and two rules with the same conditions and account in one file are
-refused. The whole apply is one audit-trail group, or nothing.
+conditions that made it. Deleting a rule from the file retires it the same
+way. A retired rule is never revived: a file that restores its content adds a
+new rule. Applying `show-rules` output reports `No changes`, and two rules
+with the same conditions and account in one file are refused. The whole apply
+is one audit-trail group, or nothing.
 
 `edit-rules` opens the same file in `$VISUAL` or `$EDITOR`, then shows the
 summary and asks before applying. Saving nothing prints `No changes; nothing
 applied`. A mistake reopens the editor with the problem in a banner at the top
 of the file; quit without saving to abort. If the stored rules changed while you
 edited, your text is saved to a file named in the error rather than lost.
-
-`list-rules` prints `id`, `account` and `conditions` per rule, in evaluation
-order, the conditions in the compact form `{ any_field = "REWE|ALDI|LIDL" }`;
-notes are not shown. `remove-rule` retires a rule rather than erasing it.
 
 Rules are applied while a statement is imported: each row takes the account its
 first matching rule names, and a row matching nothing lands in its unclassified
@@ -1122,7 +1110,7 @@ the cash account, so re-importing a file posts nothing.
   `dividend`. Buys and sells (`isin`, unsigned `quantity > 0`, `price > 0`, no
   `amount`) become `SecurityRow`s; a dividend (`amount` in EUR, `isin`
   optional, no quantity or price) becomes a `CashRow` described `Dividend
-  <isin>`, so a rule such as `add-rule '^Dividend' Dividends` routes it.
+  <isin>`, so a rule with `description = "^Dividend"` routes it.
   Parse errors name the file line; an unknown `type` or a filled column that
   must be empty writes nothing.
 

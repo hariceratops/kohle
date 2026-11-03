@@ -158,24 +158,6 @@ class RuleError(Exception):
     pass
 
 
-class EmptyRulePattern(RuleError):
-    """An empty pattern compiles fine and matches every line, which is the one
-    catch-all nobody writes on purpose."""
-
-    def __str__(self) -> str:
-        return "Rule pattern cannot be empty"
-
-
-class InvalidRulePattern(RuleError):
-    def __init__(self, pattern: str, reason: str) -> None:
-        super().__init__()
-        self.pattern = pattern
-        self.reason = reason
-
-    def __str__(self) -> str:
-        return f"Invalid rule pattern {self.pattern!r}: {self.reason}"
-
-
 class RuleNotFoundError(RuleError):
     def __init__(self, rule_id: int) -> None:
         super().__init__()
@@ -216,15 +198,6 @@ class RulesChanged(RuleError):
             "the rules changed after this file was rendered; run show-rules or edit-rules again, "
             "or delete the base line to apply it over the current rules"
         )
-
-
-class DuplicateRule(RuleError):
-    def __init__(self, rule_id: int) -> None:
-        super().__init__()
-        self.rule_id = rule_id
-
-    def __str__(self) -> str:
-        return f"rule {self.rule_id} already sends these lines to that account"
 
 
 class ClassificationError(Exception):
@@ -397,11 +370,6 @@ ImportStatementError = \
         ClassificationError
 
 RecordEntryError = AccountError | UnitError | JournalError | BaseCurrencyAsCrossUnit
-
-# JournalError because a rule pointing at a parent account is refused with the
-# ledger's own PostingToNonLeafAccount, checked at rule creation rather than at
-# the import it would otherwise break.
-AddRuleError = AccountError | RuleError | JournalError
 
 ApplyRulesError = RuleError | AccountError
 

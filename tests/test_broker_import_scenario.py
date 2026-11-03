@@ -18,8 +18,8 @@ from kohle.domain.models import (
 )
 from kohle.use_cases.accounts import AddAccount
 from kohle.use_cases.journal import ImportStatement, QueryAccountBalance
-from kohle.use_cases.rules import AddRule
 from kohle.use_cases.units import AddUnit
+from tests.rule_helpers import add_rule
 
 FIXTURE = Path(__file__).parent / "fixtures" / "simple_broker.csv"
 
@@ -61,7 +61,7 @@ def test_broker_statement_scenario(session: Session) -> None:
     assert _import(session, "Broker Cash", "Depot") == 0
     assert session.scalar(select(func.count()).select_from(OperationGroup)) == groups
 
-    AddRule(session).execute("^Dividend", "Dividends").unwrap()
+    add_rule(session, "^Dividend", "Dividends")
     assert _import(session, "Broker Cash 2", "Depot 2") == 3
     assert _dividend_lines(session, "Broker Cash 2") == {
         ("Broker Cash 2", Decimal("12.40"), True),
