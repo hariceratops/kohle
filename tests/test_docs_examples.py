@@ -1,5 +1,6 @@
 """Documentation examples are tests: a `console` block that drifts fails the suite (design §4)."""
 
+import re
 from collections.abc import Callable
 from datetime import date
 from pathlib import Path
@@ -165,3 +166,11 @@ def test_readme_is_scanned_alongside_the_docs_pages(tmp_path: Path) -> None:
 
 def test_the_shipped_readme_has_a_checked_example() -> None:
     assert any(example.page == "README.md" for example in _EXAMPLES)
+
+
+def test_the_demo_tape_types_the_readme_taste_commands_in_order() -> None:
+    tape = (ROOT / "docs" / "demo" / "taste.tape").read_text()
+    typed = re.findall(r'^Type "(kohle-cli [^"]*)"', tape, re.MULTILINE)
+    taste = next(example for example in _EXAMPLES if example.page == "README.md")
+
+    assert typed == [command.text for command in taste.commands]
