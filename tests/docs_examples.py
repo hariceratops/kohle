@@ -43,6 +43,9 @@ Options go in an HTML comment on the line directly above a fence:
 `first-run` and `uses` combine in one comment. Anything else is a problem.
 A `$ kohle-cli` line outside a console fence is also a problem, so no shown
 invocation escapes checking.
+
+The pages scanned are `docs/**/*.md` and the repository `README.md`; `dev/`
+is never scanned.
 """
 
 import difflib
@@ -230,7 +233,7 @@ def parse_page(page: str, text: str) -> tuple[list[Example], list[str]]:
 def collect(root: Path) -> tuple[list[Example], list[str]]:
     examples: list[Example] = []
     problems: list[str] = []
-    for path in sorted((root / "docs").rglob("*.md")):
+    for path in [*sorted((root / "docs").rglob("*.md")), root / "README.md"]:
         page_examples, page_problems = parse_page(
             path.relative_to(root).as_posix(), path.read_text(encoding="utf-8")
         )

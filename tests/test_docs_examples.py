@@ -147,3 +147,21 @@ def test_file_fence_feeds_uses_and_continuations_join() -> None:
     assert example.files == {".config/kohle/init.toml": 'state = "BY"\n'}
     assert example.commands[0].text == "kohle-cli add-account A --type asset"
     assert example.commands[0].expected == ["out"]
+
+
+def test_readme_is_scanned_alongside_the_docs_pages(tmp_path: Path) -> None:
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "page.md").write_text("```console\n$ kohle-cli list-importer-plugins\nx\n```\n")
+    (tmp_path / "README.md").write_text(
+        "```console\n$ kohle-cli list-importer-plugins\nx\n```\n\n```bash\n$ kohle-cli init\n```\n"
+    )
+
+    examples, problems = collect(tmp_path)
+
+    assert sorted(example.page for example in examples) == ["README.md", "docs/page.md"]
+    assert len(problems) == 1
+    assert problems[0].startswith("README.md:")
+
+
+def test_the_shipped_readme_has_a_checked_example() -> None:
+    assert any(example.page == "README.md" for example in _EXAMPLES)
