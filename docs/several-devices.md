@@ -55,19 +55,19 @@ mode 0600.
 
 ## Moving the copy
 
-Moving the copy is up to you. A sync tool such as Syncthing, a scheduled
+Moving the copy is up to you. A file-sync tool, a scheduled
 `rsync` pull or a plain file copy all work. Making the transport one-way, so
 that readers only receive, is what keeps a reader from ever writing back.
 
 A scheduled job should not snapshot straight onto the last copy, because
 `snapshot` refuses an existing path. Write to a temporary name and rename it
-over the old copy. A cron entry could run this on the writer, with `~/Sync/kohle`
+over the old copy. A cron entry could run this on the writer, with `~/shared/kohle`
 standing for the folder your sync tool watches:
 
 <!-- docs: illustration -->
 ```sh
-rm -f ~/Sync/kohle/.kohle.db.new
-kohle-cli snapshot ~/Sync/kohle/.kohle.db.new && mv ~/Sync/kohle/.kohle.db.new ~/Sync/kohle/kohle.db
+rm -f ~/shared/kohle/.kohle.db.new
+kohle-cli snapshot ~/shared/kohle/.kohle.db.new && mv ~/shared/kohle/.kohle.db.new ~/shared/kohle/kohle.db
 ```
 
 The job can run `kohle-cli fetch-prices` first, so each copy carries the
@@ -82,7 +82,7 @@ how the keys resolve:
 <!-- docs: file ~/.config/kohle/config.toml -->
 ```toml
 [ledger]
-path = "~/Sync/kohle/kohle.db"
+path = "~/shared/kohle/kohle.db"
 mode = "reader"
 ```
 

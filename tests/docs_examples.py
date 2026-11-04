@@ -71,6 +71,7 @@ INIT_TOML = 'state = "BW"\n'
 
 _OPTION_COMMENT = re.compile(r"^\s*<!--\s*docs:\s*(.*?)\s*-->\s*$")
 _INVOCATION = re.compile(r"^\s*\$ (\w+=\S+ )*kohle-cli\b")
+_FENCE_INVOCATION = re.compile(r"^\s*(\$ )?(\w+=\S+ )*kohle-cli\b")
 _ASSIGNMENT = re.compile(r"^\w+=")
 _OPERATOR_TOKEN = re.compile(r"^[();<>|&]+$")
 _KEYWORDS = {"file", "uses", "first-run", "illustration"}
@@ -182,9 +183,10 @@ def parse_page(page: str, text: str) -> tuple[list[Example], list[str]]:
     problems: list[str] = []
     examples: list[Example] = []
     page_files: dict[str, str] = {}
-    inside = set()
+    inside: set[int] = set()
 
     for token in fences:
+        assert token.map is not None
         start, end = token.map
         inside.update(range(start, end))
         fence_line = start + 1
@@ -206,7 +208,7 @@ def parse_page(page: str, text: str) -> tuple[list[Example], list[str]]:
                     page_files[relative] = token.content
             if not options.illustration:
                 for offset, line in enumerate(token.content.split("\n")):
-                    if _INVOCATION.match(line):
+                    if _FENCE_INVOCATION.match(line):
                         problems.append(
                             f"{page}:{fence_line + 1 + offset}: kohle-cli shown outside a console block; "
                             "make it a console example or mark the fence `<!-- docs: illustration -->`"
@@ -265,8 +267,7 @@ def prepare_home(
         ledger.parent.mkdir(parents=True)
         shutil.copyfile(template_ledger, ledger)
         monkeypatch.setenv("KOHLE_DB", str(ledger))
-    if samples.is_dir():
-        shutil.copytree(samples, home, dirs_exist_ok=True)
+    shutil.copytree(samples, home, dirs_exist_ok=True)
     for relative, content in example.files.items():
         target = home / relative
         target.parent.mkdir(parents=True, exist_ok=True)

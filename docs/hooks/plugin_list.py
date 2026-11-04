@@ -1,4 +1,6 @@
+from kohle.plugin.importer_plugin import StatementImporterPlugin
 from kohle.plugin.plugin_manager import load_plugins, load_price_plugins
+from kohle.plugin.price_plugin import PriceFetcherPlugin
 
 PLACEHOLDER = "<!-- generated: plugin-list -->"
 NOT_STATED = "not stated by the plugin"
@@ -18,7 +20,9 @@ def _cell(text: str) -> str:
 
 
 def plugin_table() -> str:
-    plugins = [("importer", p) for p in load_plugins().values()]
+    plugins: list[tuple[str, StatementImporterPlugin | PriceFetcherPlugin]] = [
+        ("importer", p) for p in load_plugins().values()
+    ]
     plugins += [("price", p) for p in load_price_plugins().values()]
     lines = ["| Plugin | Kind | Accepts |", "|---|---|---|"]
     for kind, plugin in sorted(plugins, key=lambda item: (item[0], item[1].name)):

@@ -93,4 +93,4 @@ def test_the_hook_replaces_the_placeholder() -> None:
 
 @pytest.mark.parametrize("plugin", [*load_plugins().values(), *load_price_plugins().values()], ids=lambda p: p.name)
 def test_every_bundled_plugin_states_what_it_accepts(plugin: object) -> None:
-    assert type(plugin).__doc__ is not None
+    assert (type(plugin).__doc__ or "").strip()

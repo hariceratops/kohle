@@ -6,6 +6,7 @@ Installing kohle, creating a ledger and the first commands.
 
 Install the application into a uv environment, activate it and run it:
 
+<!-- docs: illustration -->
 ```sh
 uv init
 uv sync

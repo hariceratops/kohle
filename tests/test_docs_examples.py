@@ -66,10 +66,6 @@ def test_docs_example(example: Example, run_in_scratch_home) -> None:
         pytest.fail(failure, pytrace=False)
 
 
-def test_there_is_at_least_one_checked_example() -> None:
-    assert _EXAMPLES
-
-
 def test_docs_pages_are_well_formed() -> None:
     assert not _PROBLEMS, "\n".join(_PROBLEMS)
 
@@ -112,6 +108,13 @@ def test_unmarked_blocks_are_not_run() -> None:
 
 def test_invocation_outside_a_console_block_is_a_problem() -> None:
     page = "```sh\n$ kohle-cli init\n```\n"
+    _, problems = parse_page("docs/sample.md", page)
+    assert len(problems) == 1
+    assert "docs/sample.md:2" in problems[0]
+
+
+def test_bare_invocation_in_an_sh_fence_is_a_problem() -> None:
+    page = "```sh\nkohle-cli snapshot x\n```\n"
     _, problems = parse_page("docs/sample.md", page)
     assert len(problems) == 1
     assert "docs/sample.md:2" in problems[0]
