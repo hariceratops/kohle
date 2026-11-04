@@ -1,0 +1,18 @@
+[[rule]]
+account = "Rent"
+note = "landlord"
+[rule.when]
+iban = "DE02120300000000202051"
+amount = { min = 400, max = 1500 }
+direction = "out"
+
+[[rule]]
+account = "Groceries"
+[rule.when]
+any_field = "FRISCHMARKT|KORNLADEN"
+
+[[rule]]
+account = "Salary"
+[rule.when]
+counterparty = "Beispiel Software"
+direction = "in"

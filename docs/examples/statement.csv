@@ -1,0 +1,15 @@
+AktivKonto;123 456 78;DE89370400440532013000;EUR
+04/01/2026 - 05/31/2026
+Old balance;;;;1200.00;EUR
+Transactions pending are not included in this report.
+Booking date;Value date;Transaction Type;Beneficiary / Originator;Payment Details;IBAN / Account Number;BIC;Customer Reference;Mandate Reference;Creditor ID;Compensation amount;Original Amount;Ultimate creditor;Number of transactions;Number of cheques;Debit;Credit;Currency
+04/01/2026;04/01/2026;SEPA Transfer;Erika Beispiel;Rent April;DE02120300000000202051;BYLADEM1001;;;;;;;;;-900.00;;EUR
+04/07/2026;04/07/2026;Debit Card Payment;FRISCHMARKT;Card 0001 FRISCHMARKT 06-04-2026T17:20:41 purchase;;;;;;;;;;;-38.60;;EUR
+04/15/2026;04/15/2026;Debit Card Payment;KORNLADEN;Card 0001 KORNLADEN 14-04-2026T10:05:09 purchase;;;;;;;;;;;-21.45;;EUR
+04/20/2026;04/20/2026;SEPA Transfer;Trattoria Roma;Dinner shared with Jonas;;;;;;;;;;;-64.00;;EUR
+04/28/2026;04/28/2026;Credit Transfer;Beispiel Software GmbH;Salary April;DE75512108001245126199;COBADEFFXXX;;;;;;;;;;2600.00;EUR
+05/01/2026;05/01/2026;SEPA Transfer;Erika Beispiel;Rent May;DE02120300000000202051;BYLADEM1001;;;;;;;;;-900.00;;EUR
+05/09/2026;05/09/2026;Debit Card Payment;FRISCHMARKT;Card 0001 FRISCHMARKT 08-05-2026T16:48:33 purchase;;;;;;;;;;;-45.20;;EUR
+05/22/2026;05/22/2026;Debit Card Payment;KORNLADEN;Card 0001 KORNLADEN 21-05-2026T11:12:50 purchase;;;;;;;;;;;-19.80;;EUR
+05/28/2026;05/28/2026;Credit Transfer;Beispiel Software GmbH;Salary May;DE75512108001245126199;COBADEFFXXX;;;;;;;;;;2600.00;EUR
+Account balance;05/31/2026;;;4410.95;EUR

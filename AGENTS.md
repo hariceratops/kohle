@@ -68,6 +68,23 @@ and session-free, so the import loop opens no second transaction. A
 `classify-rules` move is recorded in `classifications.rerun_rule_id`, never as
 a correction.
 
+## Documentation
+
+`docs/` is the user-facing description of behaviour; the README is only a
+pitch that points to it. Build it with `uv run --with-requirements
+docs/requirements.txt mkdocs build --strict -f docs/mkdocs.yml`; the notes for
+people working on kohle live in `dev/docs/`, built the same way with
+`-f dev/docs/mkdocs.yml`. The `console` blocks in the pages are run by
+`tests/docs_examples.py` against a scratch ledger, and its module docstring
+defines the syntax.
+
+A slice that changes user-visible behaviour updates the matching guide page in
+the same PR. A checked example whose output changes fails the suite until the
+page follows, so fix the page rather than loosening the example. The README
+roadmap follows the briefs in `dev/inbox/`. Personal data or preferences, from
+the briefs or from the author's own ledger and setup, never appear in
+user-facing docs; examples use fictional accounts, people and amounts.
+
 ## Overrides
 
 Broad exception catching at transaction boundaries: `DbTransactionContext.run`

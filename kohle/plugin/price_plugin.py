@@ -9,10 +9,12 @@ from kohle.core.result import Result
 
 
 class PriceFetchError(Exception):
-    pass
+    """Base of every failure of a price plugin as a whole. Its `__str__` is what the user sees after `Error: `."""
 
 
 class MissingEnvironmentVariable(PriceFetchError):
+    """The plugin needs the environment variable `variable` and it is not set."""
+
     def __init__(self, variable: str) -> None:
         super().__init__()
         self.variable = variable
@@ -23,8 +25,11 @@ class MissingEnvironmentVariable(PriceFetchError):
 
 class UnavailableReason(Enum):
     no_symbol = "no_symbol"
+    """The plugin has no entry for the symbol."""
     not_covered = "not_covered"
+    """The source does not cover the symbol, and asking again will not change that."""
     transient = "transient"
+    """The source could not answer now, for example because of a quota; try again later."""
 
 
 # No defaults: a plugin states the currency every time, so a symbol bound as an
@@ -58,6 +63,7 @@ class PriceFetcherPlugin(ABC):
     """The latest finished daily close for each requested symbol.
 
     Rules:
+
     - `Err` means the plugin as a whole could not run (missing configuration,
       unreachable source, unreadable file). Anything about one symbol is an
       `Unavailable` value.
@@ -77,10 +83,13 @@ class PriceFetcherPlugin(ABC):
     @property
     @abstractmethod
     def name(self) -> str:
-        pass
+        """The name typed as `PLUGIN` in `set-price-source`. Unique among price plugins."""
 
     @abstractmethod
     def fetch_latest_closes(
         self, symbols: Sequence[str]
     ) -> Result[dict[str, PriceResult], PriceFetchError]:
-        pass
+        """Return a `Close` or `Unavailable` for each of `symbols`, keyed as requested.
+
+        Return `Result.err` only when the plugin as a whole could not run.
+        """

@@ -136,6 +136,12 @@ def _parse_row(line: int, fields: dict[str, str]) -> Result[StatementRow, Import
 
 
 class SimpleBrokerStatementImporter(StatementImporterPlugin):
+    """A UTF-8 CSV with the header `date,reference,type,isin,quantity,price,amount`.
+
+    `type` is `buy`, `sell` or `dividend`. Buys and sells become trades and
+    dividends become cash rows. Dates are ISO (YYYY-MM-DD).
+    """
+
     @property
     def name(self) -> str:
         return "kohle-simple-broker"

@@ -40,6 +40,21 @@ def _no_real_user_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
 
 
 @pytest.fixture
+def pin_today(monkeypatch: pytest.MonkeyPatch) -> Callable[[date_type], None]:
+    """Make the CLI's `date.today()` return a fixed day; no code below the CLI reads the clock."""
+
+    def pin(pinned: date_type) -> None:
+        class PinnedDate(date_type):
+            @classmethod
+            def today(cls) -> "PinnedDate":
+                return cls(pinned.year, pinned.month, pinned.day)
+
+        monkeypatch.setattr("kohle.app.cli.cli.date", PinnedDate)
+
+    return pin
+
+
+@pytest.fixture
 def write_config(tmp_path: Path):
     """Write `$XDG_CONFIG_HOME/kohle/config.toml`; return the file's path."""
 

@@ -1,0 +1,32 @@
+site_name: kohle developer notes
+docs_dir: .
+site_dir: ../../site-dev # inside docs_dir is an error
+exclude_docs: |
+  mkdocs.yml
+theme:
+  name: material
+  palette:
+    - scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+nav:
+  - Overview: index.md
+  - Writing migrations: migrations.md
+  - Running the tests: tests.md
+  - Checked guide examples: guide.md
+validation:
+  nav:
+    omitted_files: warn
+  links:
+    anchors: warn
+markdown_extensions:
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.superfences
+strict: true

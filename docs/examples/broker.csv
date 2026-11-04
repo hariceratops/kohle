@@ -1,0 +1,6 @@
+date,reference,type,isin,quantity,price,amount
+2026-03-02,T-1001,buy,ACME,10,100.00,
+2026-03-09,T-1002,buy,ACME,5,104.00,
+2026-03-10,T-1003,buy,GLOBEX,5,40.00,
+2026-04-20,T-1004,sell,ACME,12,112.00,
+2026-05-15,D-2001,dividend,GLOBEX,,,3.50

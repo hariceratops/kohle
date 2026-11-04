@@ -1,0 +1,5 @@
+mkdocs==1.6.1
+mkdocs-material==9.5.39
+mkdocs-click==0.9.0
+mkdocstrings==1.0.7
+mkdocstrings-python==2.0.9

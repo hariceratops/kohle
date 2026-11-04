@@ -1,0 +1,62 @@
+site_name: kohle
+repo_url: https://github.com/hariceratops/kohle
+edit_uri: edit/main/docs/
+docs_dir: .
+site_dir: ../site # inside docs_dir is an error
+exclude_docs: |
+  mkdocs.yml
+  requirements.txt
+  hooks/
+  demo/*.tape
+theme:
+  name: material
+  palette:
+    - scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+nav:
+  - Overview: index.md
+  - Getting started: getting-started.md
+  - Concepts:
+      - Accounts and units: accounts-and-units.md
+      - Recording entries: recording-entries.md
+      - Import and classification: import-and-classification.md
+      - People and splitting: people-and-splitting.md
+      - Prices: prices.md
+      - Reports: reports.md
+      - Budgeting: budgeting.md
+      - Several devices: several-devices.md
+  - Writing plugins: writing-plugins.md
+  - Reference:
+      - Commands: reference.md
+      - Installed plugins: plugins.md
+validation:
+  nav:
+    omitted_files: warn
+  links:
+    anchors: warn
+markdown_extensions:
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - tables
+  - mkdocs-click
+hooks:
+  - hooks/plugin_list.py
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [..]
+          options:
+            show_source: false
+            show_root_heading: true
+            members_order: source
+strict: true

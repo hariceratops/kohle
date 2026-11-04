@@ -81,6 +81,12 @@ def _parse(reader) -> Result[Rows, PriceFetchError]:
 
 
 class FilePriceFetcher(PriceFetcherPlugin):
+    """Symbols looked up in the UTF-8 CSV named by `KOHLE_PRICE_FILE`, header `identifier,date,close`.
+
+    Works offline. Each symbol gets its most recent row, and every close is
+    claimed to be in EUR.
+    """
+
     @property
     def name(self) -> str:
         return "file"

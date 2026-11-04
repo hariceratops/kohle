@@ -252,7 +252,7 @@ class _KohleGroup(click.Group):
 
 @click.group(cls=_KohleGroup)
 def cli() -> None:
-    pass
+    """Record and query a double-entry ledger of accounts, units and entries."""
 
 
 def _init_file_path() -> Path:
@@ -274,6 +274,7 @@ def _read_init_file(path: Path) -> dict[str, object]:
 @cli.command(name="init", opens_ledger=False, writes=True)
 @pass_device_config
 def init_cmd(config: DeviceConfig) -> None:
+    """Create the ledger and its settings from the init file."""
     rc = _init_file_path()
     raw = _read_init_file(rc)
     validated = validate_init_file(raw)
@@ -292,6 +293,7 @@ def init_cmd(config: DeviceConfig) -> None:
 @cli.command(name="migrate", opens_ledger=False, writes=True)
 @pass_device_config
 def migrate_cmd(config: DeviceConfig) -> None:
+    """Upgrade the ledger to the current schema."""
     path = ledger_path(config)
     res = migrate_ledger(path)
     if res.is_err:
@@ -307,6 +309,7 @@ def migrate_cmd(config: DeviceConfig) -> None:
 @click.argument("dest", type=click.Path(path_type=Path))
 @pass_device_config
 def snapshot_cmd(config: DeviceConfig, dest: Path) -> None:
+    """Copy the ledger to DEST as a consistent snapshot."""
     path = ledger_path(config)
     res = snapshot_ledger(path, ledger_mode(config), dest)
     if res.is_err:
@@ -321,6 +324,7 @@ def _with_source(value: object, source: str) -> str:
 @cli.command(opens_ledger=False, writes=False)
 @pass_device_config
 def list_config_cmd(config: DeviceConfig) -> None:
+    """List the device settings with where each value comes from."""
     for key in DEVICE_KEYS:
         e = effective(config, key)
         click.echo(f"{key} = {_with_source(e.value, e.source)}")
@@ -332,6 +336,7 @@ def list_config_cmd(config: DeviceConfig) -> None:
 @click.argument("key")
 @pass_device_config
 def get_config_cmd(config: DeviceConfig, key: str) -> None:
+    """Print the effective value of one device setting."""
     if key not in DEVICE_KEYS:
         raise click.ClickException(str(UnknownDeviceKey(key, list(DEVICE_KEYS))))
     click.echo(str(effective(config, key).value))
@@ -341,6 +346,7 @@ def get_config_cmd(config: DeviceConfig, key: str) -> None:
 @pass_device_config
 @click.pass_obj
 def list_settings_cmd(make_session, config: DeviceConfig):
+    """List the ledger settings."""
     res = ListSettings(make_session()).execute()
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
@@ -359,6 +365,7 @@ def list_settings_cmd(make_session, config: DeviceConfig):
 @pass_device_config
 @click.pass_obj
 def set_setting_cmd(make_session, config: DeviceConfig, key: str, value: str):
+    """Set a ledger setting."""
     if key in DEVICE_KEYS:
         raise click.ClickException(str(DeviceKeyNotASetting(key, config.path)))
     if key == "state":
@@ -375,6 +382,7 @@ def set_setting_cmd(make_session, config: DeviceConfig, key: str, value: str):
 @click.argument("state")
 @click.pass_obj
 def move_state_cmd(make_session, effective_from: date, state: str):
+    """Change the state the ledger applies, from a given date."""
     res = MoveState(make_session()).execute(effective_from, state)
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
@@ -385,6 +393,7 @@ def move_state_cmd(make_session, effective_from: date, state: str):
 @cli.command(writes=False)
 @click.pass_obj
 def list_states_cmd(make_session):
+    """List the states and the dates they take effect."""
     res = ListStates(make_session()).execute()
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
@@ -407,6 +416,7 @@ def list_states_cmd(make_session):
 @click.argument("rule")
 @click.pass_obj
 def set_cap_cmd(make_session, effective_from: datetime, account: str, amount: Decimal, rule: str):
+    """Set a spending cap on an account, from a given date."""
     res = SetCap(make_session()).execute(account, amount, rule, effective_from.date())
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
@@ -420,6 +430,7 @@ def set_cap_cmd(make_session, effective_from: datetime, account: str, amount: De
 @click.argument("account")
 @click.pass_obj
 def end_cap_cmd(make_session, effective_from: datetime, account: str):
+    """End an account's spending cap from a given date."""
     res = EndCap(make_session()).execute(account, effective_from.date())
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
@@ -429,6 +440,7 @@ def end_cap_cmd(make_session, effective_from: datetime, account: str):
 @cli.command(writes=False)
 @click.pass_obj
 def list_caps_cmd(make_session):
+    """List the spending caps."""
     res = ListCaps(make_session()).execute()
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
@@ -452,6 +464,7 @@ def list_caps_cmd(make_session):
 @click.argument("rules")
 @click.pass_obj
 def set_sampling_rules_cmd(make_session, rules: str):
+    """Set the rules that choose which dates the history samples."""
     res = SetSamplingRules(make_session()).execute(rules)
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
@@ -461,6 +474,7 @@ def set_sampling_rules_cmd(make_session, rules: str):
 @cli.command(writes=False)
 @click.pass_obj
 def list_sampling_rules_cmd(make_session):
+    """List the history sampling rules."""
     res = ListSamplingRules(make_session()).execute()
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
@@ -474,6 +488,7 @@ def list_sampling_rules_cmd(make_session):
 @click.option("--parent", default=None, help="Name of the parent account, for virtual sub-accounts")
 @click.pass_obj
 def add_account_cmd(make_session, name: str, account_type: str, iban: str | None, parent: str | None):
+    """Add an account."""
     add_account = AddAccount(make_session())
     res = add_account.execute(name, AccountType[account_type], iban, parent)
     if res.is_err:
@@ -485,6 +500,7 @@ def add_account_cmd(make_session, name: str, account_type: str, iban: str | None
 @click.argument("account", required=False)
 @click.pass_obj
 def list_accounts_cmd(make_session, account: str | None):
+    """List the accounts as a tree, or one account and its sub-accounts."""
     list_accounts = ListAccount(make_session())
     res = list_accounts.execute()
     if res.is_err:
@@ -505,6 +521,7 @@ def list_accounts_cmd(make_session, account: str | None):
 @click.argument("parent_name")
 @click.pass_obj
 def list_child_accounts_cmd(make_session, parent_name: str):
+    """List the child accounts of an account."""
     list_children = ListChildAccounts(make_session())
     res = list_children.execute(parent_name)
     if res.is_err:
@@ -519,6 +536,7 @@ def list_child_accounts_cmd(make_session, parent_name: str):
 @click.option("--kind", type=click.Choice([k.name for k in UnitKind]), default="security")
 @click.pass_obj
 def add_unit_cmd(make_session, identifier: str, name: str, kind: str):
+    """Add a unit, such as a currency or a security."""
     add_unit = AddUnit(make_session())
     res = add_unit.execute(identifier, name, UnitKind[kind])
     if res.is_err:
@@ -529,6 +547,7 @@ def add_unit_cmd(make_session, identifier: str, name: str, kind: str):
 @cli.command(writes=False)
 @click.pass_obj
 def list_units_cmd(make_session):
+    """List the units."""
     list_units = ListUnits(make_session())
     res = list_units.execute()
     if res.is_err:
@@ -539,6 +558,7 @@ def list_units_cmd(make_session):
 
 @cli.command(writes=False)
 def list_importer_plugins():
+    """List the installed statement importer plugins."""
     plugins = load_plugins()
 
     if not plugins:
@@ -557,6 +577,7 @@ def list_importer_plugins():
 def import_statement(
     make_session, plugin_name: str, cash_account: str, instrument_account: tuple[str, ...], statement_file
 ):
+    """Import a statement file through an importer plugin."""
     if len(instrument_account) > 1:
         raise click.BadParameter("at most one INSTRUMENT_ACCOUNT may be given", param_hint="INSTRUMENT_ACCOUNT")
 
@@ -600,6 +621,7 @@ def record_cmd(
     to_unit: str | None,
     to_price: Decimal | None,
 ):
+    """Record a two-line entry moving a quantity between accounts."""
     if from_unit and to_unit:
         raise click.BadParameter("only one of --from-unit / --to-unit may be given")
     if from_price is not None and from_unit is None:
@@ -642,6 +664,7 @@ def record_cmd(
 )
 @click.pass_obj
 def record_split_cmd(make_session, entry_date, description: str, lines: list[LineInput]):
+    """Record an entry with several lines."""
     record = RecordSplitEntry(make_session())
     res = record.execute(entry_date.date(), description, lines)
     if res.is_err:
@@ -656,6 +679,7 @@ def record_split_cmd(make_session, entry_date, description: str, lines: list[Lin
 @click.argument("end")
 @click.pass_obj
 def entries_in_period(make_session, account_name, start, end):
+    """List an account's entries between two dates."""
     query = QueryJournalByPeriod(make_session())
     res = query.execute(account_name, start, end)
     if res.is_err:
@@ -685,6 +709,7 @@ def entries_in_period(make_session, account_name, start, end):
 @MAX_AGE_DAYS
 @click.pass_obj
 def balance_cmd(make_session, account_name: str, max_age_days: int):
+    """Show an account's balance valued in the base unit."""
     res = QueryValuedBalance(make_session()).execute(account_name, date.today(), max_age_days)  # noqa: DTZ011 - the user's local date, by design
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
@@ -725,6 +750,7 @@ def balance_cmd(make_session, account_name: str, max_age_days: int):
 @cli.command(writes=False)
 @click.pass_obj
 def list_operations_cmd(make_session):
+    """List the operations recorded in the ledger."""
     list_operations = ListOperations(make_session())
     res = list_operations.execute()
     if res.is_err:
@@ -747,6 +773,7 @@ def list_operations_cmd(make_session):
 @cli.command(writes=False)
 @click.pass_obj
 def show_rules_cmd(make_session):
+    """Print the classification rules as a rules file."""
     res = ShowRules(make_session()).execute()
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
@@ -777,6 +804,7 @@ def _plan_summary(plan: RulePlan) -> str:
 @click.option("--yes", is_flag=True, help="Apply without asking.")
 @click.pass_obj
 def apply_rules_cmd(make_session, file, yes: bool):
+    """Apply a rules file, showing the plan first."""
     try:
         text = file.read().decode("utf-8")
     except UnicodeDecodeError as err:
@@ -833,6 +861,7 @@ def _rules_failure(err: Exception, body: str) -> click.ClickException:
 @cli.command(writes=True)
 @click.pass_obj
 def edit_rules_cmd(make_session):
+    """Edit the classification rules in your editor."""
     editor = os.environ.get("VISUAL") or os.environ.get("EDITOR")
     if not editor:
         raise click.ClickException("no editor: set $VISUAL or $EDITOR, or use show-rules and apply-rules")
@@ -873,6 +902,7 @@ def edit_rules_cmd(make_session):
 @cli.command(writes=False)
 @click.pass_obj
 def list_unclassified_cmd(make_session):
+    """List the entries no rule has classified."""
     list_unclassified = ListUnclassified(make_session())
     res = list_unclassified.execute()
     if res.is_err:
@@ -900,6 +930,7 @@ def list_unclassified_cmd(make_session):
 @click.option("--yes", is_flag=True, help="Apply without asking.")
 @click.pass_obj
 def classify_rules_cmd(make_session, yes: bool):
+    """Classify unclassified entries with the current rules."""
     planned = PlanClassifyRules(make_session()).execute()
     if planned.is_err:
         raise click.ClickException(str(planned.unwrap_err()))
@@ -933,6 +964,7 @@ def classify_rules_cmd(make_session, yes: bool):
 @click.argument("account")
 @click.pass_obj
 def reclassify_cmd(make_session, entry_id: int, account: str):
+    """Move an entry to another account."""
     reclassify = Reclassify(make_session())
     res = reclassify.execute(entry_id, account)
     if res.is_err:
@@ -944,6 +976,7 @@ def reclassify_cmd(make_session, entry_id: int, account: str):
 @click.argument("name")
 @click.pass_obj
 def add_group_cmd(make_session, name: str):
+    """Add a split group, such as a trip."""
     add_group = AddSplitGroup(make_session())
     res = add_group.execute(name)
     if res.is_err:
@@ -970,6 +1003,7 @@ def add_group_cmd(make_session, name: str):
 def split_line_cmd(
     make_session, entry_id: int, own_share: Decimal, shares: list[PersonShare], group_name: str | None
 ):
+    """Split an imported entry between you and other people."""
     split = SplitImportedEntry(make_session())
     res = split.execute(entry_id, own_share, shares, group_name)
     if res.is_err:
@@ -981,6 +1015,7 @@ def split_line_cmd(
 @click.argument("entry_id", type=int)
 @click.pass_obj
 def unsplit_line_cmd(make_session, entry_id: int):
+    """Undo the split of an entry."""
     unsplit = UnsplitEntry(make_session())
     res = unsplit.execute(entry_id)
     if res.is_err:
@@ -992,6 +1027,7 @@ def unsplit_line_cmd(make_session, entry_id: int):
 @click.option("--by-group", is_flag=True, default=False, help="Break the view down per group instead")
 @click.pass_obj
 def who_owes_what_cmd(make_session, by_group: bool):
+    """Show what each person owes you or you owe them."""
     if by_group:
         _print_who_owes_what_by_group(make_session)
         return
@@ -1096,6 +1132,7 @@ def _estimates_line(summary: EstimateSummary) -> str:
 @MAX_AGE_DAYS
 @click.pass_obj
 def net_worth_cmd(make_session, max_age_days: int):
+    """Show net worth valued in the base unit."""
     res = ValuedNetWorth(make_session()).execute(date.today(), max_age_days)  # noqa: DTZ011 - the user's local date, by design
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
@@ -1116,6 +1153,7 @@ def net_worth_cmd(make_session, max_age_days: int):
 @MAX_AGE_DAYS
 @click.pass_obj
 def positions_cmd(make_session, max_age_days: int):
+    """Show open positions with their cost and market value."""
     res = QueryPositions(make_session()).execute(date.today(), max_age_days)  # noqa: DTZ011 - the user's local date, by design
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
@@ -1147,6 +1185,7 @@ def positions_cmd(make_session, max_age_days: int):
 )
 @click.pass_obj
 def realised_cmd(make_session, year: int | None):
+    """Show realised gains and losses on sales."""
     res = QueryRealised(make_session()).execute(year)
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
@@ -1177,6 +1216,7 @@ def realised_cmd(make_session, year: int | None):
 )
 @click.pass_obj
 def settle_up_cmd(make_session, group_name: str | None):
+    """Show the payments that settle up what people owe."""
     res = SettleUp(make_session()).execute(group_name)
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
@@ -1216,6 +1256,7 @@ def settle_up_cmd(make_session, group_name: str | None):
 @click.argument("symbol")
 @click.pass_obj
 def set_price_source_cmd(make_session, unit: str, plugin: str, symbol: str):
+    """Choose the price plugin and symbol for a unit."""
     res = SetPriceSource(make_session()).execute(unit, plugin, symbol, sorted(load_price_plugins()))
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
@@ -1270,6 +1311,7 @@ def _fetch_row(outcome: FetchOutcome) -> dict[str, str]:
 @cli.command(writes=True)
 @click.pass_obj
 def fetch_prices_cmd(make_session):
+    """Fetch prices from the configured price sources."""
     targets_res = ListPriceTargets(make_session()).execute()
     if targets_res.is_err:
         raise click.ClickException(str(targets_res.unwrap_err()))
@@ -1310,6 +1352,7 @@ def fetch_prices_cmd(make_session):
 @MAX_AGE_DAYS
 @click.pass_obj
 def net_worth_history_cmd(make_session, start, end, role: str | None, max_age_days: int):
+    """Show net worth sampled over time."""
     today = date.today()  # noqa: DTZ011 - the user's local date, by design
     end_date = end.date() if end is not None else today
     start_date = start.date() if start is not None else None
@@ -1348,6 +1391,7 @@ def net_worth_history_cmd(make_session, start, end, role: str | None, max_age_da
 )
 @click.pass_obj
 def budget_cmd(make_session, start, end):
+    """Show spending against caps for each period."""
     today = date.today()  # noqa: DTZ011 - the user's local date, by design
     end_date = end.date() if end is not None else today
     start_date = start.date() if start is not None else date(end_date.year, 1, 1)
