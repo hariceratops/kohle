@@ -6,9 +6,10 @@
 Output docs/demo/taste.gif
 
 Set Shell bash
-Set FontSize 16
-Set Width 1200
-Set Height 700
+Set FontSize 15
+Set Width 1500
+Set Height 640
+Set WaitPattern /\$$/
 Set TypingSpeed 40ms
 
 Hide
@@ -19,18 +20,26 @@ Type `kohle-cli init >/dev/null; cp docs/examples/* $D/; cd $D; clear` Enter
 Show
 
 Type "kohle-cli add-account Checking --type asset" Enter
-Sleep 1500ms
+Wait
+Sleep 1s
 Type "kohle-cli add-account Rent --type expense" Enter
-Sleep 1500ms
+Wait
+Sleep 1s
 Type "kohle-cli add-account Groceries --type expense" Enter
-Sleep 1500ms
+Wait
+Sleep 1s
 Type "kohle-cli add-account Salary --type income" Enter
-Sleep 1500ms
+Wait
+Sleep 1s
 Type "kohle-cli apply-rules rules.toml --yes" Enter
-Sleep 3s
+Wait
+Sleep 1s
 Type "kohle-cli import-statement kohle-deutsche-bank Checking statement.csv" Enter
-Sleep 2s
+Wait
+Sleep 1s
 Type "kohle-cli balance Groceries" Enter
-Sleep 5s
+Wait
+Sleep 1s
 
 # Change this tape and the README "A taste" block together.
+Sleep 4s

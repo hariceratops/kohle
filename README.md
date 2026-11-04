@@ -34,7 +34,7 @@ reads the same books.
 
 ## A taste
 
-<!-- Add once docs/demo/taste.gif has been generated: ![kohle taste](docs/demo/taste.gif) -->
+![kohle taste](docs/demo/taste.gif)
 
 A fictional statement, three rules and a report. The files are in
 [`docs/examples/`](docs/examples/).
@@ -63,10 +63,10 @@ EUR                        125.05  -        -                     125.05  -     
 Total (base currency)      125.05  -        -                     125.05  -                   -
 ```
 
-The session above can be recorded as a GIF with the `vhs` command from the
-tape `docs/demo/taste.tape`. The GIF is not checked in yet. To generate it, install the system tools
-[VHS](https://github.com/charmbracelet/vhs), `ttyd` and `ffmpeg` (none are
-Python dependencies), then run from the repository root:
+The GIF records the session above from the tape `docs/demo/taste.tape`. To
+regenerate it, install the system tools [VHS](https://github.com/charmbracelet/vhs),
+`ttyd` and `ffmpeg` (none are Python dependencies), then run from the
+repository root:
 
 ```sh
 uv run vhs docs/demo/taste.tape
