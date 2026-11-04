@@ -60,6 +60,13 @@ def _latest_finished_close(series: Mapping[str, Mapping[str, str]], before: date
 
 
 class AlphaVantagePriceFetcher(PriceFetcherPlugin):
+    """Alpha Vantage `TIME_SERIES_DAILY` symbols, as Alpha Vantage knows them, quoted in EUR.
+
+    Needs network access and the API key in `KOHLE_ALPHAVANTAGE_KEY`. Each
+    symbol is looked up as given, so use the EUR listing with its exchange
+    suffix. The newest bar dated before today (UTC) is the close.
+    """
+
     def __init__(
         self,
         http_get: Callable[[str], bytes] = _urlopen_get,

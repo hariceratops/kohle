@@ -546,7 +546,8 @@ None of the four bundled classes has a docstring today, so 101 adds one each.
 For example:
 
 - `DeustcheBankStatementImporter`: a Deutsche Bank account CSV export,
-  semicolon-separated and ISO-8859-1. Cash rows only.
+  semicolon-separated. Cash rows only. (Found while building 101: the code
+  does not read the file as ISO-8859-1, so no encoding is stated.)
 - `SimpleBrokerStatementImporter`: a UTF-8 CSV with header
   `date,reference,type,isin,quantity,price,amount`. Buys and sells become
   trades, dividends cash.

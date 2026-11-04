@@ -47,4 +47,16 @@ markdown_extensions:
   - pymdownx.superfences
   - tables
   - mkdocs-click
+hooks:
+  - hooks/plugin_list.py
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [..]
+          options:
+            show_source: false
+            show_root_heading: true
+            members_order: source
 strict: true

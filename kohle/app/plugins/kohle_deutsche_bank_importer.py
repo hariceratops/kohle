@@ -314,6 +314,15 @@ def parse_amount(raw) -> Optional[Decimal]:
 
 
 class DeustcheBankStatementImporter(StatementImporterPlugin):
+    """A Deutsche Bank account CSV export: semicolon-separated, EUR, cash rows only.
+
+    The file must carry the account line, the period, the old and closing
+    balances and the 18-column transaction header. A debit card payment is
+    dated from the timestamp in its payment details, other rows by booking
+    date. The bank gives no per-row id, so the reference is a hash of date,
+    amount and description.
+    """
+
     @property
     def name(self) -> str:
         return "kohle-deutsche-bank"
