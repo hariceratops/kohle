@@ -6,6 +6,7 @@ is published separately; this site is not part of it and is not built in CI.
 - [Writing migrations](migrations.md)
 - [Running the tests](tests.md)
 - [Checked guide examples](guide.md)
+- [The README demo GIF](demo-gif.md)
 
 ## Serving it
 

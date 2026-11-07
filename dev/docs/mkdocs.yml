@@ -19,6 +19,7 @@ nav:
   - Writing migrations: migrations.md
   - Running the tests: tests.md
   - Checked guide examples: guide.md
+  - The README demo GIF: demo-gif.md
 validation:
   nav:
     omitted_files: warn

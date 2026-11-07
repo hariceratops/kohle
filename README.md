@@ -63,15 +63,6 @@ EUR                        125.05  -        -                     125.05  -     
 Total (base currency)      125.05  -        -                     125.05  -                   -
 ```
 
-The GIF records the session above from the tape `docs/demo/taste.tape`. To
-regenerate it, install the system tools [VHS](https://github.com/charmbracelet/vhs),
-`ttyd` and `ffmpeg` (none are Python dependencies), then run from the
-repository root:
-
-```sh
-uv run vhs docs/demo/taste.tape
-```
-
 ## Read the guide
 
 The guide covers installing kohle, every concept and every command. Read it at
