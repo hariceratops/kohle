@@ -1050,7 +1050,7 @@ def who_owes_what_cmd(make_session, by_group: bool):
             [{"person": person.person_name, "unit": "-", "balance": "-"}]
             if not person.balances
             else [
-                {"person": person.person_name, "unit": b.unit_identifier, "balance": b.quantity}
+                {"person": person.person_name, "unit": b.unit_identifier, "balance": f"{b.quantity:.2f}"}
                 for b in person.balances
             ]
         )

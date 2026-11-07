@@ -267,7 +267,9 @@ class SplitDoesNotSumToLine(SplitError):
         self.given = given
 
     def __str__(self) -> str:
-        return f"Split shares sum to {self.given}, not the line's {self.line_quantity}"
+        # normalize() drops the zeros the stored scale pads onto a quantity
+        # (64.00000000), which are noise in a message a person reads.
+        return f"Split shares sum to {self.given.normalize():f}, not the line's {self.line_quantity.normalize():f}"
 
 
 class EmptySplitGroupName(SplitError):

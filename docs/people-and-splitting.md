@@ -88,7 +88,7 @@ Added account Jonas (asset) with id 5
 $ kohle-cli add-account Mira --type asset --parent People
 Added account Mira (asset) with id 6
 $ kohle-cli split-line 4 --mine 32 --share Jonas:40
-Error: Split shares sum to 72, not the line's 64.00000000
+Error: Split shares sum to 72, not the line's 64
 $ kohle-cli split-line 4 --mine 32 --share Checking:32
 Error: Account 'Checking' is not under the People branch
 $ kohle-cli split-line 4 --mine 32 --share Nobody:32
