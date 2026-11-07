@@ -1268,7 +1268,9 @@ def _fetch_row(outcome: FetchOutcome) -> dict[str, str]:
     match outcome:
         case Priced():
             previous = outcome.previous
-            detail = f"previous {previous.price} on {previous.price_date}" if previous else "previous none"
+            # The stored price carries the column's padding (12.50000000);
+            # the close above it comes from the plugin and does not.
+            detail = f"previous {previous.price.normalize():f} on {previous.price_date}" if previous else "previous none"
             return {
                 "unit": outcome.unit.identifier,
                 "source": f"{outcome.plugin_name}:{outcome.symbol}",

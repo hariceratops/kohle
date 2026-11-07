@@ -156,8 +156,8 @@ ACME    file:ACME    already stored  2026-06-16  -        -
 GLOBEX  file:GLOBEX  already stored  2026-06-02  -        -
 $ KOHLE_PRICE_FILE=prices-later.csv kohle-cli fetch-prices
 unit    source       outcome         date        close    detail
-------  -----------  --------------  ----------  -------  -----------------------------------
-ACME    file:ACME    priced          2026-06-17  112.00   previous 110.50000000 on 2026-06-16
+------  -----------  --------------  ----------  -------  ----------------------------
+ACME    file:ACME    priced          2026-06-17  112.00   previous 110.5 on 2026-06-16
 GLOBEX  file:GLOBEX  already stored  2026-06-02  -        -
 ```
 
