@@ -78,6 +78,21 @@ $ kohle-cli record 2026-03-05 "Top up" 50 --from Checking --to Cash
 Error: Account id 2 has children and cannot be posted to directly
 ```
 
+So make the envelopes before the first posting. An account that already has
+postings cannot become a parent, because those postings would stay on it with
+no way to post to it or move them:
+
+```console
+$ kohle-cli add-account Cash --type asset
+Added account Cash (asset) with id 2
+$ kohle-cli add-account Checking --type asset
+Added account Checking (asset) with id 3
+$ kohle-cli record 2026-03-05 "Top up" 50 --from Checking --to Cash
+Recorded 50 EUR: credited Checking, debited Cash
+$ kohle-cli add-account Groceries --type asset --parent Cash
+Error: Account 'Cash' already has postings and cannot become a parent; its postings would be stranded on it
+```
+
 Reading is different: a report on a parent rolls up everything beneath it,
 which is why `balance Cash` totals all the envelopes.
 

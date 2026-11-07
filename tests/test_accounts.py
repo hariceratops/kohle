@@ -1,3 +1,6 @@
+from datetime import date
+from decimal import Decimal
+
 from sqlalchemy.orm import Session
 
 from kohle.domain.domain_errors import (
@@ -5,9 +8,11 @@ from kohle.domain.domain_errors import (
     DuplicateIBAN,
     EmptyAccountName,
     ParentAccountNotFound,
+    ParentHasPostings,
 )
 from kohle.domain.models import Account, AccountType, Operation
-from kohle.use_cases.accounts import AddAccount, ListChildAccounts
+from kohle.use_cases.accounts import AddAccount, ListAccount, ListChildAccounts
+from kohle.use_cases.journal import RecordSimpleEntry
 from kohle.use_cases.operations import ListOperations
 
 
@@ -66,3 +71,28 @@ def test_add_account_unknown_parent(session: Session) -> None:
     result = AddAccount(session).execute("Holiday", AccountType.asset, None, "Nope")
     assert result.is_err
     assert isinstance(result.unwrap_err(), ParentAccountNotFound)
+
+
+def test_an_account_with_postings_cannot_become_a_parent(session: Session) -> None:
+    """The postings would be stranded on a non-leaf: it could no longer be
+    posted to, and nothing could move them onto the new child."""
+    AddAccount(session).execute("Cash", AccountType.asset)
+    AddAccount(session).execute("Food", AccountType.expense)
+    RecordSimpleEntry(session).execute(date(2026, 3, 2), "Rewe", Decimal(10), "Cash", "Food")
+
+    result = AddAccount(session).execute("Envelope", AccountType.asset, None, "Cash")
+
+    assert result.is_err
+    err = result.unwrap_err()
+    assert isinstance(err, ParentHasPostings)
+    assert "Cash" in str(err)
+    assert [a.name for a in ListAccount(session).execute().unwrap()] == ["Cash", "Food"]
+
+
+def test_an_account_without_postings_can_still_become_a_parent(session: Session) -> None:
+    AddAccount(session).execute("Cash", AccountType.asset)
+    AddAccount(session).execute("Food", AccountType.expense)
+    RecordSimpleEntry(session).execute(date(2026, 3, 2), "Rewe", Decimal(10), "Cash", "Food")
+    AddAccount(session).execute("Wallet", AccountType.asset)
+
+    assert AddAccount(session).execute("Envelope", AccountType.asset, None, "Wallet").is_ok

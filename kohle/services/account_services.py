@@ -8,7 +8,7 @@ from kohle.domain.domain_errors import (
     DuplicateAccountName,
     DuplicateIBAN,
 )
-from kohle.domain.models import Account, AccountType
+from kohle.domain.models import Account, AccountType, JournalLine
 from kohle.infrastructure.crud import crud_create, crud_retrieve
 from kohle.infrastructure.infra_errors import check_if_unique_constraint_failed
 from kohle.infrastructure.transaction_context import DbTransactionContext
@@ -89,6 +89,14 @@ def list_child_accounts_service(ctx: DbTransactionContext, parent_id: int) -> Re
 def account_has_children_service(ctx: DbTransactionContext, account_id: int) -> Result[bool, AccountError]:
     def op(session: Session) -> bool:
         return session.query(Account.id).filter(Account.parent_id == account_id).first() is not None
+
+    return ctx.run(op).map_err(lambda err: AccountError(str(err)))
+
+
+@crud_retrieve
+def account_has_postings_service(ctx: DbTransactionContext, account_id: int) -> Result[bool, AccountError]:
+    def op(session: Session) -> bool:
+        return session.query(JournalLine.id).filter(JournalLine.account_id == account_id).first() is not None
 
     return ctx.run(op).map_err(lambda err: AccountError(str(err)))
 

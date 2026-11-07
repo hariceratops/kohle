@@ -3,11 +3,13 @@ from kohle.domain.domain_errors import (
     AccountError,
     EmptyAccountName,
     ParentAccountNotFound,
+    ParentHasPostings,
 )
 from kohle.domain.models import Account, AccountType
 from kohle.infrastructure.transaction_context import DbTransactionContext
 from kohle.infrastructure.uow import UnitOfWork
 from kohle.services.account_services import (
+    account_has_postings_service,
     add_account_service,
     get_account_by_name_service,
     list_accounts_service,
@@ -34,6 +36,11 @@ class AddAccount(UnitOfWork[Account, AccountError]):
                 if parent_res.is_err:
                     return Result.err(ParentAccountNotFound(parent_name))
                 parent_id = parent_res.unwrap().id
+                has_postings = account_has_postings_service(ctx, parent_id)
+                if has_postings.is_err:
+                    return Result.err(has_postings.unwrap_err())
+                if has_postings.unwrap():
+                    return Result.err(ParentHasPostings(parent_name))
 
             return add_account_service(ctx, name, account_type, iban or None, parent_id)
 
