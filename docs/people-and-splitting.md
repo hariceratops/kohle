@@ -20,7 +20,7 @@ something you are owed. Create one with `add-account` and `--parent People`:
 $ kohle-cli add-account Checking --type asset
 Added account Checking (asset) with id 2
 $ kohle-cli import-statement kohle-deutsche-bank Checking statement.csv
-Import succeded, 9 entries imported
+Import succeeded, 9 entries imported
 $ kohle-cli add-account Jonas --type asset --parent People
 Added account Jonas (asset) with id 5
 $ kohle-cli list-accounts
@@ -48,7 +48,7 @@ first column, and the dinner is entry 4. `--mine` states your share and each
 $ kohle-cli add-account Checking --type asset
 Added account Checking (asset) with id 2
 $ kohle-cli import-statement kohle-deutsche-bank Checking statement.csv
-Import succeded, 9 entries imported
+Import succeeded, 9 entries imported
 $ kohle-cli add-account Jonas --type asset --parent People
 Added account Jonas (asset) with id 5
 $ kohle-cli split-line 4 --mine 32 --share Jonas:32
@@ -82,13 +82,13 @@ a traceback, and nothing is changed:
 $ kohle-cli add-account Checking --type asset
 Added account Checking (asset) with id 2
 $ kohle-cli import-statement kohle-deutsche-bank Checking statement.csv
-Import succeded, 9 entries imported
+Import succeeded, 9 entries imported
 $ kohle-cli add-account Jonas --type asset --parent People
 Added account Jonas (asset) with id 5
 $ kohle-cli add-account Mira --type asset --parent People
 Added account Mira (asset) with id 6
 $ kohle-cli split-line 4 --mine 32 --share Jonas:40
-Error: Split shares sum to 72, not the line's 64.00000000
+Error: Split shares sum to 72, not the line's 64
 $ kohle-cli split-line 4 --mine 32 --share Checking:32
 Error: Account 'Checking' is not under the People branch
 $ kohle-cli split-line 4 --mine 32 --share Nobody:32
@@ -114,7 +114,8 @@ the 10 euros Jonas paid in with `record`, which reduces what he owes.
 A line that was reclassified before it was split is split out of the account it
 was moved to, not out of its original bucket. The other order does not work:
 `reclassify` refuses an entry that is already split, so correct the account
-first and split afterwards.
+first and split afterwards. A split that was undone with `unsplit-line` no
+longer counts, and the line can be reclassified again.
 
 ## Changing or undoing a split
 
@@ -127,7 +128,7 @@ single step, so a failure anywhere leaves the previous split in place.
 $ kohle-cli add-account Checking --type asset
 Added account Checking (asset) with id 2
 $ kohle-cli import-statement kohle-deutsche-bank Checking statement.csv
-Import succeded, 9 entries imported
+Import succeeded, 9 entries imported
 $ kohle-cli add-account Jonas --type asset --parent People
 Added account Jonas (asset) with id 5
 $ kohle-cli split-line 4 --mine 32 --share Jonas:32
@@ -166,7 +167,7 @@ similar spelling. `--group` goes on `split-line`:
 $ kohle-cli add-account Checking --type asset
 Added account Checking (asset) with id 2
 $ kohle-cli import-statement kohle-deutsche-bank Checking statement.csv
-Import succeded, 9 entries imported
+Import succeeded, 9 entries imported
 $ kohle-cli add-account Jonas --type asset --parent People
 Added account Jonas (asset) with id 5
 $ kohle-cli add-account Mira --type asset --parent People
@@ -203,7 +204,7 @@ yet, so it also lists your groups:
 $ kohle-cli add-account Checking --type asset
 Added account Checking (asset) with id 2
 $ kohle-cli import-statement kohle-deutsche-bank Checking statement.csv
-Import succeded, 9 entries imported
+Import succeeded, 9 entries imported
 $ kohle-cli add-account Jonas --type asset --parent People
 Added account Jonas (asset) with id 5
 $ kohle-cli add-account Mira --type asset --parent People
@@ -247,7 +248,7 @@ balance to zero. A balance that is already zero needs none:
 $ kohle-cli add-account Checking --type asset
 Added account Checking (asset) with id 2
 $ kohle-cli import-statement kohle-deutsche-bank Checking statement.csv
-Import succeded, 9 entries imported
+Import succeeded, 9 entries imported
 $ kohle-cli add-account Jonas --type asset --parent People
 Added account Jonas (asset) with id 5
 $ kohle-cli add-account Mira --type asset --parent People
@@ -278,7 +279,7 @@ update:
 $ kohle-cli add-account Checking --type asset
 Added account Checking (asset) with id 2
 $ kohle-cli import-statement kohle-deutsche-bank Checking statement.csv
-Import succeded, 9 entries imported
+Import succeeded, 9 entries imported
 $ kohle-cli add-account Jonas --type asset --parent People
 Added account Jonas (asset) with id 5
 $ kohle-cli add-account Mira --type asset --parent People
@@ -310,7 +311,7 @@ balance turns `you` into the payer when it is yours to pay:
 $ kohle-cli add-account Checking --type asset
 Added account Checking (asset) with id 2
 $ kohle-cli import-statement kohle-deutsche-bank Checking statement.csv
-Import succeded, 9 entries imported
+Import succeeded, 9 entries imported
 $ kohle-cli add-account Jonas --type asset --parent People
 Added account Jonas (asset) with id 5
 $ kohle-cli add-account Mira --type asset --parent People
@@ -346,7 +347,7 @@ rather than suggesting nothing:
 $ kohle-cli add-account Checking --type asset
 Added account Checking (asset) with id 2
 $ kohle-cli import-statement kohle-deutsche-bank Checking statement.csv
-Import succeded, 9 entries imported
+Import succeeded, 9 entries imported
 $ kohle-cli add-account Jonas --type asset --parent People
 Added account Jonas (asset) with id 5
 $ kohle-cli add-account Mira --type asset --parent People

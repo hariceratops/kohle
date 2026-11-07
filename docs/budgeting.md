@@ -49,7 +49,7 @@ Added account Restaurants (expense) with id 4
 $ kohle-cli add-account Internet --type expense
 Added account Internet (expense) with id 5
 $ kohle-cli import-statement kohle-deutsche-bank Checking statement.csv
-Import succeded, 9 entries imported
+Import succeeded, 9 entries imported
 $ kohle-cli set-cap Groceries 300 "day 1" --from 2026-01-01
 Set cap on Groceries from 2026-01-01: 300.00, day 1
 $ kohle-cli set-cap Groceries 400 "day 1" --from 2026-03-10
@@ -184,7 +184,7 @@ Added account Internet (expense) with id 5
 $ kohle-cli add-account Fitness --type expense
 Added account Fitness (expense) with id 6
 $ kohle-cli import-statement kohle-deutsche-bank Checking statement.csv
-Import succeded, 9 entries imported
+Import succeeded, 9 entries imported
 $ kohle-cli set-cap Groceries 300 "day 1" --from 2026-01-01
 Set cap on Groceries from 2026-01-01: 300.00, day 1
 $ kohle-cli set-cap Groceries 400 "day 1" --from 2026-03-10

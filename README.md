@@ -55,21 +55,12 @@ $ kohle-cli apply-rules rules.toml --yes
   rule 3 (new) -> Salary { counterparty = "Beispiel Software", direction = "in" }
 Applied: 3 added, 0 retired, 0 reordered, 0 note changed, 0 unchanged
 $ kohle-cli import-statement kohle-deutsche-bank Checking statement.csv
-Import succeded, 9 entries imported
+Import succeeded, 9 entries imported
 $ kohle-cli balance Groceries
 unit                     quantity  price    price date      market value  status      average cost
 ---------------------  ----------  -------  ------------  --------------  --------  --------------
 EUR                        125.05  -        -                     125.05  -                   1.00
 Total (base currency)      125.05  -        -                     125.05  -                   -
-```
-
-The GIF records the session above from the tape `docs/demo/taste.tape`. To
-regenerate it, install the system tools [VHS](https://github.com/charmbracelet/vhs),
-`ttyd` and `ffmpeg` (none are Python dependencies), then run from the
-repository root:
-
-```sh
-uv run vhs docs/demo/taste.tape
 ```
 
 ## Read the guide

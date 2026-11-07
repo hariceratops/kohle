@@ -17,6 +17,7 @@ from click.testing import CliRunner
 from sqlalchemy.orm import sessionmaker
 
 from kohle.app.cli.cli import cli
+from kohle.core.result import Result
 from kohle.domain.models import (
     Account,
     AccountType,
@@ -29,7 +30,8 @@ from kohle.domain.models import (
 )
 from kohle.services.journal_services import LineSpec
 from kohle.use_cases.accounts import AddAccount
-from kohle.use_cases.journal import RecordJournalEntry
+from kohle.use_cases.journal import RecordJournalEntry, UnitBalance
+from kohle.use_cases.splitting import PersonBalance
 from kohle.use_cases.units import AddUnit
 
 
@@ -941,8 +943,7 @@ def test_split_line_cli_shares_not_summing_to_the_line(session_factory: sessionm
     )
 
     assert result.exit_code != 0
-    assert "80" in result.output
-    assert "72" in result.output
+    assert "Split shares sum to 72, not the line's 80\n" in result.output
 
 
 def test_who_owes_what_cli_empty_ledger_prints_the_house_style_message(
@@ -993,6 +994,29 @@ def test_who_owes_what_cli_lists_every_person_and_breaks_down_by_group(
     assert "48.00" in by_group.output
     assert "from splits" in by_group.output
     assert "not settlement-adjusted" in by_group.output
+
+
+def test_who_owes_what_rounds_balances_even_beside_a_person_never_split_against(
+    session_factory: sessionmaker, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The column mixes numbers with the "-" placeholder, which stops tabulate
+    applying its float format, so the stored eight places leaked through."""
+    stored = UnitBalance("EUR", Decimal("32.00000000"), None, 1)
+
+    class _Fake:
+        def __init__(self, session) -> None:
+            pass
+
+        def execute(self):
+            return Result.ok([PersonBalance("Alice", [stored]), PersonBalance("Bob", [])])
+
+    monkeypatch.setattr("kohle.app.cli.cli.WhoOwesWhat", _Fake)
+
+    result = CliRunner().invoke(cli, ["who-owes-what"], obj=session_factory)
+
+    assert result.exit_code == 0
+    assert "32.00000000" not in result.output
+    assert "32.00" in result.output
 
 
 def test_settle_up_cli_nothing_outstanding(session_factory: sessionmaker) -> None:

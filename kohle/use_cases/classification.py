@@ -154,11 +154,14 @@ class Reclassify(UnitOfWork[JournalEntry, ReclassifyError]):
         def use_case(ctx: DbTransactionContext) -> Result[JournalEntry, ReclassifyError]:
             # A split entry no longer holds its full quantity on
             # final_account_id, so reclassifying it would silently post a
-            # wrong balance rather than a correction (design §5.4).
+            # wrong balance rather than a correction (design §5.4). An undone
+            # split keeps its row with no adjusting entry and the full
+            # quantity is back, so only a current allocation is refused.
             split_res = split_by_entry_service(ctx, entry_id)
             if split_res.is_ok:
-                return Result.err(EntryAlreadySplit(entry_id))
-            if not isinstance(split_res.unwrap_err(), NoSplitForEntry):
+                if split_res.unwrap().adjusting_entry_id is not None:
+                    return Result.err(EntryAlreadySplit(entry_id))
+            elif not isinstance(split_res.unwrap_err(), NoSplitForEntry):
                 return Result.err(split_res.unwrap_err())
 
             classification_res = classification_by_entry_service(ctx, entry_id)

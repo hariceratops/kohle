@@ -595,7 +595,7 @@ def import_statement(
     res = import_use_case.execute(cash_account, rows, instrument_account[0] if instrument_account else None)
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
-    click.echo(f"Import succeded, {res.unwrap()} entries imported")
+    click.echo(f"Import succeeded, {res.unwrap()} entries imported")
 
 
 @cli.command(writes=True)
@@ -1050,7 +1050,7 @@ def who_owes_what_cmd(make_session, by_group: bool):
             [{"person": person.person_name, "unit": "-", "balance": "-"}]
             if not person.balances
             else [
-                {"person": person.person_name, "unit": b.unit_identifier, "balance": b.quantity}
+                {"person": person.person_name, "unit": b.unit_identifier, "balance": f"{b.quantity:.2f}"}
                 for b in person.balances
             ]
         )
@@ -1268,7 +1268,9 @@ def _fetch_row(outcome: FetchOutcome) -> dict[str, str]:
     match outcome:
         case Priced():
             previous = outcome.previous
-            detail = f"previous {previous.price} on {previous.price_date}" if previous else "previous none"
+            # The stored price carries the column's padding (12.50000000);
+            # the close above it comes from the plugin and does not.
+            detail = f"previous {previous.price.normalize():f} on {previous.price_date}" if previous else "previous none"
             return {
                 "unit": outcome.unit.identifier,
                 "source": f"{outcome.plugin_name}:{outcome.symbol}",

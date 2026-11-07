@@ -152,6 +152,23 @@ def test_fetch_prices_with_the_file_plugin(
         assert session.scalar(select(func.count()).select_from(OperationGroup)) == groups_after_first
 
 
+def test_the_previous_close_prints_without_the_stored_padding(
+    ledger: sessionmaker, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _hold(ledger, "X1")
+    _bind(ledger, monkeypatch, "X1", "XYZ")
+    price_file = tmp_path / "prices.csv"
+    monkeypatch.setenv("KOHLE_PRICE_FILE", str(price_file))
+    price_file.write_text("identifier,date,close\nXYZ,2026-03-02,12.5\n", encoding="utf-8")
+    assert _fetch_prices(ledger, monkeypatch).exit_code == 0
+
+    price_file.write_text("identifier,date,close\nXYZ,2026-03-03,13\n", encoding="utf-8")
+    second = _fetch_prices(ledger, monkeypatch)
+
+    assert second.exit_code == 0, second.output
+    assert "previous 12.5 on 2026-03-02" in second.output
+
+
 def test_unbound_only_exits_zero(ledger: sessionmaker, monkeypatch: pytest.MonkeyPatch) -> None:
     _hold(ledger, "X1")
 
