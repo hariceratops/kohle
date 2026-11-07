@@ -55,7 +55,7 @@ $ kohle-cli apply-rules rules.toml --yes
   rule 3 (new) -> Salary { counterparty = "Beispiel Software", direction = "in" }
 Applied: 3 added, 0 retired, 0 reordered, 0 note changed, 0 unchanged
 $ kohle-cli import-statement kohle-deutsche-bank Checking statement.csv
-Import succeded, 9 entries imported
+Import succeeded, 9 entries imported
 $ kohle-cli balance Groceries
 unit                     quantity  price    price date      market value  status      average cost
 ---------------------  ----------  -------  ------------  --------------  --------  --------------

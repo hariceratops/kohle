@@ -20,7 +20,7 @@ something you are owed. Create one with `add-account` and `--parent People`:
 $ kohle-cli add-account Checking --type asset
 Added account Checking (asset) with id 2
 $ kohle-cli import-statement kohle-deutsche-bank Checking statement.csv
-Import succeded, 9 entries imported
+Import succeeded, 9 entries imported
 $ kohle-cli add-account Jonas --type asset --parent People
 Added account Jonas (asset) with id 5
 $ kohle-cli list-accounts
@@ -48,7 +48,7 @@ first column, and the dinner is entry 4. `--mine` states your share and each
 $ kohle-cli add-account Checking --type asset
 Added account Checking (asset) with id 2
 $ kohle-cli import-statement kohle-deutsche-bank Checking statement.csv
-Import succeded, 9 entries imported
+Import succeeded, 9 entries imported
 $ kohle-cli add-account Jonas --type asset --parent People
 Added account Jonas (asset) with id 5
 $ kohle-cli split-line 4 --mine 32 --share Jonas:32
@@ -82,7 +82,7 @@ a traceback, and nothing is changed:
 $ kohle-cli add-account Checking --type asset
 Added account Checking (asset) with id 2
 $ kohle-cli import-statement kohle-deutsche-bank Checking statement.csv
-Import succeded, 9 entries imported
+Import succeeded, 9 entries imported
 $ kohle-cli add-account Jonas --type asset --parent People
 Added account Jonas (asset) with id 5
 $ kohle-cli add-account Mira --type asset --parent People
@@ -127,7 +127,7 @@ single step, so a failure anywhere leaves the previous split in place.
 $ kohle-cli add-account Checking --type asset
 Added account Checking (asset) with id 2
 $ kohle-cli import-statement kohle-deutsche-bank Checking statement.csv
-Import succeded, 9 entries imported
+Import succeeded, 9 entries imported
 $ kohle-cli add-account Jonas --type asset --parent People
 Added account Jonas (asset) with id 5
 $ kohle-cli split-line 4 --mine 32 --share Jonas:32
@@ -166,7 +166,7 @@ similar spelling. `--group` goes on `split-line`:
 $ kohle-cli add-account Checking --type asset
 Added account Checking (asset) with id 2
 $ kohle-cli import-statement kohle-deutsche-bank Checking statement.csv
-Import succeded, 9 entries imported
+Import succeeded, 9 entries imported
 $ kohle-cli add-account Jonas --type asset --parent People
 Added account Jonas (asset) with id 5
 $ kohle-cli add-account Mira --type asset --parent People
@@ -203,7 +203,7 @@ yet, so it also lists your groups:
 $ kohle-cli add-account Checking --type asset
 Added account Checking (asset) with id 2
 $ kohle-cli import-statement kohle-deutsche-bank Checking statement.csv
-Import succeded, 9 entries imported
+Import succeeded, 9 entries imported
 $ kohle-cli add-account Jonas --type asset --parent People
 Added account Jonas (asset) with id 5
 $ kohle-cli add-account Mira --type asset --parent People
@@ -247,7 +247,7 @@ balance to zero. A balance that is already zero needs none:
 $ kohle-cli add-account Checking --type asset
 Added account Checking (asset) with id 2
 $ kohle-cli import-statement kohle-deutsche-bank Checking statement.csv
-Import succeded, 9 entries imported
+Import succeeded, 9 entries imported
 $ kohle-cli add-account Jonas --type asset --parent People
 Added account Jonas (asset) with id 5
 $ kohle-cli add-account Mira --type asset --parent People
@@ -278,7 +278,7 @@ update:
 $ kohle-cli add-account Checking --type asset
 Added account Checking (asset) with id 2
 $ kohle-cli import-statement kohle-deutsche-bank Checking statement.csv
-Import succeded, 9 entries imported
+Import succeeded, 9 entries imported
 $ kohle-cli add-account Jonas --type asset --parent People
 Added account Jonas (asset) with id 5
 $ kohle-cli add-account Mira --type asset --parent People
@@ -310,7 +310,7 @@ balance turns `you` into the payer when it is yours to pay:
 $ kohle-cli add-account Checking --type asset
 Added account Checking (asset) with id 2
 $ kohle-cli import-statement kohle-deutsche-bank Checking statement.csv
-Import succeded, 9 entries imported
+Import succeeded, 9 entries imported
 $ kohle-cli add-account Jonas --type asset --parent People
 Added account Jonas (asset) with id 5
 $ kohle-cli add-account Mira --type asset --parent People
@@ -346,7 +346,7 @@ rather than suggesting nothing:
 $ kohle-cli add-account Checking --type asset
 Added account Checking (asset) with id 2
 $ kohle-cli import-statement kohle-deutsche-bank Checking statement.csv
-Import succeded, 9 entries imported
+Import succeeded, 9 entries imported
 $ kohle-cli add-account Jonas --type asset --parent People
 Added account Jonas (asset) with id 5
 $ kohle-cli add-account Mira --type asset --parent People

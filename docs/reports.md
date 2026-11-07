@@ -39,7 +39,7 @@ Added unit ACME (security) with id 1
 $ kohle-cli add-unit GLOBEX "Globex Industrial" --kind security
 Added unit GLOBEX (security) with id 2
 $ kohle-cli import-statement kohle-simple-broker Checking Broker broker.csv
-Import succeded, 5 entries imported
+Import succeeded, 5 entries imported
 $ kohle-cli add-account Jonas --type asset --parent People
 Added account Jonas (asset) with id 6
 $ kohle-cli record 2026-05-20 "Lent to Jonas" 16 --from Checking --to Jonas
@@ -99,7 +99,7 @@ Added unit ACME (security) with id 1
 $ kohle-cli add-unit GLOBEX "Globex Industrial" --kind security
 Added unit GLOBEX (security) with id 2
 $ kohle-cli import-statement kohle-simple-broker Checking Broker broker.csv
-Import succeded, 5 entries imported
+Import succeeded, 5 entries imported
 $ kohle-cli set-price-source ACME file ACME
 Price source for ACME: file ACME
 $ kohle-cli set-price-source GLOBEX file GLOBEX
@@ -180,7 +180,7 @@ Added unit ACME (security) with id 1
 $ kohle-cli add-unit GLOBEX "Globex Industrial" --kind security
 Added unit GLOBEX (security) with id 2
 $ kohle-cli import-statement kohle-simple-broker Checking Broker broker.csv
-Import succeded, 5 entries imported
+Import succeeded, 5 entries imported
 $ kohle-cli add-account Depot2 --type asset
 Added account Depot2 (asset) with id 6
 $ kohle-cli set-price-source ACME file ACME
@@ -258,7 +258,7 @@ Added unit ACME (security) with id 1
 $ kohle-cli add-unit GLOBEX "Globex Industrial" --kind security
 Added unit GLOBEX (security) with id 2
 $ kohle-cli import-statement kohle-simple-broker Checking Broker broker.csv
-Import succeded, 5 entries imported
+Import succeeded, 5 entries imported
 $ kohle-cli set-price-source ACME file ACME
 Price source for ACME: file ACME
 $ kohle-cli set-price-source GLOBEX file GLOBEX
@@ -339,7 +339,7 @@ Added unit ACME (security) with id 1
 $ kohle-cli add-unit GLOBEX "Globex Industrial" --kind security
 Added unit GLOBEX (security) with id 2
 $ kohle-cli import-statement kohle-simple-broker Checking Broker broker.csv
-Import succeded, 5 entries imported
+Import succeeded, 5 entries imported
 $ kohle-cli set-price-source ACME file ACME
 Price source for ACME: file ACME
 $ kohle-cli set-price-source GLOBEX file GLOBEX

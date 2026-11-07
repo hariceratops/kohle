@@ -595,7 +595,7 @@ def import_statement(
     res = import_use_case.execute(cash_account, rows, instrument_account[0] if instrument_account else None)
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
-    click.echo(f"Import succeded, {res.unwrap()} entries imported")
+    click.echo(f"Import succeeded, {res.unwrap()} entries imported")
 
 
 @cli.command(writes=True)

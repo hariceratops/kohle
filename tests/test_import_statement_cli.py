@@ -92,7 +92,7 @@ def test_import_statement_four_positional_form(
     result = _run(ledger, monkeypatch, _FakePlugin([_TRADE]), "Cash", "Depot", statement_file)
 
     assert result.exit_code == 0, result.output
-    assert "1 entries imported" in result.output
+    assert "Import succeeded, 1 entries imported" in result.output
 
 
 def test_three_positional_form_still_parses(

@@ -10,7 +10,7 @@ reads its format. The sample below is a fictional Deutsche Bank export,
 $ kohle-cli add-account Checking --type asset
 Added account Checking (asset) with id 2
 $ kohle-cli import-statement kohle-deutsche-bank Checking statement.csv
-Import succeded, 9 entries imported
+Import succeeded, 9 entries imported
 ```
 
 `import-statement` takes the importer plugin, the cash account the statement
@@ -39,7 +39,7 @@ which is the queue of lines that need a rule or a manual correction:
 $ kohle-cli add-account Checking --type asset
 Added account Checking (asset) with id 2
 $ kohle-cli import-statement kohle-deutsche-bank Checking statement.csv
-Import succeded, 9 entries imported
+Import succeeded, 9 entries imported
 $ kohle-cli list-unclassified
   entry_id  date        description                                         counterparty              amount  account
 ----------  ----------  --------------------------------------------------  ----------------------  --------  --------------------
@@ -163,7 +163,7 @@ $ kohle-cli apply-rules rules.toml --yes
   rule 3 (new) -> Salary { counterparty = "Beispiel Software", direction = "in" }
 Applied: 3 added, 0 retired, 0 reordered, 0 note changed, 0 unchanged
 $ kohle-cli import-statement kohle-deutsche-bank Checking statement.csv
-Import succeded, 9 entries imported
+Import succeeded, 9 entries imported
 $ kohle-cli list-unclassified
   entry_id  date        description               counterparty      amount  account
 ----------  ----------  ------------------------  --------------  --------  --------------------
@@ -346,7 +346,7 @@ Added account Groceries (expense) with id 4
 $ kohle-cli add-account Salary --type income
 Added account Salary (income) with id 5
 $ kohle-cli import-statement kohle-deutsche-bank Checking statement.csv
-Import succeded, 9 entries imported
+Import succeeded, 9 entries imported
 $ kohle-cli apply-rules rules.toml --yes
 3 added, 0 retired, 0 reordered, 0 note changed, 0 unchanged
   rule 1 (new) -> Rent { iban = "DE02120300000000202051", amount = { min = 400, max = 1500 }, direction = "out" }
@@ -404,7 +404,7 @@ $ kohle-cli apply-rules rules.toml --yes
   rule 3 (new) -> Salary { counterparty = "Beispiel Software", direction = "in" }
 Applied: 3 added, 0 retired, 0 reordered, 0 note changed, 0 unchanged
 $ kohle-cli import-statement kohle-deutsche-bank Checking statement.csv
-Import succeded, 9 entries imported
+Import succeeded, 9 entries imported
 $ kohle-cli reclassify 4 Dining
 Reclassified entry 4 to Dining
 $ kohle-cli list-unclassified
@@ -428,7 +428,7 @@ fails with an error rather than a traceback:
 $ kohle-cli add-account Checking --type asset
 Added account Checking (asset) with id 2
 $ kohle-cli import-statement kohle-deutsche-bank Checking statement.csv
-Import succeded, 9 entries imported
+Import succeeded, 9 entries imported
 $ kohle-cli reclassify 4 Dining
 Error: Account 'Dining' not found
 $ kohle-cli reclassify 99 Dining
