@@ -212,3 +212,30 @@ def test_reclassify_split_interaction_guards(
     assert any(b.quantity == Decimal(32) for b in restaurants_balance2)
     bucket_balance = QueryAccountBalance(session).execute("Unclassified Expense").unwrap()
     assert bucket_balance == [] or all(b.quantity == 0 for b in bucket_balance)
+
+
+def test_an_undone_split_no_longer_blocks_reclassify(
+    session: Session, people_root, cash_rows, statement_row
+) -> None:
+    """unsplit-line keeps the splits row with no current allocation, and the
+    entry holds its full quantity again, so reclassify has nothing to refuse."""
+    AddAccount(session).execute("Checking", AccountType.asset, "DE1")
+    AddAccount(session).execute("Eating out", AccountType.expense)
+    AddAccount(session).execute("Restaurants", AccountType.expense)
+    AddAccount(session).execute("Alice", AccountType.asset, None, "People")
+    df = cash_rows([statement_row(date(2026, 3, 1), -80.0, "Dinner")])
+    assert ImportStatement(session).execute("Checking", df).is_ok
+    entry_id = ListUnclassified(session).execute().unwrap()[0].entry_id
+    assert Reclassify(session).execute(entry_id, "Eating out").is_ok
+    assert SplitImportedEntry(session).execute(entry_id, Decimal(32), [PersonShare("Alice", Decimal(48))]).is_ok
+    assert UnsplitEntry(session).execute(entry_id).is_ok
+
+    corrected = Reclassify(session).execute(entry_id, "Restaurants")
+
+    assert corrected.is_ok
+    restaurants = QueryAccountBalance(session).execute("Restaurants").unwrap()
+    assert any(b.quantity == Decimal(80) for b in restaurants)
+    eating_out = QueryAccountBalance(session).execute("Eating out").unwrap()
+    assert all(b.quantity == 0 for b in eating_out)
+    alice = QueryAccountBalance(session).execute("Alice").unwrap()
+    assert all(b.quantity == 0 for b in alice)

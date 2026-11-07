@@ -114,7 +114,8 @@ the 10 euros Jonas paid in with `record`, which reduces what he owes.
 A line that was reclassified before it was split is split out of the account it
 was moved to, not out of its original bucket. The other order does not work:
 `reclassify` refuses an entry that is already split, so correct the account
-first and split afterwards.
+first and split afterwards. A split that was undone with `unsplit-line` no
+longer counts, and the line can be reclassified again.
 
 ## Changing or undoing a split
 
