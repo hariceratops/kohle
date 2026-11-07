@@ -49,6 +49,21 @@ class ParentAccountNotFound(AccountError):
         return f"Parent account {self.parent_name} not found"
 
 
+class ParentHasPostings(AccountError):
+    """Adding a child makes the parent a non-leaf, and its postings would stay
+    on it: it can no longer be posted to, and nothing can move them."""
+
+    def __init__(self, parent_name: str) -> None:
+        super().__init__()
+        self.parent_name = parent_name
+
+    def __str__(self) -> str:
+        return (
+            f"Account {self.parent_name!r} already has postings and cannot become a parent; "
+            "its postings would be stranded on it"
+        )
+
+
 class UnitError(Exception):
     pass
 
