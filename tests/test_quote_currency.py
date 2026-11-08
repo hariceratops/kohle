@@ -12,8 +12,8 @@ from sqlalchemy.orm import Session
 from kohle.app.plugins.kohle_alphavantage_price_fetcher import AlphaVantagePriceFetcher
 from kohle.app.plugins.kohle_file_price_fetcher import FilePriceFetcher, MalformedPriceFile
 from kohle.core.result import Result
-from kohle.domain.domain_errors import NonBaseCurrency, NotAQuoteCurrency, NotASecurityUnit
-from kohle.domain.models import AccountType, Operation, Price, PriceBinding, UnitKind
+from kohle.domain.domain_errors import NonBaseCurrency, NotAQuoteCurrency, NotASecurityUnit, RateNotQuotedInEur
+from kohle.domain.models import Account, AccountType, Operation, Price, PriceBinding, Unit, UnitKind
 from kohle.infrastructure.transaction_context import DbTransactionContext
 from kohle.plugin.price_plugin import Close, PriceFetcherPlugin, PriceFetchError, PriceResult
 from kohle.services.account_services import add_account_service
@@ -108,7 +108,7 @@ def test_eur_close_for_an_inr_binding_is_rejected(held: Session) -> None:
 
     report = _fetch(held, _Plugin("EUR"))
 
-    (outcome,) = report.outcomes
+    (outcome,) = (o for o in report.outcomes if o.unit.identifier == "X1")
     assert isinstance(outcome, Unpriced)
     assert isinstance(outcome.reason, NonBaseCurrency)
     assert (outcome.reason.currency, outcome.reason.base) == ("EUR", "INR")
@@ -121,7 +121,7 @@ def test_a_close_in_the_bindings_currency_is_stored_with_it(held: Session) -> No
 
     report = _fetch(held, plugin)
 
-    (outcome,) = report.outcomes
+    (outcome,) = (o for o in report.outcomes if o.unit.identifier == "X1")
     assert isinstance(outcome, Priced)
     assert plugin.received == {"XYZ": "INR"}
     assert _prices(held) == [(DAY, Decimal(100), "INR")]
@@ -168,10 +168,66 @@ def test_rebinding_keeps_each_rows_own_currency(held: Session) -> None:
     assert _prices(held) == [(DAY, Decimal(100), "INR"), (date(2026, 3, 3), Decimal(2), "EUR")]
 
 
-@pytest.mark.skip(reason="TODO scaffold: issue 108")
-def test_list_price_targets_includes_a_currency_only_held_via_shares() -> None:
-    # TODO: INR when only INR-quoted shares are held
-    raise NotImplementedError
+def test_list_price_targets_includes_a_currency_only_held_via_shares(held: Session) -> None:
+    _bind(held, "INR").unwrap()
+    SetPriceSource(held).execute("INR", "file", "INREUR", PLUGINS).unwrap()
+
+    targets = ListPriceTargets(held).execute().unwrap()
+
+    assert {s: [u.identifier for u in units] for s, units in targets.by_plugin["file"].items()} == {
+        "XYZ": ["X1"],
+        "INREUR": ["INR"],
+    }
+    assert targets.unbound == []
+
+
+def test_an_unbound_quote_currency_is_a_target_and_eur_never_is(held: Session) -> None:
+    _bind(held, "INR").unwrap()
+
+    targets = ListPriceTargets(held).execute().unwrap()
+
+    assert [u.identifier for u in targets.unbound] == ["INR"]
+
+
+def test_a_held_currency_unit_is_a_target_alongside_a_share(held: Session) -> None:
+    ctx = DbTransactionContext(held)
+    rupees = add_account_service(ctx, "Rupees", AccountType.asset).unwrap()
+    cash = held.scalars(select(Account).where(Account.name == "Cash")).one()
+    eur, inr = (held.scalars(select(Unit).where(Unit.identifier == i)).one() for i in ("EUR", "INR"))
+    add_journal_entry_service(
+        ctx, date(2026, 1, 2), "remit", "remit",
+        [
+            LineSpec(rupees.id, inr.id, Decimal(100), Decimal("0.01"), is_debit=True),
+            LineSpec(cash.id, eur.id, Decimal(1), Decimal(1), is_debit=False),
+        ],
+    ).unwrap()
+    held.commit()
+
+    targets = ListPriceTargets(held).execute().unwrap()
+
+    assert [u.identifier for u in targets.unbound] == ["INR", "X1"]
+
+
+def test_a_rate_is_bound_in_eur_and_stored_as_an_ordinary_price(held: Session) -> None:
+    SetPriceSource(held).execute("INR", "file", "INREUR", PLUGINS).unwrap()
+    _bind(held, "INR").unwrap()
+
+    report = _fetch(held, _Plugin("EUR"))
+
+    outcomes = {o.unit.identifier: o for o in report.outcomes}
+    assert isinstance(outcomes["INR"], Priced)
+    assert isinstance(outcomes["X1"], Unpriced)
+    (price,) = held.scalars(select(Price)).all()
+    inr_id = held.scalars(select(Unit.id).where(Unit.identifier == "INR")).one()
+    assert (price.currency, price.unit_id) == ("EUR", inr_id)
+
+
+def test_a_rate_cannot_be_quoted_outside_eur(held: Session) -> None:
+    err = SetPriceSource(held).execute("INR", "file", "INREUR", PLUGINS, "INR").unwrap_err()
+
+    assert isinstance(err, RateNotQuotedInEur)
+    assert "INR" in str(err)
+    assert held.scalars(select(PriceBinding)).all() == []
 
 
 def _price_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: str) -> None:

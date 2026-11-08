@@ -426,6 +426,16 @@ class NotAQuoteCurrency(PriceError):
         return f"{self.code!r} is not EUR or a currency unit, so it cannot be a quote currency"
 
 
+class RateNotQuotedInEur(PriceError):
+    def __init__(self, identifier: str, code: str) -> None:
+        super().__init__()
+        self.identifier = identifier
+        self.code = code
+
+    def __str__(self) -> str:
+        return f"The rate of {self.identifier!r} is a price in EUR, so it cannot be quoted in {self.code!r}"
+
+
 class UnknownPricePlugin(PriceError):
     def __init__(self, name: str, available: list[str]) -> None:
         super().__init__()

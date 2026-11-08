@@ -14,8 +14,8 @@ entry never depends on a price.
 ## Choosing a price source
 
 `set-price-source UNIT PLUGIN SYMBOL [--currency CODE]` binds a unit to exactly
-one plugin and the symbol that plugin knows it by. Only `security` units can be
-bound. Running it again replaces the binding, and the symbol is taken as you
+one plugin and the symbol that plugin knows it by. Only `security` units and
+currency units other than EUR can be bound; commodities and EUR itself cannot. Running it again replaces the binding, and the symbol is taken as you
 give it, never guessed.
 
 ## The quote currency
@@ -56,14 +56,33 @@ $ kohle-cli set-price-source ACME nosuchplugin ACME
 Error: Unknown price plugin 'nosuchplugin'. Available: alphavantage, file
 ```
 
+## Binding a currency
+
+A currency unit such as `INR` is bound like a security, and its rate is fetched
+like a close. The stored rate is an ordinary row in the price history, the price
+of one unit of the currency in euros, so a currency must be quoted in EUR:
+`--currency` on a currency unit other than EUR is refused with the reason.
+
+```console
+$ kohle-cli add-unit INR "Indian rupee" --kind currency
+Added unit INR (currency) with id 1
+$ kohle-cli set-price-source INR file INR --currency INR
+Error: The rate of 'INR' is a price in EUR, so it cannot be quoted in 'INR'
+$ kohle-cli set-price-source INR file INR
+Price source for INR: file INR
+```
+
 Physical gold and other commodity units are not priced yet, so they stay valued
 at cost.
 
 ## Fetching prices
 
 `fetch-prices` asks each plugin once for the latest daily close of the
-securities you hold that are bound to it, and appends it to the price history.
-It prints one row per held security. The examples here use the bundled `file`
+securities and non-euro currency units you hold that are bound to it, and
+appends it to the price history. It prints one row per held unit. It also
+fetches the rate of every currency a held, bound security is quoted in, even
+when you hold none of that currency, because the security cannot be valued
+without it; an unbound one shows as `unbound`. The examples here use the bundled `file`
 plugin, which reads a CSV of `identifier,date,close` rows from the file named
 by the environment variable `KOHLE_PRICE_FILE`. It works offline, and each
 symbol gets its most recent row:

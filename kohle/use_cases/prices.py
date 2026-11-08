@@ -14,6 +14,7 @@ from kohle.domain.domain_errors import (
     NotASecurityUnit,
     PriceError,
     PriceRejection,
+    RateNotQuotedInEur,
     SetPriceSourceError,
     UnknownPricePlugin,
     UnrequestedSymbol,
@@ -59,10 +60,13 @@ class SetPriceSource(UnitOfWork[PriceBinding, SetPriceSourceError]):
             if unit_res.is_err:
                 return Result.err(unit_res.unwrap_err())
             unit = unit_res.unwrap()
-            if unit.kind != UnitKind.security:
+            is_rate = unit.kind == UnitKind.currency and unit.identifier != BASE_CURRENCY
+            if is_rate and quote_currency != BASE_CURRENCY:
+                return Result.err(RateNotQuotedInEur(identifier, quote_currency))
+            if unit.kind != UnitKind.security and not is_rate:
                 return Result.err(NotASecurityUnit(identifier, unit.kind.value))
 
-            if quote_currency != BASE_CURRENCY:
+            if not is_rate and quote_currency != BASE_CURRENCY:
                 quote_res = get_unit_by_identifier_service(ctx, quote_currency)
                 if quote_res.is_err or quote_res.unwrap().kind != UnitKind.currency:
                     return Result.err(NotAQuoteCurrency(quote_currency))
@@ -102,17 +106,44 @@ class ListPriceTargets(UnitOfWork[PriceTargets, ListPriceTargetsError]):
             held_res = held_units(ctx)
             if held_res.is_err:
                 return Result.err(held_res.unwrap_err())
-            securities = [unit for unit in held_res.unwrap() if unit.kind == UnitKind.security]
+            targets = [
+                unit
+                for unit in held_res.unwrap()
+                if unit.kind == UnitKind.security
+                or (unit.kind == UnitKind.currency and unit.identifier != BASE_CURRENCY)
+            ]
 
-            bindings_res = price_bindings_service(ctx, [unit.id for unit in securities])
+            bindings_res = price_bindings_service(ctx, [unit.id for unit in targets])
             if bindings_res.is_err:
                 return Result.err(bindings_res.unwrap_err())
             bindings = {binding.unit_id: binding for binding in bindings_res.unwrap()}
 
+            # A currency whose every unit was spent on shares is not held, yet the shares
+            # still need its rate to be valued.
+            target_ids = {unit.id for unit in targets}
+            quote_codes = {
+                bindings[unit.id].quote_currency
+                for unit in targets
+                if unit.kind == UnitKind.security and unit.id in bindings
+            } - {BASE_CURRENCY}
+            extra: list[Unit] = []
+            for code in sorted(quote_codes):
+                currency_res = get_unit_by_identifier_service(ctx, code)
+                if currency_res.is_err:
+                    return Result.err(PriceError(str(currency_res.unwrap_err())))
+                if currency_res.unwrap().id not in target_ids:
+                    extra.append(currency_res.unwrap())
+            if extra:
+                extra_res = price_bindings_service(ctx, [unit.id for unit in extra])
+                if extra_res.is_err:
+                    return Result.err(extra_res.unwrap_err())
+                bindings.update({binding.unit_id: binding for binding in extra_res.unwrap()})
+                targets = sorted([*targets, *extra], key=lambda unit: unit.identifier)
+
             by_plugin: dict[str, dict[str, list[Unit]]] = {}
             unbound: list[Unit] = []
             quote_currencies: dict[int, str] = {}
-            for unit in securities:
+            for unit in targets:
                 binding = bindings.get(unit.id)
                 if binding is None:
                     unbound.append(unit)
