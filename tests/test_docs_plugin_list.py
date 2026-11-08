@@ -79,7 +79,7 @@ def test_the_table_lists_the_bundled_plugins_by_kind_then_name() -> None:
     table = _load_hook().plugin_table()
 
     names = [line.strip("|").split("|")[0].strip() for line in table.splitlines()[2:]]
-    assert names == ["kohle-deutsche-bank", "kohle-simple-broker", "alphavantage", "file"]
+    assert names == ["kohle-deutsche-bank", "kohle-simple-broker", "alphavantage", "ecb", "file"]
 
 
 def test_the_hook_replaces_the_placeholder() -> None:

@@ -53,7 +53,7 @@ Price source for ACME: file ACME-INR
 $ kohle-cli set-price-source ACME file ACME-EUR
 Price source for ACME: file ACME-EUR
 $ kohle-cli set-price-source ACME nosuchplugin ACME
-Error: Unknown price plugin 'nosuchplugin'. Available: alphavantage, file
+Error: Unknown price plugin 'nosuchplugin'. Available: alphavantage, ecb, file
 ```
 
 ## Binding a currency
@@ -318,6 +318,16 @@ running `fetch-prices` on a schedule (see
   Symbols carry the exchange suffix (for example `.DEX`), so look up the
   listing in the binding's currency yourself. It does not report a currency of
   its own: it stores each close in the quote currency of the binding.
+- **`ecb`** reads the European Central Bank's daily euro reference rates, with
+  no key. The symbol is the ISO currency code, for example `INR`. The ECB
+  quotes units of the currency per euro; the stored figure is the reciprocal,
+  the price of one unit in euros, rounded to 8 places, so it is kohle's
+  number and not the ECB's. The rate is the latest working day's, fixed around
+  14:10 CET and published around 16:00 CET, and a published rate is treated as
+  final, so a revision by the ECB is never picked up. A code the ECB does not
+  publish is `unpriced` with that reason. The rates are for information; using
+  them to value holdings is fine, but the rate you enter on a foreign-currency
+  entry is your own choice. Source: ECB statistics.
 
 <!-- docs: illustration -->
 ```sh
