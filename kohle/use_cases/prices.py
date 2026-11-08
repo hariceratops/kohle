@@ -10,6 +10,7 @@ from kohle.domain.domain_errors import (
     MissingCloseResult,
     NonBaseCurrency,
     NonPositivePrice,
+    NotAQuoteCurrency,
     NotASecurityUnit,
     PriceError,
     PriceRejection,
@@ -17,7 +18,7 @@ from kohle.domain.domain_errors import (
     UnknownPricePlugin,
     UnrequestedSymbol,
 )
-from kohle.domain.models import Price, PriceBinding, Unit, UnitKind
+from kohle.domain.models import BASE_CURRENCY, Price, PriceBinding, Unit, UnitKind
 from kohle.infrastructure.transaction_context import DbTransactionContext
 from kohle.infrastructure.uow import UnitOfWork
 from kohle.plugin.price_plugin import (
@@ -35,12 +36,17 @@ from kohle.services.price_services import (
     set_price_binding_service,
 )
 from kohle.services.unit_services import get_unit_by_identifier_service
-from kohle.use_cases.journal import BASE_CURRENCY, held_units
+from kohle.use_cases.journal import held_units
 
 
 class SetPriceSource(UnitOfWork[PriceBinding, SetPriceSourceError]):
     def execute(
-        self, identifier: str, plugin_name: str, symbol: str, available_plugins: Collection[str]
+        self,
+        identifier: str,
+        plugin_name: str,
+        symbol: str,
+        available_plugins: Collection[str],
+        quote_currency: str = BASE_CURRENCY,
     ) -> Result[PriceBinding, SetPriceSourceError]:
         def use_case(ctx: DbTransactionContext) -> Result[PriceBinding, SetPriceSourceError]:
             stripped = symbol.strip()
@@ -56,7 +62,14 @@ class SetPriceSource(UnitOfWork[PriceBinding, SetPriceSourceError]):
             if unit.kind != UnitKind.security:
                 return Result.err(NotASecurityUnit(identifier, unit.kind.value))
 
-            return set_price_binding_service(ctx, unit.id, plugin_name, stripped).map_err(lambda e: e)
+            if quote_currency != BASE_CURRENCY:
+                quote_res = get_unit_by_identifier_service(ctx, quote_currency)
+                if quote_res.is_err or quote_res.unwrap().kind != UnitKind.currency:
+                    return Result.err(NotAQuoteCurrency(quote_currency))
+
+            return set_price_binding_service(ctx, unit.id, plugin_name, stripped, quote_currency).map_err(
+                lambda e: e
+            )
 
         return self._run(use_case)
 
@@ -80,6 +93,7 @@ class PriceTargets:
     by_plugin: dict[str, dict[str, list[Unit]]]
     request_order: dict[str, list[str]]
     unbound: list[Unit]
+    quote_currencies: dict[int, str]
 
 
 class ListPriceTargets(UnitOfWork[PriceTargets, ListPriceTargetsError]):
@@ -97,11 +111,13 @@ class ListPriceTargets(UnitOfWork[PriceTargets, ListPriceTargetsError]):
 
             by_plugin: dict[str, dict[str, list[Unit]]] = {}
             unbound: list[Unit] = []
+            quote_currencies: dict[int, str] = {}
             for unit in securities:
                 binding = bindings.get(unit.id)
                 if binding is None:
                     unbound.append(unit)
                 else:
+                    quote_currencies[unit.id] = binding.quote_currency
                     by_plugin.setdefault(binding.plugin_name, {}).setdefault(binding.symbol, []).append(unit)
 
             request_order: dict[str, list[str]] = {}
@@ -117,7 +133,7 @@ class ListPriceTargets(UnitOfWork[PriceTargets, ListPriceTargetsError]):
                         dates.append(None if latest is None else latest.price_date)
                     stored[symbol] = dates
                 request_order[name] = oldest_close_first(stored)
-            return Result.ok(PriceTargets(by_plugin, request_order, unbound))
+            return Result.ok(PriceTargets(by_plugin, request_order, unbound, quote_currencies))
 
         return self._run(use_case)
 
@@ -134,7 +150,15 @@ def call_price_plugins(targets: PriceTargets, plugins: Mapping[str, PriceFetcher
         if plugin is None:
             fetched[name] = Result.err(UnknownPricePlugin(name, sorted(plugins)))
         else:
-            fetched[name] = plugin.fetch_latest_closes(targets.request_order[name]).map_err(lambda e: e)
+            symbols = targets.request_order[name]
+            # Two units may share a symbol; the first by identifier names its currency, and the
+            # other unit's close is then refused by its own check.
+            by_symbol = targets.by_plugin[name]
+            quote_currencies = {
+                symbol: targets.quote_currencies[min(by_symbol[symbol], key=lambda u: u.identifier).id]
+                for symbol in symbols
+            }
+            fetched[name] = plugin.fetch_bound_closes(symbols, quote_currencies).map_err(lambda e: e)
     return fetched
 
 
@@ -177,14 +201,14 @@ class FetchReport:
     ignored: list[UnrequestedSymbol]
 
 
-def validate_close(close: Close, today: date) -> PriceRejection | None:
+def validate_close(close: Close, today: date, quote_currency: str = BASE_CURRENCY) -> PriceRejection | None:
     # is_finite() first: comparing NaN raises InvalidOperation, which would roll back every unit.
     if not close.price.is_finite() or close.price <= 0:
         return NonPositivePrice(close.price)
     if close.price_date > today:
         return FutureCloseDate(close.price_date, today)
-    if close.currency != BASE_CURRENCY:
-        return NonBaseCurrency(close.currency, BASE_CURRENCY)
+    if close.currency != quote_currency:
+        return NonBaseCurrency(close.currency, quote_currency)
     return None
 
 
@@ -215,10 +239,12 @@ class AppendPrices(UnitOfWork[FetchReport, PriceError]):
                         outcomes.extend(Unpriced(unit, name, symbol, MissingCloseResult(symbol)) for unit in units)
                     elif isinstance(result, Unavailable):
                         outcomes.extend(Unpriced(unit, name, symbol, result) for unit in units)
-                    elif (rejection := validate_close(result, today)) is not None:
-                        outcomes.extend(Unpriced(unit, name, symbol, rejection) for unit in units)
                     else:
                         for unit in units:
+                            rejection = validate_close(result, today, targets.quote_currencies[unit.id])
+                            if rejection is not None:
+                                outcomes.append(Unpriced(unit, name, symbol, rejection))
+                                continue
                             # Checked before the insert: after one UNIQUE violation the
                             # rest of the transaction fails with PendingRollbackError.
                             exists_res = price_exists_service(ctx, unit.id, result.price_date)
@@ -231,7 +257,9 @@ class AppendPrices(UnitOfWork[FetchReport, PriceError]):
                             previous_res = latest_price_service(ctx, unit.id)
                             if previous_res.is_err:
                                 return Result.err(previous_res.unwrap_err())
-                            added_res = add_price_service(ctx, unit.id, result.price_date, result.price, name)
+                            added_res = add_price_service(
+                                ctx, unit.id, result.price_date, result.price, name, result.currency
+                            )
                             if added_res.is_err:
                                 return Result.err(added_res.unwrap_err())
                             outcomes.append(Priced(unit, name, symbol, added_res.unwrap(), previous_res.unwrap()))

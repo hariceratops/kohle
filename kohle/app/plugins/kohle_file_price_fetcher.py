@@ -16,6 +16,7 @@ from kohle.plugin.price_plugin import (
 )
 
 HEADER = ["identifier", "date", "close"]
+HEADER_WITH_CURRENCY = [*HEADER, "currency"]
 PRICE_FILE_VARIABLE = "KOHLE_PRICE_FILE"
 
 
@@ -41,14 +42,19 @@ class MalformedPriceFile(PriceFetchError):
         return f"Line {self.line}: column {self.column} {self.value!r} {self.problem}"
 
 
-Rows = dict[str, dict[date, Decimal]]
+Rows = dict[str, dict[date, tuple[Decimal, str]]]
 
 
 def _parse(reader) -> Result[Rows, PriceFetchError]:
     header: list[str] = next(reader, [])
-    if header != HEADER:
+    if header not in (HEADER, HEADER_WITH_CURRENCY):
         return Result.err(
-            MalformedPriceFile(reader.line_num, "header", ",".join(header), f"is not {','.join(HEADER)!r}")
+            MalformedPriceFile(
+                reader.line_num,
+                "header",
+                ",".join(header),
+                f"is not {','.join(HEADER)!r} or {','.join(HEADER_WITH_CURRENCY)!r}",
+            )
         )
 
     rows: Rows = {}
@@ -56,11 +62,13 @@ def _parse(reader) -> Result[Rows, PriceFetchError]:
         if not cells:
             continue
         line = reader.line_num
-        if len(cells) != len(HEADER):
+        if len(cells) != len(header):
             return Result.err(
-                MalformedPriceFile(line, "row", ",".join(cells), f"has {len(cells)} fields, expected {len(HEADER)}")
+                MalformedPriceFile(line, "row", ",".join(cells), f"has {len(cells)} fields, expected {len(header)}")
             )
-        identifier, day_text, close_text = (cell.strip() for cell in cells)
+        identifier, day_text, close_text, *rest = (cell.strip() for cell in cells)
+        # A literal, not the ledger's base currency: the file's own default.
+        currency = (rest[0] if rest else "") or "EUR"
         if not identifier:
             return Result.err(MalformedPriceFile(line, "identifier", identifier, "is required"))
         try:
@@ -76,15 +84,15 @@ def _parse(reader) -> Result[Rows, PriceFetchError]:
             return Result.err(
                 MalformedPriceFile(line, "row", f"{identifier},{day_text}", "repeats an earlier identifier and date")
             )
-        days[day] = close
+        days[day] = (close, currency)
     return Result.ok(rows)
 
 
 class FilePriceFetcher(PriceFetcherPlugin):
     """Symbols looked up in the UTF-8 CSV named by `KOHLE_PRICE_FILE`, header `identifier,date,close`.
 
-    Works offline. Each symbol gets its most recent row, and every close is
-    claimed to be in EUR.
+    Works offline. Each symbol gets its most recent row. The header may add a
+    fourth column, `currency`; a row without one is claimed to be in EUR.
     """
 
     @property
@@ -114,6 +122,6 @@ class FilePriceFetcher(PriceFetcherPlugin):
                 results[symbol] = Unavailable(reason=UnavailableReason.no_symbol, detail=f"not in {path}")
                 continue
             latest = max(days)
-            # A literal, not the ledger's base currency: this is the plugin's claim about its data.
-            results[symbol] = Close(price_date=latest, price=days[latest], currency="EUR")
+            close, currency = days[latest]
+            results[symbol] = Close(price_date=latest, price=close, currency=currency)
         return Result.ok(results)

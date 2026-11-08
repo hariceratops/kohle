@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from kohle.core.result import Result
 from kohle.domain.domain_errors import PriceError
-from kohle.domain.models import Price, PriceBinding
+from kohle.domain.models import BASE_CURRENCY, Price, PriceBinding
 from kohle.infrastructure.crud import crud_create, crud_retrieve, crud_update
 from kohle.infrastructure.transaction_context import DbTransactionContext
 
@@ -28,10 +28,12 @@ def price_bindings_service(
 
 @crud_create
 def _create_price_binding_service(
-    ctx: DbTransactionContext, unit_id: int, plugin_name: str, symbol: str
+    ctx: DbTransactionContext, unit_id: int, plugin_name: str, symbol: str, quote_currency: str
 ) -> Result[PriceBinding, PriceError]:
     def op(session: Session) -> PriceBinding:
-        binding = PriceBinding(unit_id=unit_id, plugin_name=plugin_name, symbol=symbol)
+        binding = PriceBinding(
+            unit_id=unit_id, plugin_name=plugin_name, symbol=symbol, quote_currency=quote_currency
+        )
         session.add(binding)
         return binding
 
@@ -40,19 +42,24 @@ def _create_price_binding_service(
 
 @crud_update
 def _update_price_binding_service(
-    ctx: DbTransactionContext, binding_id: int, plugin_name: str, symbol: str
+    ctx: DbTransactionContext, binding_id: int, plugin_name: str, symbol: str, quote_currency: str
 ) -> Result[PriceBinding, PriceError]:
     def op(session: Session) -> PriceBinding:
         binding = session.get_one(PriceBinding, binding_id)
         binding.plugin_name = plugin_name
         binding.symbol = symbol
+        binding.quote_currency = quote_currency
         return binding
 
     return ctx.run(op).map_err(lambda err: PriceError(str(err)))
 
 
 def set_price_binding_service(
-    ctx: DbTransactionContext, unit_id: int, plugin_name: str, symbol: str
+    ctx: DbTransactionContext,
+    unit_id: int,
+    plugin_name: str,
+    symbol: str,
+    quote_currency: str = BASE_CURRENCY,
 ) -> Result[PriceBinding, PriceError]:
     """Insert the unit's binding the first time, replace it after. An identical
     rebind writes nothing, so a replay leaves no OperationGroup."""
@@ -61,19 +68,24 @@ def set_price_binding_service(
         return Result.err(existing_res.unwrap_err())
     existing = existing_res.unwrap()
     if not existing:
-        return _create_price_binding_service(ctx, unit_id, plugin_name, symbol)
+        return _create_price_binding_service(ctx, unit_id, plugin_name, symbol, quote_currency)
     binding = existing[0]
-    if binding.plugin_name == plugin_name and binding.symbol == symbol:
+    if (binding.plugin_name, binding.symbol, binding.quote_currency) == (plugin_name, symbol, quote_currency):
         return Result.ok(binding)
-    return _update_price_binding_service(ctx, binding.id, plugin_name, symbol)
+    return _update_price_binding_service(ctx, binding.id, plugin_name, symbol, quote_currency)
 
 
 @crud_create
 def add_price_service(
-    ctx: DbTransactionContext, unit_id: int, price_date: date, price: Decimal, source: str
+    ctx: DbTransactionContext,
+    unit_id: int,
+    price_date: date,
+    price: Decimal,
+    source: str,
+    currency: str = BASE_CURRENCY,
 ) -> Result[Price, PriceError]:
     def op(session: Session) -> Price:
-        row = Price(unit_id=unit_id, price_date=price_date, price=price, source=source)
+        row = Price(unit_id=unit_id, price_date=price_date, price=price, source=source, currency=currency)
         session.add(row)
         return row
 

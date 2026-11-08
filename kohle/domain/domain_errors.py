@@ -417,6 +417,15 @@ class PriceError(Exception):
     pass
 
 
+class NotAQuoteCurrency(PriceError):
+    def __init__(self, code: str) -> None:
+        super().__init__()
+        self.code = code
+
+    def __str__(self) -> str:
+        return f"{self.code!r} is not EUR or a currency unit, so it cannot be a quote currency"
+
+
 class UnknownPricePlugin(PriceError):
     def __init__(self, name: str, available: list[str]) -> None:
         super().__init__()
@@ -465,13 +474,15 @@ class FutureCloseDate(Exception):
 
 
 class NonBaseCurrency(Exception):
+    """A close in `currency` for a binding that quotes in `base`."""
+
     def __init__(self, currency: str, base: str) -> None:
         super().__init__()
         self.currency = currency
         self.base = base
 
     def __str__(self) -> str:
-        return f"Close is in {self.currency!r}, but only {self.base} closes are accepted"
+        return f"Close is in {self.currency!r}, but its binding quotes in {self.base}"
 
 
 class UnrequestedSymbol(Exception):

@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
@@ -37,7 +37,7 @@ class UnavailableReason(Enum):
 @dataclass(frozen=True, slots=True, kw_only=True)
 class Close:
     """A finished daily close. `currency` is the plugin's claim about its data;
-    core compares it with the base currency."""
+    core compares it with the quote currency of the binding."""
 
     price_date: date
     price: Decimal
@@ -93,3 +93,14 @@ class PriceFetcherPlugin(ABC):
 
         Return `Result.err` only when the plugin as a whole could not run.
         """
+
+    def fetch_bound_closes(
+        self, symbols: Sequence[str], quote_currencies: Mapping[str, str]
+    ) -> Result[dict[str, PriceResult], PriceFetchError]:
+        """What core calls. `quote_currencies[symbol]` is the currency the binding names.
+
+        A plugin that knows its data's currency ignores it and reports the truth;
+        core checks that against the binding. One that takes the currency from the
+        binding overrides this.
+        """
+        return self.fetch_latest_closes(symbols)

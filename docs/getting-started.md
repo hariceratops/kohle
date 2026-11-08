@@ -118,11 +118,11 @@ Now create it and look at the settings:
 <!-- docs: first-run uses ~/.config/kohle/init.toml -->
 ```console
 $ kohle-cli init
-Initialized ledger at ~/.local/share/kohle/kohle.db, revision d7f3b9a1c846
+Initialized ledger at ~/.local/share/kohle/kohle.db, revision a1c9e4b7d325
 $ kohle-cli list-settings
 
 ledger:   ~/.local/share/kohle/kohle.db  (default)
-revision: d7f3b9a1c846
+revision: a1c9e4b7d325
 $ kohle-cli list-config
 ledger.path = ~/.local/share/kohle/kohle.db  (default)
 ledger.mode = writer  (default)
@@ -194,7 +194,7 @@ behind. On a ledger that is already current it only says so:
 
 ```console
 $ kohle-cli migrate
-ledger at ~/.local/share/kohle/kohle.db is already at revision d7f3b9a1c846
+ledger at ~/.local/share/kohle/kohle.db is already at revision a1c9e4b7d325
 ```
 
 The other outcomes cannot be shown from a fresh ledger:

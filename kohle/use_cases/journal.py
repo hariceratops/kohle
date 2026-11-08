@@ -27,7 +27,7 @@ from kohle.domain.domain_errors import (
     UnitNotFoundError,
     UnknownInstruments,
 )
-from kohle.domain.models import AccountType, JournalEntry, JournalLine, Unit, UnitKind
+from kohle.domain.models import BASE_CURRENCY, AccountType, JournalEntry, JournalLine, Unit, UnitKind
 from kohle.infrastructure.transaction_context import DbTransactionContext
 from kohle.infrastructure.uow import UnitOfWork
 from kohle.plugin.importer_plugin import CashRow, SecurityRow, StatementRow
@@ -51,7 +51,6 @@ from kohle.services.unit_services import get_unit_by_identifier_service
 from kohle.use_cases.rules import compile_rules, match_rule, stored_rules
 from kohle.use_cases.units import get_or_create_unit
 
-BASE_CURRENCY = "EUR"
 UNCLASSIFIED_EXPENSE = "Unclassified Expense"
 PEOPLE_ROOT = "People"
 UNCLASSIFIED_INCOME = "Unclassified Income"

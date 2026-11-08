@@ -1254,14 +1254,24 @@ def settle_up_cmd(make_session, group_name: str | None):
 @click.argument("unit")
 @click.argument("plugin")
 @click.argument("symbol")
+@click.option(
+    "--currency", "quote_currency", default=BASE_CURRENCY, show_default=True,
+    help="Currency the symbol's closes are quoted in: EUR or an existing currency unit",
+)
 @click.pass_obj
-def set_price_source_cmd(make_session, unit: str, plugin: str, symbol: str):
-    """Choose the price plugin and symbol for a unit."""
-    res = SetPriceSource(make_session()).execute(unit, plugin, symbol, sorted(load_price_plugins()))
+def set_price_source_cmd(make_session, unit: str, plugin: str, symbol: str, quote_currency: str):
+    """Choose the price plugin, symbol and quote currency for a unit."""
+    res = SetPriceSource(make_session()).execute(
+        unit, plugin, symbol, sorted(load_price_plugins()), quote_currency
+    )
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
     binding = res.unwrap()
     click.echo(f"Price source for {unit}: {binding.plugin_name} {binding.symbol}")
+
+
+def _currency_suffix(currency: str) -> str:
+    return "" if currency == BASE_CURRENCY else f" {currency}"
 
 
 def _fetch_row(outcome: FetchOutcome) -> dict[str, str]:
@@ -1270,13 +1280,17 @@ def _fetch_row(outcome: FetchOutcome) -> dict[str, str]:
             previous = outcome.previous
             # The stored price carries the column's padding (12.50000000);
             # the close above it comes from the plugin and does not.
-            detail = f"previous {previous.price.normalize():f} on {previous.price_date}" if previous else "previous none"
+            detail = (
+                f"previous {previous.price.normalize():f}{_currency_suffix(previous.currency)} on {previous.price_date}"
+                if previous
+                else "previous none"
+            )
             return {
                 "unit": outcome.unit.identifier,
                 "source": f"{outcome.plugin_name}:{outcome.symbol}",
                 "outcome": "priced",
                 "date": str(outcome.close.price_date),
-                "close": str(outcome.close.price),
+                "close": f"{outcome.close.price}{_currency_suffix(outcome.close.currency)}",
                 "detail": detail,
             }
         case AlreadyStored():

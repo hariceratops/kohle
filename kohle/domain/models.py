@@ -19,6 +19,8 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from kohle.db.connection import base
 from kohle.infrastructure.model_serde import PassAll, PassId, SerdePolicy
 
+BASE_CURRENCY = "EUR"
+
 # Quantities span cash (2dp) and fractional units of securities and gold, so the
 # scale is set by the latter.
 QUANTITY = Numeric(20, 8)
@@ -351,6 +353,12 @@ class Price(base):
     price_date: Mapped[date] = mapped_column(Date, nullable=False)
     price: Mapped[Decimal] = mapped_column(QUANTITY, nullable=False)
     source: Mapped[str] = mapped_column(String, nullable=False)
+    # The currency this close is quoted in, written with the row so that rebinding
+    # cannot reinterpret history. The Python default keeps the attribute loaded on
+    # a detached row; the server default fills existing rows at migration.
+    currency: Mapped[str] = mapped_column(
+        String, nullable=False, default=BASE_CURRENCY, server_default=BASE_CURRENCY
+    )
 
     unit: Mapped["Unit"] = relationship("Unit")
 
@@ -371,7 +379,7 @@ class Price(base):
 
 class PriceBinding(base):
     """Where a security's price comes from: a plugin and the symbol it knows
-    the unit by. At most one per unit; no currency, the plugin reports it."""
+    the unit by, and the currency its closes are quoted in. At most one per unit."""
 
     __tablename__ = "price_bindings"
 
@@ -379,6 +387,9 @@ class PriceBinding(base):
     unit_id: Mapped[int] = mapped_column(ForeignKey("units.id"), nullable=False)
     plugin_name: Mapped[str] = mapped_column(String, nullable=False)
     symbol: Mapped[str] = mapped_column(String, nullable=False)
+    quote_currency: Mapped[str] = mapped_column(
+        String, nullable=False, default=BASE_CURRENCY, server_default=BASE_CURRENCY
+    )
 
     __table_args__ = (UniqueConstraint("unit_id", name="uq_price_binding_unit"),)
 
