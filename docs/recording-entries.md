@@ -302,6 +302,41 @@ account's lots hold records, but `realised`, `positions`, `balance` and
 recorded. The quantity and `--total` must be above 0, and the entry reads no
 fetched rate.
 
+## Moving a currency between your own accounts
+
+Rupees moving from one of your own accounts to another, to a broker's cash
+account for instance, are recorded like any `--currency` entry. Each lot
+keeps its date and its euro cost on the way, and nothing is realised:
+
+```console
+$ kohle-cli add-account Checking --type asset
+Added account Checking (asset) with id 2
+$ kohle-cli add-account IndianBank --type asset
+Added account IndianBank (asset) with id 3
+$ kohle-cli add-account DematCash --type asset
+Added account DematCash (asset) with id 4
+$ kohle-cli add-unit INR "Indian rupee" --kind currency
+Added unit INR (currency) with id 1
+$ kohle-cli record 2026-03-05 "Remittance" 90000 --from Checking --to IndianBank --to-unit INR --total 1000
+Recorded 90000 INR for 1000 EUR: credited Checking, debited IndianBank
+$ kohle-cli record 2026-03-10 "To demat" 50000 --from IndianBank --to DematCash --currency INR
+Recorded 50000 INR: credited IndianBank, debited DematCash
+$ kohle-cli realised
+No sales
+
+Realised gain: 0.00
+```
+
+What `DematCash` later spends is valued from the lots that crossed, so the
+50,000 rupees still cost 1000 × 50000 / 90000 euros. Moving more rupees than
+the sending account's lots hold fails `realised`, `positions`, `balance` and
+`net-worth` with a shortfall naming the unit, the account, the date and the
+amount, until the missing remittance is recorded.
+
+A currency cannot move to or from a `People` account, nor can a line be priced
+in one: people owe euros only. Such an entry records, but the same four
+commands fail as a whole, naming the entry, until it is corrected.
+
 ## Rupees that arrive from outside
 
 Rupees that did not come from your own accounts, such as the proceeds of a

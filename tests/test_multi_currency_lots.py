@@ -5,7 +5,7 @@ from decimal import Decimal
 
 import pytest
 
-from kohle.domain.domain_errors import LotShortfall
+from kohle.domain.domain_errors import CurrencyWithPeople, LotShortfall
 from kohle.domain.models import JournalEntry, JournalLine, Unit, UnitKind
 from kohle.use_cases.lots import _foreign_currency, replay
 
@@ -30,7 +30,10 @@ TCS_UNIT = 9
 BANK = 1
 DEMAT_CASH = 2
 DEMAT = 3
+JONAS = 4
+ASHA = 5
 OWN = {BANK: "IndianBank", DEMAT_CASH: "DematCash", DEMAT: "Demat"}
+PEOPLE = {JONAS: "Jonas", ASHA: "Asha"}
 
 
 def _line(
@@ -49,6 +52,7 @@ def _line(
         unit_price=Decimal(price),
         cost=None if cost is None else Decimal(cost),
         price_unit_id=INR_UNIT if priced_in_inr else None,
+        price_unit=Unit(identifier="INR", kind=UnitKind.currency) if priced_in_inr else None,
         is_debit=is_debit,
     )
 
@@ -166,10 +170,38 @@ def test_payment_beyond_the_lots_is_a_shortfall(cost: str | None) -> None:
     )
 
 
-@pytest.mark.skip(reason="TODO scaffold: issue 117")
-def test_people_account_is_refused() -> None:
-    # TODO: CurrencyWithPeople for a People credit, a People debit and a People-only entry
-    raise NotImplementedError
+@pytest.mark.parametrize(
+    "people_lines",
+    [
+        [_line(2, 2, 2, JONAS, "INR", "5000", is_debit=True, priced_in_inr=True)],
+        [_line(2, 2, 2, JONAS, "INR", "5000", is_debit=False)],
+        [
+            _line(2, 2, 2, JONAS, "INR", "5000", is_debit=False),
+            _line(3, 2, 2, ASHA, "INR", "5000", is_debit=True),
+        ],
+    ],
+    ids=["people-debit", "people-credit", "people-only"],
+)
+def test_people_account_is_refused(people_lines: list[JournalLine]) -> None:
+    lines = [_remit(1, 1, "90000", "1000"), *people_lines]
+
+    error = replay(lines, OWN, PEOPLE).unwrap_err()
+
+    assert isinstance(error, CurrencyWithPeople)
+    assert str(error).startswith("Entry 2 on 2026-01-02 puts INR on People account 'Jonas'")
+
+
+def test_a_line_priced_in_a_currency_on_a_people_account_is_refused() -> None:
+    lines = [
+        _remit(1, 1, "90000", "1000"),
+        _line(2, 2, 2, BANK, "INR", "12000", is_debit=False, priced_in_inr=True),
+        _line(3, 2, 2, JONAS, "INFY", "10", is_debit=True, price="1200", cost="12000", priced_in_inr=True),
+    ]
+
+    error = replay(lines, OWN, PEOPLE).unwrap_err()
+
+    assert isinstance(error, CurrencyWithPeople)
+    assert error.unit_identifier == "INR"
 
 
 def test_security_shortfall_is_ignored_when_only_currencies_are_replayed() -> None:

@@ -144,7 +144,11 @@ Added unit INR (currency) with id 1
 [Sending money abroad](recording-entries.md#sending-money-abroad) shows how
 to put it into an account, and
 [Buying with a currency](recording-entries.md#buying-with-a-currency) how a
-purchase paid in it takes its cost from those lots. Until it has a price source, a currency holding is
+purchase paid in it takes its cost from those lots. A currency moved between your own accounts keeps each lot's date and cost
+([Moving a currency between your own accounts](recording-entries.md#moving-a-currency-between-your-own-accounts)),
+and a currency cannot be held by a `People` account: an entry putting one there
+makes `positions`, `realised`, `balance` and `net-worth` fail, naming the
+entry. Until it has a price source, a currency holding is
 valued at its cost and says so in `balance`, like a security with no close.
 
 Every option of `add-account`, `add-unit` and the list commands is in the

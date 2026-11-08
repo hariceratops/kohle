@@ -15,6 +15,7 @@ from fractions import Fraction
 from kohle.core.result import Result
 from kohle.domain.domain_errors import (
     BalanceError,
+    CurrencyWithPeople,
     LotError,
     LotShortfall,
     RealisedError,
@@ -228,6 +229,16 @@ def _process_unit(book: _Book, unit_lines: list[JournalLine], paid: dict[int, tu
     return None
 
 
+def _currency_with_people(book: _Book, entry_lines: list[JournalLine]) -> CurrencyWithPeople | None:
+    """Currencies are held in lots, which People accounts do not have; the
+    who-owes-what fold would otherwise read such a line as euros."""
+    for line in entry_lines:
+        if line.account_id in book.people and _lot_valued(line):
+            unit = line.unit if _foreign_currency(line.unit) else line.price_unit
+            return CurrencyWithPeople(line.entry.id, line.entry.entry_date, unit.identifier, book.people[line.account_id])
+    return None
+
+
 def _apportion(book: _Book, entry_lines: list[JournalLine], paid: dict[int, tuple[Fraction, Decimal]]) -> None:
     """The cost a payment consumed goes to the lines priced in that currency, in
     proportion to their value in it. The divisor is the quantity paid, not the
@@ -261,6 +272,9 @@ def replay(
         entries.setdefault(line.entry.id, []).append(line)
 
     for entry_lines in entries.values():
+        refusal = _currency_with_people(book, entry_lines)
+        if refusal is not None:
+            return Result.err(refusal)
         by_unit: dict[str, list[JournalLine]] = {}
         for line in entry_lines:
             by_unit.setdefault(line.unit.identifier, []).append(line)

@@ -446,3 +446,49 @@ def test_changing_more_currency_than_the_lots_hold_fails_the_reports(session_fac
     realised = _run(session_factory, "realised")
     assert realised.exit_code == 1
     assert "INR in 'IndianBank' on 2026-03-20: disposes of 10000 more than the account holds" in realised.output
+
+
+def _move_ledger(session_factory) -> None:
+    _purchase_ledger(session_factory)
+    for args in (
+        ["add-account", "DematCash", "--type", "asset"],
+        ["add-account", "Jonas", "--type", "asset", "--parent", "People"],
+    ):
+        result = _run(session_factory, *args)
+        assert result.exit_code == 0, result.output
+
+
+def test_a_move_between_own_accounts_keeps_the_lots_and_realises_nothing(session_factory) -> None:
+    _move_ledger(session_factory)
+
+    moved = _run(
+        session_factory, "record", "2026-03-10", "To demat", "95000",
+        "--from", "IndianBank", "--to", "DematCash", "--currency", "INR",
+    )
+    bought = _run(
+        session_factory, "record", "2026-03-11", "Buy INFY", "100",
+        "--from", "DematCash", "--to", "Demat", "--to-unit", "INFY", "--to-price", "900", "--currency", "INR",
+    )
+
+    assert moved.exit_code == 0, moved.output
+    assert bought.exit_code == 0, bought.output
+    assert QueryRealised(session_factory()).execute(None).unwrap() == []
+    positions = {
+        p.holding.unit_identifier: p.holding
+        for p in QueryPositions(session_factory()).execute(date(2026, 3, 12), 7).unwrap().positions
+    }
+    # The oldest lot, 90,000 at 1,000, crossed to DematCash with its cost and paid for the shares.
+    assert (positions["INR"].quantity, positions["INR"].fifo_cost) == (Decimal(100000), Decimal(1100))
+    assert positions["INFY"].fifo_cost == Decimal(1000)
+
+
+@pytest.mark.parametrize("direction", [["--from", "IndianBank", "--to", "Jonas"], ["--from", "Jonas", "--to", "IndianBank"]])
+def test_a_currency_moved_to_or_from_people_fails_the_reports(session_factory, direction: list[str]) -> None:
+    _move_ledger(session_factory)
+    recorded = _run(session_factory, "record", "2026-03-10", "Lend", "5000", *direction, "--currency", "INR")
+    assert recorded.exit_code == 0, recorded.output
+
+    for command in (["positions"], ["realised"], ["balance", "IndianBank"], ["net-worth"]):
+        result = _run(session_factory, *command)
+        assert result.exit_code == 1, command
+        assert "puts INR on People account 'Jonas'; currencies other than EUR cannot be owed by people" in result.output
