@@ -287,16 +287,114 @@ def test_opening_entry_for_a_currency_and_a_security(session_factory) -> None:
         assert all(line.account.name == "Opening" for line in credits)
 
 
-@pytest.mark.skip(reason="TODO scaffold")
-def test_inflow_without_a_rate_writes_nothing() -> None:
-    # TODO: CurrencyInflowWithoutRate; a rate-less sale is a flag error, exit 2
-    raise NotImplementedError
+def _sale_ledger(session_factory) -> None:
+    for args in (
+        ["add-account", "People", "--type", "asset"],
+        ["add-account", "Girokonto", "--type", "asset"],
+        ["add-account", "Demat", "--type", "asset"],
+        ["add-account", "DematCash", "--type", "asset"],
+        ["add-account", "Dividends", "--type", "income"],
+        ["add-unit", "INR", "Indian rupee", "--kind", "currency"],
+        ["add-unit", "INFY", "Infosys", "--kind", "security"],
+        ["record", "2026-03-01", "Buy INFY", "50", "--from", "Girokonto", "--to", "Demat", "--to-unit", "INFY", "--to-price", "12"],
+    ):
+        result = _run(session_factory, *args)
+        assert result.exit_code == 0, result.output
 
 
-@pytest.mark.skip(reason="TODO scaffold")
-def test_rate_is_euros_per_unit_and_quantised() -> None:
-    # TODO: --rate
-    raise NotImplementedError
+def test_selling_a_stock_for_a_currency_realises_the_gain_at_the_rate(session_factory) -> None:
+    _sale_ledger(session_factory)
+
+    result = _run(
+        session_factory, "record", "2026-03-10", "Sell INFY", "50",
+        "--from", "Demat", "--to", "DematCash", "--from-unit", "INFY", "--from-price", "1300",
+        "--currency", "INR", "--rate", "0.0104",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert result.output == "Recorded 50 INFY @ 1300 INR at 0.0104 EUR: credited Demat, debited DematCash\n"
+    with session_factory() as session:
+        lines = list(session.scalars(select(JournalLine).where(JournalLine.entry_id == 2)))
+        stock = next(line for line in lines if line.unit.identifier == "INFY")
+        inr = next(line for line in lines if line.unit.identifier == "INR")
+        assert (stock.quantity, stock.cost, stock.is_debit) == (Decimal(50), Decimal(676), False)
+        assert (inr.quantity, inr.unit_price, inr.cost, inr.is_debit) == (Decimal(65000), Decimal("0.0104"), Decimal(676), True)
+        assert stock.price_unit is None and inr.price_unit is None
+
+    sales = QueryRealised(session_factory()).execute(None).unwrap()
+    assert [(s.unit_identifier, s.quantity, s.proceeds, s.fifo_cost, s.gain) for s in sales] == [
+        ("INFY", Decimal(50), Decimal(676), Decimal(600), Decimal(76)),
+    ]
+    positions = {p.holding.unit_identifier: p.holding for p in QueryPositions(session_factory()).execute(date(2026, 3, 11), 7).unwrap().positions}
+    assert (positions["INR"].quantity, positions["INR"].fifo_cost) == (Decimal(65000), Decimal(676))
+
+
+def test_a_dividend_in_a_currency_becomes_a_lot_at_the_rate(session_factory) -> None:
+    _sale_ledger(session_factory)
+
+    result = _run(
+        session_factory, "record", "2026-03-10", "Dividend", "2000",
+        "--from", "Dividends", "--to", "DematCash", "--currency", "INR", "--rate", "0.0104",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert result.output == "Recorded 2000 INR at 0.0104 EUR: credited Dividends, debited DematCash\n"
+    positions = {p.holding.unit_identifier: p.holding for p in QueryPositions(session_factory()).execute(date(2026, 3, 11), 7).unwrap().positions}
+    assert (positions["INR"].quantity, positions["INR"].fifo_cost) == (Decimal(2000), Decimal("20.8"))
+
+
+def test_inflow_without_a_rate_writes_nothing(session_factory) -> None:
+    _sale_ledger(session_factory)
+
+    dividend = _run(
+        session_factory, "record", "2026-03-10", "Dividend", "2000",
+        "--from", "Dividends", "--to", "DematCash", "--currency", "INR",
+    )
+    sale = _run(
+        session_factory, "record", "2026-03-10", "Sell INFY", "50",
+        "--from", "Demat", "--to", "DematCash", "--from-unit", "INFY", "--from-price", "1300", "--currency", "INR",
+    )
+
+    assert dividend.exit_code == 1
+    assert dividend.output == (
+        "Error: 'Dividends' is credited in INR with no euro value; currency arriving needs a rate (record --rate)\n"
+    )
+    assert sale.exit_code == 2
+    assert "--rate" in sale.output
+    with session_factory() as session:
+        assert [line.entry_id for line in session.scalars(select(JournalLine))] == [1, 1]
+
+
+def test_rate_is_euros_per_unit_and_quantised(session_factory) -> None:
+    _sale_ledger(session_factory)
+
+    result = _run(
+        session_factory, "record", "2026-03-10", "Dividend", "3",
+        "--from", "Dividends", "--to", "DematCash", "--currency", "INR", "--rate", "0.123456789",
+    )
+
+    assert result.exit_code == 0, result.output
+    with session_factory() as session:
+        inr = next(line for line in session.scalars(select(JournalLine)) if line.unit.identifier == "INR" and line.is_debit)
+        assert (inr.unit_price, inr.cost) == (Decimal("0.12345679"), Decimal("0.37037037"))
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        ["--rate", "0.0104"],
+        ["--currency", "INR", "--rate", "0.0104", "--to-unit", "INFY", "--to-price", "1"],
+        ["--currency", "INR", "--rate", "0"],
+    ],
+)
+def test_rate_misuse_is_a_usage_error(session_factory, extra: list[str]) -> None:
+    _sale_ledger(session_factory)
+
+    result = _run(
+        session_factory, "record", "2026-03-10", "Dividend", "2000", "--from", "Dividends", "--to", "DematCash", *extra
+    )
+
+    assert result.exit_code == 2, result.output
 
 
 @pytest.mark.skip(reason="TODO scaffold")

@@ -302,6 +302,76 @@ account's lots hold records, but `realised`, `positions`, `balance` and
 recorded. The quantity and `--total` must be above 0, and the entry reads no
 fetched rate.
 
+## Rupees that arrive from outside
+
+Rupees that did not come from your own accounts, such as the proceeds of a
+share sale in India or a dividend, have no euro figure of their own. You supply
+one with `--rate`, the euros one rupee is worth that day, and the new rupee lot
+costs the amount times the rate. kohle never fills the rate in from fetched
+prices, because a recorded entry must not depend on what a price source said on
+any day.
+
+To sell shares for rupees, name the shares with `--from-unit` and their price
+in rupees, and add `--currency` and `--rate`. The sale realises its gain in
+euros on the sale date: the rupees received times the rate, less what the
+shares cost: 50 shares sold for 65,000 rupees at 0.0104 are 676.00 euros.
+
+```console
+$ kohle-cli add-account Checking --type asset
+Added account Checking (asset) with id 2
+$ kohle-cli add-account Demat --type asset
+Added account Demat (asset) with id 3
+$ kohle-cli add-account DematCash --type asset
+Added account DematCash (asset) with id 4
+$ kohle-cli add-unit INR "Indian rupee" --kind currency
+Added unit INR (currency) with id 1
+$ kohle-cli add-unit INFY Infosys --kind security
+Added unit INFY (security) with id 2
+$ kohle-cli record 2026-03-01 "Buy INFY" 50 --from Checking --to Demat --to-unit INFY --to-price 12
+Recorded 50 INFY @ 12: credited Checking, debited Demat
+$ kohle-cli record 2026-03-10 "Sell INFY" 50 --from Demat --to DematCash --from-unit INFY --from-price 1300 --currency INR --rate 0.0104
+Recorded 50 INFY @ 1300 INR at 0.0104 EUR: credited Demat, debited DematCash
+$ kohle-cli realised
+date        account    unit      quantity    proceeds    FIFO cost    gain
+----------  ---------  ------  ----------  ----------  -----------  ------
+2026-03-10  Demat      INFY         50.00      676.00       600.00   76.00
+
+Realised gain: 76.00
+```
+
+A dividend or interest payment has no shares to name. Credit the income
+account and give the rate:
+
+```console
+$ kohle-cli add-account Dividends --type income
+Added account Dividends (income) with id 2
+$ kohle-cli add-account DematCash --type asset
+Added account DematCash (asset) with id 3
+$ kohle-cli add-unit INR "Indian rupee" --kind currency
+Added unit INR (currency) with id 1
+$ kohle-cli record 2026-03-10 "Dividend" 2000 --from Dividends --to DematCash --currency INR --rate 0.0104
+Recorded 2000 INR at 0.0104 EUR: credited Dividends, debited DematCash
+```
+
+The 2,000 rupees are a lot costing 20.80 euros. The product is rounded to
+8 decimal places, as every stored amount is. Leave `--rate` off and the entry
+is refused, with nothing recorded:
+
+```console
+$ kohle-cli add-account Dividends --type income
+Added account Dividends (income) with id 2
+$ kohle-cli add-account DematCash --type asset
+Added account DematCash (asset) with id 3
+$ kohle-cli add-unit INR "Indian rupee" --kind currency
+Added unit INR (currency) with id 1
+$ kohle-cli record 2026-03-10 "Dividend" 2000 --from Dividends --to DematCash --currency INR
+Error: 'Dividends' is credited in INR with no euro value; currency arriving needs a rate (record --rate)
+```
+
+A sale for rupees without `--rate` is a usage error, and so is `--rate`
+without `--currency` or together with `--to-unit`: a purchase takes its cost
+from the lots, and a rate there would silently realise an exchange gain.
+
 ## Entries with more than two lines
 
 `record-split` takes every line in full, as

@@ -621,6 +621,10 @@ def import_statement(
     "--currency", default=None,
     help="A currency other than EUR that pays for the entry; --to-unit's price or total is stated in it",
 )
+@click.option(
+    "--rate", type=DECIMAL, default=None,
+    help="Euros per unit of --currency, for the currency arriving; needed when it arrives from outside",
+)
 @click.pass_obj
 def record_cmd(
     make_session,
@@ -635,6 +639,7 @@ def record_cmd(
     to_price: Decimal | None,
     total: Decimal | None,
     currency: str | None,
+    rate: Decimal | None,
 ):
     """Record a two-line entry moving a quantity between accounts."""
     if from_unit and to_unit:
@@ -652,17 +657,25 @@ def record_cmd(
         if quantity <= 0 or total <= 0:
             raise click.BadParameter("QUANTITY and --total must be above 0 with --total")
 
+    if rate is not None:
+        if currency is None:
+            raise click.BadParameter("--rate requires --currency")
+        if to_unit is not None:
+            raise click.BadParameter("--rate cannot be combined with --to-unit: a purchase is costed from the lots")
+        if rate <= 0:
+            raise click.BadParameter("--rate must be above 0")
+    if from_unit is not None and currency is not None and rate is None:
+        raise click.BadParameter("--currency with --from-unit is a sale for a currency and needs --rate")
+
     currency_side = None
     if currency is not None:
         if currency == BASE_CURRENCY:
             raise click.BadParameter(f"--currency {BASE_CURRENCY} is the default and needs no flag")
-        if from_unit is not None:
-            raise click.BadParameter("--currency cannot be combined with --from-unit: a sale for a currency needs a rate")
-        if currency == to_unit:
-            raise click.BadParameter("--currency must differ from --to-unit")
+        if currency == from_unit or currency == to_unit:
+            raise click.BadParameter("--currency must differ from the unit flag's unit")
         if quantity <= 0:
             raise click.BadParameter("QUANTITY must be above 0 with --currency")
-        currency_side = CurrencySide(currency)
+        currency_side = CurrencySide(currency, rate)
 
     cross = None
     if from_unit is not None:
@@ -680,17 +693,20 @@ def record_cmd(
     res = record.execute(entry_date.date(), description, quantity, from_account, to_account, cross, currency_side)
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
+    at_rate = f" at {rate} {BASE_CURRENCY}" if rate is not None else ""
     if cross is None:
-        click.echo(f"Recorded {quantity} {currency or BASE_CURRENCY}: credited {from_account}, debited {to_account}")
+        click.echo(
+            f"Recorded {quantity} {currency or BASE_CURRENCY}{at_rate}: credited {from_account}, debited {to_account}"
+        )
     elif isinstance(cross.price, Total):
         click.echo(
-            f"Recorded {quantity} {cross.identifier} for {cross.price.amount} {currency or BASE_CURRENCY}: "
+            f"Recorded {quantity} {cross.identifier} for {cross.price.amount} {currency or BASE_CURRENCY}{at_rate}: "
             f"credited {from_account}, debited {to_account}"
         )
     else:
         in_currency = f" {currency}" if currency else ""
         click.echo(
-            f"Recorded {quantity} {cross.identifier} @ {cross.price}{in_currency}: "
+            f"Recorded {quantity} {cross.identifier} @ {cross.price}{in_currency}{at_rate}: "
             f"credited {from_account}, debited {to_account}"
         )
 

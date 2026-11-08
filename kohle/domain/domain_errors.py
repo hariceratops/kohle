@@ -189,6 +189,23 @@ class ConversionBetweenCurrencies(JournalError):
         )
 
 
+class CurrencyInflowWithoutRate(JournalError):
+    """A credit priced in a currency that is not a currency line on an own
+    account is currency arriving from outside, which has no euro value
+    without a rate."""
+
+    def __init__(self, account: str, currency: str) -> None:
+        super().__init__()
+        self.account = account
+        self.currency = currency
+
+    def __str__(self) -> str:
+        return (
+            f"'{self.account}' is credited in {self.currency} with no euro value; "
+            "currency arriving needs a rate (record --rate)"
+        )
+
+
 class PostingToNonLeafAccount(JournalError):
     """Parent balances are the sum of their children, so a posting that lands on
     a parent silently breaks every rollup."""

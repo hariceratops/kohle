@@ -10,6 +10,7 @@ from kohle.domain.domain_errors import (
     BalanceError,
     BaseCurrencyAsCrossUnit,
     ConversionBetweenCurrencies,
+    CurrencyInflowWithoutRate,
     CurrencyLineNotAtPar,
     DuplicateReferenceInStatement,
     EmptyEntry,
@@ -136,6 +137,17 @@ def _validate_price_currencies(ctx: DbTransactionContext, lines: list[LineSpec])
             elif units[line.unit_id].kind is UnitKind.currency:
                 return ConversionBetweenCurrencies(units[line.unit_id].identifier, currency)
 
+        credited = [line for line in lines if line.price_unit_id is not None and not line.is_debit]
+        if credited:
+            accounts_res = list_accounts_service(ctx)
+            if accounts_res.is_err:
+                return JournalError(str(accounts_res.unwrap_err()))
+            accounts = {account.id: account for account in accounts_res.unwrap()}
+            for line in credited:
+                account = accounts[line.account_id]
+                if line.unit_id != line.price_unit_id or account.type not in (AccountType.asset, AccountType.liability):
+                    return CurrencyInflowWithoutRate(account.name, units[line.price_unit_id].identifier)
+
     for price_unit_id in [None, *priced]:
         in_currency = [line for line in lines if line.price_unit_id == price_unit_id]
         debits = sum((line.value for line in in_currency if line.is_debit), Decimal(0))
@@ -194,6 +206,7 @@ class CurrencySide:
     """
 
     identifier: str
+    rate: Decimal | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -292,7 +305,29 @@ class RecordSimpleEntry(UnitOfWork[JournalEntry, RecordEntryError]):
                 if currency.kind is not UnitKind.currency or currency.identifier == BASE_CURRENCY:
                     return Result.err(NotACurrencyUnit(currency.identifier, currency.kind.value))
 
-            if cross is None and currency is not None:
+            if currency_side is not None and currency_side.rate is not None:
+                assert currency is not None
+                if cross is None:
+                    amount = quantity
+                elif isinstance(cross.price, Total):
+                    amount = cross.price.amount
+                else:
+                    amount = (quantity * cross.price).quantize(_PRICE_SCALE)
+                # Quantised so that what is validated is what is stored.
+                value = (amount * currency_side.rate).quantize(_PRICE_SCALE)
+                arriving = LineSpec(to_account_obj.id, currency.id, amount, currency_side.rate, is_debit=True, cost=value)
+                if cross is None:
+                    lines = [arriving, LineSpec(from_account_obj.id, currency.id, amount, currency_side.rate, is_debit=False, cost=value)]
+                else:
+                    sold_res = get_unit_by_identifier_service(ctx, cross.identifier)
+                    if sold_res.is_err:
+                        return Result.err(sold_res.unwrap_err())
+                    per_unit = (value / quantity).quantize(_PRICE_SCALE)
+                    lines = [
+                        arriving,
+                        LineSpec(from_account_obj.id, sold_res.unwrap().id, quantity, per_unit, is_debit=False, cost=value),
+                    ]
+            elif cross is None and currency is not None:
                 lines = [
                     LineSpec(to_account_obj.id, currency.id, quantity, Decimal(1), is_debit=True, price_unit_id=currency.id),
                     LineSpec(from_account_obj.id, currency.id, quantity, Decimal(1), is_debit=False, price_unit_id=currency.id),
