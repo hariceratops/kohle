@@ -68,6 +68,18 @@ class UnitError(Exception):
     pass
 
 
+class NotACurrencyUnit(UnitError):
+    """A price currency is a currency unit other than the base."""
+
+    def __init__(self, identifier: str, kind: str) -> None:
+        super().__init__()
+        self.identifier = identifier
+        self.kind = kind
+
+    def __str__(self) -> str:
+        return f"{self.identifier} ({self.kind}) cannot be a price currency: it must be a currency unit other than the base currency"
+
+
 class UnitNotFoundError(UnitError):
     def __init__(self, identifier: str) -> None:
         super().__init__()
@@ -126,13 +138,55 @@ class DuplicateJournalEntry(JournalError):
 
 
 class UnbalancedEntry(JournalError):
-    def __init__(self, debit_total, credit_total) -> None:
+    """`currency` names the price currency the entry fails to balance in; `None`
+    is the base currency, whose message is the one every entry has always had."""
+
+    def __init__(self, debit_total, credit_total, currency: str | None = None) -> None:
         super().__init__()
         self.debit_total = debit_total
         self.credit_total = credit_total
+        self.currency = currency
 
     def __str__(self) -> str:
-        return f"Entry does not balance: debits {self.debit_total} against credits {self.credit_total}"
+        where = "" if self.currency is None else f" in {self.currency}"
+        return f"Entry does not balance{where}: debits {self.debit_total} against credits {self.credit_total}"
+
+
+class NonPositiveQuantity(JournalError):
+    """A stated total or a price currency makes the quantity a divisor or a
+    weight, so it has to be above 0."""
+
+    def __init__(self, quantity: Decimal) -> None:
+        super().__init__()
+        self.quantity = quantity
+
+    def __str__(self) -> str:
+        return f"Quantity must be above 0 when a total or a price currency is given, got {self.quantity}"
+
+
+class CurrencyLineNotAtPar(JournalError):
+    """A line of the price currency itself carries rupees and no euro figure,
+    so it is priced at 1 with no stated total."""
+
+    def __init__(self, identifier: str) -> None:
+        super().__init__()
+        self.identifier = identifier
+
+    def __str__(self) -> str:
+        return f"A line of {self.identifier} priced in {self.identifier} must be at price 1 with no total"
+
+
+class ConversionBetweenCurrencies(JournalError):
+    def __init__(self, unit: str, currency: str) -> None:
+        super().__init__()
+        self.unit = unit
+        self.currency = currency
+
+    def __str__(self) -> str:
+        return (
+            f"{self.unit} cannot be priced in {self.currency}: "
+            "converting between two currencies other than the base is not supported"
+        )
 
 
 class PostingToNonLeafAccount(JournalError):
@@ -392,7 +446,64 @@ ApplyRulesError = RuleError | AccountError
 
 ClassifyRulesError = AccountError | JournalError | ClassificationError | RuleError
 
-BalanceError = AccountError | JournalError
+class LotShortfall(Exception):
+    def __init__(self, unit_identifier: str, account_name: str, entry_date: date, shortfall: Decimal) -> None:
+        super().__init__()
+        self.unit_identifier = unit_identifier
+        self.account_name = account_name
+        self.entry_date = entry_date
+        self.shortfall = shortfall
+
+    def __str__(self) -> str:
+        return (
+            f"{self.unit_identifier} in {self.account_name!r} on {self.entry_date}: "
+            f"disposes of {self.shortfall.normalize():f} more than the account holds; "
+            "is an earlier purchase missing?"
+        )
+
+
+class UnbalancedOwnMove(Exception):
+    def __init__(
+        self, entry_id: int, entry_date: date, unit_identifier: str, moved_out: Decimal, moved_in: Decimal
+    ) -> None:
+        super().__init__()
+        self.entry_id = entry_id
+        self.entry_date = entry_date
+        self.unit_identifier = unit_identifier
+        self.moved_out = moved_out
+        self.moved_in = moved_in
+
+    def __str__(self) -> str:
+        return (
+            f"Entry {self.entry_id} on {self.entry_date} moves {self.moved_out.normalize():f} "
+            f"{self.unit_identifier} out of own accounts but {self.moved_in.normalize():f} in; "
+            "record the move and any sale or purchase as separate entries"
+        )
+
+
+class SecurityMoveWithPeople(Exception):
+    def __init__(
+        self, entry_id: int, entry_date: date, unit_identifier: str, own_account: str, people_account: str
+    ) -> None:
+        super().__init__()
+        self.entry_id = entry_id
+        self.entry_date = entry_date
+        self.unit_identifier = unit_identifier
+        self.own_account = own_account
+        self.people_account = people_account
+
+    def __str__(self) -> str:
+        return (
+            f"Entry {self.entry_id} on {self.entry_date} moves {self.unit_identifier} between own account "
+            f"{self.own_account!r} and People account {self.people_account!r}; "
+            "moving securities to or from people is not supported yet"
+        )
+
+
+LotError = LotShortfall | UnbalancedOwnMove | SecurityMoveWithPeople
+
+
+BalanceError = AccountError | JournalError | LotError
 
 # AccountError survives an infrastructure failure resolving a bucket; the one
 # AccountError case the use case actually handles — AccountNotFoundError,
@@ -512,61 +623,6 @@ ListPriceTargetsError = BalanceError | PriceError
 ValuationError = BalanceError | PriceError
 
 
-class LotShortfall(Exception):
-    def __init__(self, unit_identifier: str, account_name: str, entry_date: date, shortfall: Decimal) -> None:
-        super().__init__()
-        self.unit_identifier = unit_identifier
-        self.account_name = account_name
-        self.entry_date = entry_date
-        self.shortfall = shortfall
-
-    def __str__(self) -> str:
-        return (
-            f"{self.unit_identifier} in {self.account_name!r} on {self.entry_date}: "
-            f"disposes of {self.shortfall.normalize():f} more than the account holds; "
-            "is an earlier purchase missing?"
-        )
-
-
-class UnbalancedOwnMove(Exception):
-    def __init__(
-        self, entry_id: int, entry_date: date, unit_identifier: str, moved_out: Decimal, moved_in: Decimal
-    ) -> None:
-        super().__init__()
-        self.entry_id = entry_id
-        self.entry_date = entry_date
-        self.unit_identifier = unit_identifier
-        self.moved_out = moved_out
-        self.moved_in = moved_in
-
-    def __str__(self) -> str:
-        return (
-            f"Entry {self.entry_id} on {self.entry_date} moves {self.moved_out.normalize():f} "
-            f"{self.unit_identifier} out of own accounts but {self.moved_in.normalize():f} in; "
-            "record the move and any sale or purchase as separate entries"
-        )
-
-
-class SecurityMoveWithPeople(Exception):
-    def __init__(
-        self, entry_id: int, entry_date: date, unit_identifier: str, own_account: str, people_account: str
-    ) -> None:
-        super().__init__()
-        self.entry_id = entry_id
-        self.entry_date = entry_date
-        self.unit_identifier = unit_identifier
-        self.own_account = own_account
-        self.people_account = people_account
-
-    def __str__(self) -> str:
-        return (
-            f"Entry {self.entry_id} on {self.entry_date} moves {self.unit_identifier} between own account "
-            f"{self.own_account!r} and People account {self.people_account!r}; "
-            "moving securities to or from people is not supported yet"
-        )
-
-
-LotError = LotShortfall | UnbalancedOwnMove | SecurityMoveWithPeople
 
 
 RealisedError = BalanceError | LotError

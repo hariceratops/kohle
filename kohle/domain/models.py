@@ -173,11 +173,18 @@ class JournalLine(base, Archivable):
     # like 1000/90000 does not terminate, so only the total is exact. Then
     # `unit_price` is `cost / quantity` rounded, for display only.
     cost: Mapped[Decimal | None] = mapped_column(QUANTITY, nullable=True)
+    # The currency `unit_price` and `cost` are in. NULL is the base currency,
+    # which every older row is. A non-base currency means the line has no euro
+    # figure of its own: its euro value is derived from that currency's lots.
+    price_unit_id: Mapped[int | None] = mapped_column(
+        ForeignKey("units.id", name="fk_journal_lines_price_unit_id_units"), nullable=True
+    )
     is_debit: Mapped[bool] = mapped_column(Boolean, nullable=False)
 
     entry: Mapped["JournalEntry"] = relationship("JournalEntry", back_populates="lines")
     account: Mapped["Account"] = relationship("Account")
-    unit: Mapped["Unit"] = relationship("Unit")
+    unit: Mapped["Unit"] = relationship("Unit", foreign_keys=[unit_id])
+    price_unit: Mapped["Unit | None"] = relationship("Unit", foreign_keys=[price_unit_id])
 
     __table_args__ = (
         UniqueConstraint("entry_id", "account_id", "unit_id", "is_debit", name="uq_journal_line_entry_account_unit_side"),

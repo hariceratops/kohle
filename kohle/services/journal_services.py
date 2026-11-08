@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session, joinedload
 
 from kohle.core.result import Result
@@ -11,7 +12,7 @@ from kohle.domain.domain_errors import (
     DuplicateLineInEntry,
     JournalError,
 )
-from kohle.domain.models import JournalEntry, JournalLine
+from kohle.domain.models import JournalEntry, JournalLine, Unit, UnitKind
 from kohle.infrastructure.crud import crud_create, crud_retrieve
 from kohle.infrastructure.infra_errors import check_if_unique_constraint_failed
 from kohle.infrastructure.transaction_context import DbTransactionContext
@@ -25,6 +26,7 @@ class LineSpec:
     unit_price: Decimal
     is_debit: bool
     cost: Decimal | None = None
+    price_unit_id: int | None = None
 
     @property
     def value(self) -> Decimal:
@@ -69,6 +71,7 @@ def add_journal_entry_service(
                 quantity=line.quantity,
                 unit_price=line.unit_price,
                 cost=line.cost,
+                price_unit_id=line.price_unit_id,
                 is_debit=line.is_debit,
             )
             for line in lines
@@ -142,6 +145,33 @@ def account_lines_service(
             # Load-bearing, not cosmetic: aggregate_by_unit's moving-average
             # cost fold is order-dependent and consumes this ordering as-is
             # (design §6.4). Changing it silently changes reported averages.
+            .order_by(JournalEntry.entry_date.asc(), JournalLine.id.asc())
+            .all()
+        )
+
+    return ctx.run(op).map_err(lambda err: JournalError(str(err)))
+
+
+@crud_retrieve
+def currency_lines_service(
+    ctx: DbTransactionContext, base_identifier: str
+) -> Result[list[JournalLine], JournalError]:
+    """Every line, on any account, that is of a currency other than the base or
+    is priced in one, in `account_lines_service`'s order. The base is passed in
+    so this service names no currency."""
+
+    def op(session: Session) -> list[JournalLine]:
+        return (
+            session.query(JournalLine)
+            .options(joinedload(JournalLine.entry), joinedload(JournalLine.unit))
+            .join(JournalEntry, JournalLine.entry_id == JournalEntry.id)
+            .join(Unit, JournalLine.unit_id == Unit.id)
+            .filter(
+                or_(
+                    (Unit.kind == UnitKind.currency) & (Unit.identifier != base_identifier),
+                    JournalLine.price_unit_id.is_not(None),
+                )
+            )
             .order_by(JournalEntry.entry_date.asc(), JournalLine.id.asc())
             .all()
         )

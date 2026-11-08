@@ -429,8 +429,8 @@ class NetWorthHistory(UnitOfWork[list[HistoryRow], HistoryError]):
                 samples = [s for s in samples if role in s.roles or s.on == end]
             dates = [s.on for s in samples]
 
-            own = aggregate_by_unit_through(lines.own, dates)
-            receivables = aggregate_by_unit_through(lines.receivables, dates)
+            own = aggregate_by_unit_through(lines.own, dates, lines.costs)
+            receivables = aggregate_by_unit_through(lines.receivables, dates, lines.costs)
 
             rows: list[HistoryRow] = []
             for sample, o, r in zip(samples, own, receivables, strict=True):

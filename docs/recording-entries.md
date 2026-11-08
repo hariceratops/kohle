@@ -19,7 +19,9 @@ credit to the account the money left and a debit to the one it went to.
 
 Entries balance by value, not by quantity. A line's value is its quantity times
 its price, or the total you stated for it, in the base unit (EUR, see [Accounts and units](accounts-and-units.md)).
-This is what lets ten shares at 100 euros balance 1000 euros.
+This is what lets ten shares at 100 euros balance 1000 euros. An entry paid in
+another currency balances in that currency instead, as
+[Buying with a currency](#buying-with-a-currency) shows.
 
 ## A simple entry
 
@@ -137,6 +139,71 @@ Recorded 100 INFY for 1500 EUR: credited Opening, debited Demat
 
 The rules are those of [Sending money abroad](#sending-money-abroad): the
 quantity and the total must be above 0, and the units must exist first.
+
+## Buying with a currency
+
+A purchase paid in a foreign currency states its price in that currency, with
+`--currency`. It takes the euros it cost from the currency's own lots, oldest
+first, in the account that pays: the shares cost what the rupees that bought
+them cost, and the purchase realises no gain. Take two remittances, then a
+purchase of 100 shares at 1,200 rupees each, which is 120,000 rupees:
+
+```console
+$ kohle-cli add-account Checking --type asset
+Added account Checking (asset) with id 2
+$ kohle-cli add-account IndianBank --type asset
+Added account IndianBank (asset) with id 3
+$ kohle-cli add-account Demat --type asset
+Added account Demat (asset) with id 4
+$ kohle-cli add-unit INR "Indian rupee" --kind currency
+Added unit INR (currency) with id 1
+$ kohle-cli add-unit INFY "Infosys" --kind security
+Added unit INFY (security) with id 2
+$ kohle-cli record 2026-03-05 "Remittance" 90000 --from Checking --to IndianBank --to-unit INR --total 1000
+Recorded 90000 INR for 1000 EUR: credited Checking, debited IndianBank
+$ kohle-cli record 2026-03-12 "Remittance" 100000 --from Checking --to IndianBank --to-unit INR --total 1100
+Recorded 100000 INR for 1100 EUR: credited Checking, debited IndianBank
+$ kohle-cli record 2026-03-20 "Buy INFY" 100 --from IndianBank --to Demat --to-unit INFY --to-price 1200 --currency INR
+Recorded 100 INFY @ 1200 INR: credited IndianBank, debited Demat
+$ kohle-cli balance Demat
+unit      quantity  price    price date      market value  status                average cost
+------  ----------  -------  ------------  --------------  ------------------  --------------
+INFY        100.00  -        -                    1330.00  no price (at cost)           13.30
+
+Market value: 1330.00
+1 of 1 holdings estimated (0 stale, 1 at cost)
+$ kohle-cli balance IndianBank
+unit      quantity  price    price date      market value  status                average cost
+------  ----------  -------  ------------  --------------  ------------------  --------------
+INR       70000.00  -        -                     770.00  no price (at cost)            0.01
+
+Market value: 770.00
+1 of 1 holdings estimated (0 stale, 1 at cost)
+$ kohle-cli realised
+No sales
+
+Realised gain: 0.00
+```
+
+The purchase used up the first remittance's 90,000 rupees, which cost 1,000
+euros, and 30,000 of the second's 100,000, which cost 1,100: 330 euros. The
+shares therefore cost 1,330.00 euros, and the 70,000 rupees left are the rest of
+the second remittance, 770.00 euros. Nothing is realised, because no rupees
+were changed back into euros. You pay with the account's own rupees. A purchase
+for more than that account holds still records, since recording reads no lots,
+but `balance`, `net-worth`, `positions` and `realised` then fail, naming the
+shortfall, until the missing remittance is recorded.
+
+The price, or `--total` for what the whole purchase cost, is in the currency,
+and `--currency` takes a currency unit other than EUR. It goes with `--to-unit`
+only. Recording still reads no fetched rate: the cost comes from your own earlier
+entries.
+
+For a currency, `average cost` in `balance` is the FIFO cost of what is left,
+not a moving average, so that the shares and the rupees together still add up to
+the euros you sent. Shares in euros keep the moving average, as before. The
+price and total you typed for the shares are in rupees, and `entries-in-period`
+lists them as typed.
 
 ## Entries with more than two lines
 

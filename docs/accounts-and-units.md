@@ -142,7 +142,9 @@ Added unit INR (currency) with id 1
 ```
 
 [Sending money abroad](recording-entries.md#sending-money-abroad) shows how
-to put it into an account. Until it has a price source, a currency holding is
+to put it into an account, and
+[Buying with a currency](recording-entries.md#buying-with-a-currency) how a
+purchase paid in it takes its cost from those lots. Until it has a price source, a currency holding is
 valued at its cost and says so in `balance`, like a security with no close.
 
 Every option of `add-account`, `add-unit` and the list commands is in the

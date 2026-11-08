@@ -43,6 +43,7 @@ from kohle.use_cases.conditions import render_when_inline
 from kohle.use_cases.journal import (
     BASE_CURRENCY,
     CrossUnitLine,
+    CurrencySide,
     ImportStatement,
     LineInput,
     QueryJournalByPeriod,
@@ -614,7 +615,11 @@ def import_statement(
 @click.option("--to-price", type=DECIMAL, default=None, help="Price of --to-unit")
 @click.option(
     "--total", type=DECIMAL, default=None,
-    help="Euros the --from-unit / --to-unit quantity cost or fetched, instead of a price",
+    help="What the --from-unit / --to-unit quantity cost or fetched, in euros or in --currency, instead of a price",
+)
+@click.option(
+    "--currency", default=None,
+    help="A currency other than EUR that pays for --to-unit; its price or total is stated in it",
 )
 @click.pass_obj
 def record_cmd(
@@ -629,6 +634,7 @@ def record_cmd(
     to_unit: str | None,
     to_price: Decimal | None,
     total: Decimal | None,
+    currency: str | None,
 ):
     """Record a two-line entry moving a quantity between accounts."""
     if from_unit and to_unit:
@@ -646,6 +652,20 @@ def record_cmd(
         if quantity <= 0 or total <= 0:
             raise click.BadParameter("QUANTITY and --total must be above 0 with --total")
 
+    currency_side = None
+    if currency is not None:
+        if currency == BASE_CURRENCY:
+            raise click.BadParameter(f"--currency {BASE_CURRENCY} is the default and needs no flag")
+        if from_unit is None and to_unit is None:
+            raise click.BadParameter("--currency requires --from-unit or --to-unit")
+        if from_unit is not None:
+            raise click.BadParameter("--currency cannot be combined with --from-unit: a sale for a currency needs a rate")
+        if currency == to_unit:
+            raise click.BadParameter("--currency must differ from --to-unit")
+        if quantity <= 0:
+            raise click.BadParameter("QUANTITY must be above 0 with --currency")
+        currency_side = CurrencySide(currency)
+
     cross = None
     if from_unit is not None:
         price = Total(total) if total is not None else from_price
@@ -659,19 +679,20 @@ def record_cmd(
         cross = CrossUnitLine(to_unit, price, is_debit=True)
 
     record = RecordSimpleEntry(make_session())
-    res = record.execute(entry_date.date(), description, quantity, from_account, to_account, cross)
+    res = record.execute(entry_date.date(), description, quantity, from_account, to_account, cross, currency_side)
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
     if cross is None:
         click.echo(f"Recorded {quantity} {BASE_CURRENCY}: credited {from_account}, debited {to_account}")
     elif isinstance(cross.price, Total):
         click.echo(
-            f"Recorded {quantity} {cross.identifier} for {cross.price.amount} {BASE_CURRENCY}: "
+            f"Recorded {quantity} {cross.identifier} for {cross.price.amount} {currency or BASE_CURRENCY}: "
             f"credited {from_account}, debited {to_account}"
         )
     else:
+        in_currency = f" {currency}" if currency else ""
         click.echo(
-            f"Recorded {quantity} {cross.identifier} @ {cross.price}: "
+            f"Recorded {quantity} {cross.identifier} @ {cross.price}{in_currency}: "
             f"credited {from_account}, debited {to_account}"
         )
 
