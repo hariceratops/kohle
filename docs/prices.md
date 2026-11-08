@@ -53,7 +53,7 @@ Price source for ACME: file ACME-INR
 $ kohle-cli set-price-source ACME file ACME-EUR
 Price source for ACME: file ACME-EUR
 $ kohle-cli set-price-source ACME nosuchplugin ACME
-Error: Unknown price plugin 'nosuchplugin'. Available: alphavantage, ecb, file
+Error: Unknown price plugin 'nosuchplugin'. Available: alphavantage, ecb, file, nse
 ```
 
 ## Binding a currency
@@ -328,6 +328,15 @@ running `fetch-prices` on a schedule (see
   publish is `unpriced` with that reason. The rates are for information; using
   them to value holdings is fine, but the rate you enter on a foreign-currency
   entry is your own choice. Source: ECB statistics.
+- **`nse`** reads the National Stock Exchange of India's daily bhavcopy (the
+  UDiFF file), with no key. The symbol is the ISIN, for example
+  `INE009A01021`, and the close is the official one in INR, so bind it with
+  `--currency INR`. It starts at the latest weekday and steps back over
+  holidays, up to 10 weekdays, until a file exists. Only the `EQ` series is
+  read, so a stock moved to another series such as `BE` is `unpriced` with
+  that reason. A file with other columns than expected is an error, never a
+  guess. NSE's terms of use for the archive are unverified: using it is your
+  risk.
 
 <!-- docs: illustration -->
 ```sh
