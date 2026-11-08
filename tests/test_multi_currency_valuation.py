@@ -10,7 +10,7 @@ from kohle.domain.models import AccountType, Price, UnitKind
 from kohle.infrastructure.transaction_context import DbTransactionContext
 from kohle.services.account_services import add_account_service
 from kohle.services.journal_services import LineSpec, add_journal_entry_service
-from kohle.services.price_services import add_price_service
+from kohle.services.price_services import add_price_service, set_price_binding_service
 from kohle.services.unit_services import (
     add_unit_service,
     get_unit_by_identifier_service,
@@ -19,8 +19,11 @@ from kohle.use_cases.journal import UnitBalance
 from kohle.use_cases.prices import Fresh, NoClose, Stale
 from kohle.use_cases.reporting import (
     QueryValuedBalance,
+    Subtotal,
     ValuedBalance,
     ValuedNetWorth,
+    holding_currencies,
+    subtotals,
     summarise,
     valuation_status,
 )
@@ -221,10 +224,62 @@ def test_net_worth_totals_the_converted_values(ledger: Session) -> None:
     assert report.estimates.estimated == 0
 
 
-@pytest.mark.skip(reason="TODO scaffold: issue 122")
-def test_subtotals_with_a_missing_member_show_a_dash() -> None:
-    # TODO: also a zero row and an EUR-only set giving []
-    raise NotImplementedError
+def test_subtotals_give_native_and_euro_figures_per_currency(ledger: Session) -> None:
+    _add(ledger, "X1", date(2026, 3, 9), "5000", "INR")
+    _add(ledger, "INR", date(2026, 3, 8), "0.011", "EUR")
+    ctx = DbTransactionContext(ledger)
+    x1 = get_unit_by_identifier_service(ctx, "X1").unwrap()
+    set_price_binding_service(ctx, x1.id, "file", "X1", "INR").unwrap()
+    ledger.commit()
+
+    report = ValuedNetWorth(ledger).execute(TODAY, 7).unwrap()
+
+    eur, inr = report.subtotals
+    assert (eur.currency, eur.native, eur.euro) == ("EUR", Decimal(980), Decimal(980))
+    assert (inr.currency, inr.native, inr.euro) == ("INR", Decimal(100000), Decimal(1100))
+    assert sum(s.euro for s in report.subtotals) == report.net_worth_at_market
+
+
+def test_subtotals_show_a_dash_when_a_member_has_no_close_in_the_currency() -> None:
+    inr, x1 = _balance("INR", "90000", "0"), UnitBalance("X1", Decimal(2), Decimal(10), 2)
+    rows = [
+        ValuedBalance(inr, NoClose(), NoClose()),
+        ValuedBalance(x1, NoClose()),
+    ]
+
+    result = subtotals(rows, {1: "INR", 2: "INR"})
+
+    assert result == [Subtotal("INR", None, Decimal(20) + Decimal(90000) * 0)]
+
+
+def test_subtotal_counts_a_zero_row_as_zero_and_a_currency_as_its_quantity() -> None:
+    inr = UnitBalance("INR", Decimal(500), Decimal(0), 1, UnitKind.currency)
+    zero = UnitBalance("X1", Decimal(0), None, 2)
+    rows = [
+        ValuedBalance(inr, Fresh(_price(TODAY, "0.01")), None),
+        ValuedBalance(zero, None),
+    ]
+
+    result = subtotals(rows, {1: "INR", 2: "INR"})
+
+    assert result == [Subtotal("INR", Decimal(500), Decimal(5))]
+
+
+def test_subtotals_are_empty_when_every_holding_is_in_euros() -> None:
+    eur = UnitBalance("EUR", Decimal(100), Decimal(1), 1, UnitKind.currency)
+    stock = UnitBalance("X1", Decimal(2), Decimal(10), 2)
+    rows = [ValuedBalance(eur, None), ValuedBalance(stock, Fresh(_price(TODAY, "12")))]
+
+    assert subtotals(rows, {1: "EUR", 2: "EUR"}) == []
+
+
+def test_unbound_security_and_euro_cash_group_under_euro(ledger: Session) -> None:
+    ctx = DbTransactionContext(ledger)
+    depot = [
+        b for b in QueryValuedBalance(ledger).execute("Depot", TODAY, 7).unwrap()
+    ]
+    currencies = holding_currencies(ctx, depot).unwrap()
+    assert currencies == {b.balance.unit_id: b.balance.unit_identifier if b.balance.kind is UnitKind.currency else "EUR" for b in depot}
 
 
 @pytest.mark.skip(reason="TODO scaffold: issue 123")
@@ -301,3 +356,28 @@ def test_positions_without_a_foreign_close_have_no_quoted_in_column(session_fact
 
     assert result.exit_code == 0, result.output
     assert "quoted" not in result.output
+
+
+def test_positions_and_net_worth_print_subtotals_but_balance_does_not(session_factory) -> None:
+    from click.testing import CliRunner
+
+    from kohle.app.cli.cli import cli
+
+    _positions_ledger(session_factory, "0.0104")
+    with session_factory() as session:
+        ctx = DbTransactionContext(session)
+        infy = get_unit_by_identifier_service(ctx, "INFY").unwrap()
+        set_price_binding_service(ctx, infy.id, "file", "INFY", "INR").unwrap()
+        session.commit()
+    run = lambda *a: CliRunner().invoke(cli, list(a), obj=session_factory)  # noqa: E731
+
+    for command in ("positions", "net-worth"):
+        result = run(command)
+        assert result.exit_code == 0, result.output
+        table = result.output.split("holdings estimated")[1].split("\n\n")[1].strip().splitlines()
+        assert table[0].split() == ["currency", "market", "value", "in", "EUR"]
+        rows = {line.split()[0]: line.split() for line in table[2:]}
+        assert rows["INR"][1:] == ["240000.00", "2496.00"]
+
+    assert "in EUR" not in run("balance", "Demat").output
+    assert "in EUR" not in run("net-worth-history", "--from", "2026-01-01", "--to", "2026-01-31").output

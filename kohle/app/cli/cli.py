@@ -73,6 +73,7 @@ from kohle.use_cases.reporting import (
     Position,
     QueryPositions,
     QueryValuedBalance,
+    Subtotal,
     ValuedBalance,
     ValuedNetWorth,
     ValuedRow,
@@ -1169,6 +1170,13 @@ def _market_table(rows: list[dict], sources: Sequence[ValuedRow | None]) -> str:
     return tabulate(shown, headers="keys", floatfmt=".2f", missingval="-", disable_numparse=[price_column])
 
 
+def _echo_subtotals(subtotals: list[Subtotal]) -> None:
+    if not subtotals:
+        return
+    rows = [{"currency": s.currency, "market value": s.native, "in EUR": s.euro} for s in subtotals]
+    click.echo("\n" + tabulate(rows, headers="keys", floatfmt=".2f", missingval="-"))
+
+
 def _net_worth_rows(section: str, rows: list[ValuedBalance]) -> list[dict]:
     return [
         {
@@ -1210,6 +1218,7 @@ def net_worth_cmd(make_session, max_age_days: int):
     click.echo(f"\nNet worth (at cost): {report.at_cost.net_worth_at_cost:.2f}")
     click.echo(f"Net worth (at market): {report.net_worth_at_market:.2f}")
     click.echo(_estimates_line(report.estimates))
+    _echo_subtotals(report.subtotals)
 
 
 @cli.command(writes=False)
@@ -1220,7 +1229,7 @@ def positions_cmd(make_session, max_age_days: int):
     res = QueryPositions(make_session()).execute(date.today(), max_age_days)  # noqa: DTZ011 - the user's local date, by design
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
-    positions = res.unwrap()
+    positions = res.unwrap().positions
     if not positions:
         click.echo("No positions")
     else:
@@ -1239,6 +1248,7 @@ def positions_cmd(make_session, max_age_days: int):
     click.echo(f"FIFO cost: {fifo_cost(positions):.2f}")
     click.echo(f"Unrealised gain: {unrealised_gain(positions):.2f}")
     click.echo(_estimates_line(summarise(positions)))
+    _echo_subtotals(res.unwrap().subtotals)
 
 
 @cli.command(writes=False)

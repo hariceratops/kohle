@@ -110,6 +110,25 @@ their own: their FIFO cost is the euros you sent, so their unrealised gain is
 the unrealised exchange-rate gain. A share quoted in rupees has the same gain
 folded in with its price gain, since both are measured in euros.
 
+### Subtotals per currency
+
+When some holding is in a currency other than euros, `net-worth` and
+`positions` print a small table after their closing lines, with one row per
+currency: `market value` in that currency and `in EUR`.
+
+- A holding's currency is the unit itself for a currency unit such as `INR`,
+  its binding's quote currency for a security bound with one, and euros for a
+  security with no binding.
+- The `in EUR` figures add up to the euro total, which is unchanged.
+- `market value` shows `-` when any holding in that currency has no close in
+  it, for example while a rebound security still has only euro closes. A
+  security valued at cost has no close, so it counts as missing.
+- Euro cash is its own quantity, so the `EUR` row shows `-` only when a euro
+  security has no euro close.
+
+A ledger with only euro holdings prints no subtotal table. `balance` and
+`net-worth-history` print none either.
+
 ## Positions and profit
 
 `positions` lists each security still held, summed over all your own accounts,

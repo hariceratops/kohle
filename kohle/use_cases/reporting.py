@@ -3,13 +3,14 @@ tests/test_price_guards.py forbids recording modules from touching prices,
 and out of `prices.py` so report code never shares a module with the price
 writers (design §2.1)."""
 
-from collections.abc import Iterable
-from dataclasses import dataclass
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field, replace
 from datetime import date
 from decimal import Decimal
 from typing import assert_never
 
 from kohle.core.result import Result
+from kohle.domain.models import UnitKind
 from kohle.domain.domain_errors import (
     HistoryError,
     PositionsError,
@@ -19,6 +20,7 @@ from kohle.domain.domain_errors import (
 from kohle.infrastructure.transaction_context import DbTransactionContext
 from kohle.infrastructure.uow import UnitOfWork
 from kohle.services.account_services import get_account_by_name_service
+from kohle.services.price_services import price_bindings_service
 from kohle.services.state_services import list_state_entries_service
 from kohle.services.unit_services import get_unit_by_identifier_service
 from kohle.use_cases.bundesland import state_lookup
@@ -174,6 +176,72 @@ def unrealised_gain(positions: Iterable[Position]) -> Decimal:
     return sum((p.unrealised_gain for p in positions), Decimal(0))
 
 
+def _row_unit(row: ValuedRow) -> tuple[int, str, Decimal]:
+    if isinstance(row, Position):
+        return row.holding.unit_id, row.holding.unit_identifier, row.holding.quantity
+    return row.balance.unit_id, row.balance.unit_identifier, row.balance.quantity
+
+
+def _row_kind(row: ValuedRow) -> UnitKind | None:
+    return row.holding.kind if isinstance(row, Position) else row.balance.kind
+
+
+def holding_currencies(
+    ctx: DbTransactionContext, rows: Iterable[ValuedRow]
+) -> Result[dict[int, str], PriceError]:
+    """The currency each row's unit is held in: a currency unit is itself, a
+    bound security is its binding's quote currency, anything else is euros."""
+    rows = list(rows)
+    securities = [_row_unit(r)[0] for r in rows if _row_kind(r) is not UnitKind.currency]
+    bindings_res = price_bindings_service(ctx, securities)
+    if bindings_res.is_err:
+        return Result.err(bindings_res.unwrap_err())
+    quote = {b.unit_id: b.quote_currency for b in bindings_res.unwrap()}
+    currencies = {
+        unit_id: identifier if _row_kind(r) is UnitKind.currency else quote.get(unit_id, BASE_CURRENCY)
+        for r in rows
+        for unit_id, identifier, _ in [_row_unit(r)]
+    }
+    return Result.ok(currencies)
+
+
+@dataclass(frozen=True, slots=True)
+class Subtotal:
+    currency: str
+    native: Decimal | None  # None: some member has no close in this currency
+    euro: Decimal
+
+
+def _native_value(row: ValuedRow, currency: str) -> Decimal | None:
+    _, identifier, quantity = _row_unit(row)
+    if identifier == currency and _row_kind(row) is UnitKind.currency:
+        return quantity
+    if quantity == 0:
+        return Decimal(0)
+    match row.close:
+        case Fresh(c) | Stale(c) if c.currency == currency:
+            return quantity * c.price
+        case _:
+            return None
+
+
+def subtotals(rows: Iterable[ValuedRow], currencies: Mapping[int, str]) -> list[Subtotal]:
+    """One subtotal per currency, euros first; empty when everything is in euros
+    so that a euro-only ledger prints nothing new."""
+    grouped: dict[str, list[ValuedRow]] = {}
+    for r in rows:
+        grouped.setdefault(currencies[_row_unit(r)[0]], []).append(r)
+    if grouped.keys() <= {BASE_CURRENCY}:
+        return []
+    result: list[Subtotal] = []
+    for code in sorted(grouped, key=lambda c: (c != BASE_CURRENCY, c)):
+        members = grouped[code]
+        natives = [_native_value(r, code) for r in members]
+        native = None if any(n is None for n in natives) else sum((n for n in natives if n is not None), Decimal(0))
+        result.append(Subtotal(code, native, at_market(members)))
+    return result
+
+
 @dataclass(frozen=True, slots=True)
 class EstimateSummary:
     holdings: int
@@ -206,6 +274,7 @@ class ValuedNetWorthReport:
     at_cost: NetWorthReport
     own: list[ValuedBalance]
     receivables: list[ValuedBalance]
+    subtotals: list[Subtotal] = field(default_factory=list)
 
     @property
     def net_worth_at_market(self) -> Decimal:
@@ -244,7 +313,14 @@ class ValuedNetWorth(UnitOfWork[ValuedNetWorthReport, ValuationError]):
             valued_res = valued_net_worth(ctx, report_res.unwrap(), today, max_age_days)
             if valued_res.is_err:
                 return Result.err(valued_res.unwrap_err())
-            return Result.ok(valued_res.unwrap())
+            valued = valued_res.unwrap()
+            rows = [*valued.own, *valued.receivables]
+            currencies_res = holding_currencies(ctx, rows)
+            if currencies_res.is_err:
+                return Result.err(currencies_res.unwrap_err())
+            return Result.ok(
+                replace(valued, subtotals=subtotals(rows, currencies_res.unwrap()))
+            )
 
         return self._run(use_case)
 
@@ -274,12 +350,18 @@ class QueryValuedBalance(UnitOfWork[list[ValuedBalance], ValuationError]):
         return self._run(use_case)
 
 
-class QueryPositions(UnitOfWork[list[Position], PositionsError]):
+@dataclass(frozen=True, slots=True)
+class PositionsReport:
+    positions: list[Position]
+    subtotals: list[Subtotal]
+
+
+class QueryPositions(UnitOfWork[PositionsReport, PositionsError]):
     """Held securities at their latest close beside FIFO cost. The replay and
     every close read share one transaction."""
 
-    def execute(self, today: date, max_age_days: int) -> Result[list[Position], PositionsError]:
-        def use_case(ctx: DbTransactionContext) -> Result[list[Position], PositionsError]:
+    def execute(self, today: date, max_age_days: int) -> Result[PositionsReport, PositionsError]:
+        def use_case(ctx: DbTransactionContext) -> Result[PositionsReport, PositionsError]:
             replay_res = replay_ledger(ctx)
             if replay_res.is_err:
                 return Result.err(replay_res.unwrap_err())
@@ -292,7 +374,10 @@ class QueryPositions(UnitOfWork[list[Position], PositionsError]):
                     return Result.err(quote_res.unwrap_err())
                 close, rate = quote_res.unwrap()
                 positions.append(Position(holding, close, rate))
-            return Result.ok(positions)
+            currencies_res = holding_currencies(ctx, positions)
+            if currencies_res.is_err:
+                return Result.err(currencies_res.unwrap_err())
+            return Result.ok(PositionsReport(positions, subtotals(positions, currencies_res.unwrap())))
 
         return self._run(use_case)
 
