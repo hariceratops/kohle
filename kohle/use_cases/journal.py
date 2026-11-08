@@ -283,7 +283,21 @@ class RecordSimpleEntry(UnitOfWork[JournalEntry, RecordEntryError]):
             to_account_obj = to_res.unwrap()
             base_unit_id = base_unit_res.unwrap().id
 
-            if cross is None:
+            currency = None
+            if currency_side is not None:
+                currency_res = get_unit_by_identifier_service(ctx, currency_side.identifier)
+                if currency_res.is_err:
+                    return Result.err(currency_res.unwrap_err())
+                currency = currency_res.unwrap()
+                if currency.kind is not UnitKind.currency or currency.identifier == BASE_CURRENCY:
+                    return Result.err(NotACurrencyUnit(currency.identifier, currency.kind.value))
+
+            if cross is None and currency is not None:
+                lines = [
+                    LineSpec(to_account_obj.id, currency.id, quantity, Decimal(1), is_debit=True, price_unit_id=currency.id),
+                    LineSpec(from_account_obj.id, currency.id, quantity, Decimal(1), is_debit=False, price_unit_id=currency.id),
+                ]
+            elif cross is None:
                 lines = [
                     LineSpec(to_account_obj.id, base_unit_id, quantity, Decimal(1), is_debit=True),
                     LineSpec(from_account_obj.id, base_unit_id, quantity, Decimal(1), is_debit=False),
@@ -300,25 +314,15 @@ class RecordSimpleEntry(UnitOfWork[JournalEntry, RecordEntryError]):
                 cross_account = to_account_obj if cross.is_debit else from_account_obj
                 base_account = from_account_obj if cross.is_debit else to_account_obj
 
-                cash_unit_id = base_unit_id
-                if currency_side is not None:
-                    currency_res = get_unit_by_identifier_service(ctx, currency_side.identifier)
-                    if currency_res.is_err:
-                        return Result.err(currency_res.unwrap_err())
-                    currency = currency_res.unwrap()
-                    if currency.kind is not UnitKind.currency or currency.identifier == BASE_CURRENCY:
-                        return Result.err(NotACurrencyUnit(currency.identifier, currency.kind.value))
-                    cash_unit_id = currency.id
-
                 lines = _cross_unit_lines(
                     holding_account_id=cross_account.id,
                     holding_unit_id=cross_unit_id,
                     quantity=quantity,
                     unit_price=cross.price,
                     cash_account_id=base_account.id,
-                    cash_unit_id=cash_unit_id,
+                    cash_unit_id=base_unit_id if currency is None else currency.id,
                     into_holding=cross.is_debit,
-                    paid_in_currency=currency_side is not None,
+                    paid_in_currency=currency is not None,
                 )
 
             entry_res = post_entry(ctx, entry_date, uuid4().hex, description, lines)

@@ -2,11 +2,12 @@
 Reads no prices, so the price guard covers it like journal.py."""
 
 from collections import defaultdict
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
+from types import MappingProxyType
 
 from kohle.core.result import Result
 from kohle.domain.domain_errors import (
@@ -32,6 +33,7 @@ from kohle.services.journal_services import account_lines_service
 from kohle.services.state_services import list_state_entries_service
 from kohle.use_cases.bundesland import state_lookup
 from kohle.use_cases.journal import PEOPLE_ROOT, UNCLASSIFIED_EXPENSE
+from kohle.use_cases.lots import line_costs
 from kohle.use_cases.recurrence import (
     Recurrence,
     next_occurrence,
@@ -39,6 +41,8 @@ from kohle.use_cases.recurrence import (
     render_recurrence,
     shifts,
 )
+
+_NO_COSTS: Mapping[int, Decimal] = MappingProxyType({})
 
 
 @dataclass(frozen=True, slots=True)
@@ -222,10 +226,15 @@ def cap_periods(history: Sequence[CapChange], state_on: Callable[[date], str], t
     return periods
 
 
-def net_spent(lines: Iterable[JournalLine], first: date, last: date) -> Decimal:
-    """Debits minus credits at each line's recorded value, for lines dated in [first, last]."""
+def net_spent(lines: Iterable[JournalLine], first: date, last: date, costs: Mapping[int, Decimal] = _NO_COSTS) -> Decimal:
+    """Debits minus credits for lines dated in [first, last], each at its lot
+    cost when it has one and at its recorded value otherwise."""
     return sum(
-        (line.value if line.is_debit else -line.value for line in lines if first <= line.entry.entry_date <= last),
+        (
+            costs.get(line.id, line.value) * (1 if line.is_debit else -1)
+            for line in lines
+            if first <= line.entry.entry_date <= last
+        ),
         Decimal(0),
     )
 
@@ -271,6 +280,7 @@ def uncapped_spent(
     lines: Sequence[JournalLine],
     start: date,
     end: date,
+    costs: Mapping[int, Decimal] = _NO_COSTS,
 ) -> Decimal:
     """Net spending on cappable accounts in [start, end] by lines that no cap
     covered on their own date, on the account or any ancestor."""
@@ -285,6 +295,7 @@ def uncapped_spent(
         ),
         start,
         end,
+        costs,
     )
 
 
@@ -295,6 +306,7 @@ def period_rows(
     start: date,
     end: date,
     today: date,
+    costs: Mapping[int, Decimal] = _NO_COSTS,
 ) -> list[BudgetRow]:
     rows: list[BudgetRow] = []
     for account in capped:
@@ -303,7 +315,7 @@ def period_rows(
             if period.end < start:
                 continue
             day = (today - period.start).days + 1 if period.start <= today <= period.end else None
-            rows.append(BudgetRow(account.name, period, net_spent(own, period.start, period.end), day))
+            rows.append(BudgetRow(account.name, period, net_spent(own, period.start, period.end, costs), day))
     return rows
 
 
@@ -356,8 +368,12 @@ class QueryBudget(UnitOfWork[BudgetReport, BudgetError]):
                 return Result.err(lines_res.unwrap_err())
 
             lines = lines_res.unwrap()
-            rows = period_rows(capped, lines, state_on, start, end, today)
-            unclassified = net_spent((l for l in lines if l.account_id in partition.unclassified), start, end)
-            return Result.ok(BudgetReport(rows, unclassified, uncapped_spent(capped, cappable, lines, start, end)))
+            costs_res = line_costs(ctx, lines)
+            if costs_res.is_err:
+                return Result.err(costs_res.unwrap_err())
+            costs = costs_res.unwrap()
+            rows = period_rows(capped, lines, state_on, start, end, today, costs)
+            unclassified = net_spent((l for l in lines if l.account_id in partition.unclassified), start, end, costs)
+            return Result.ok(BudgetReport(rows, unclassified, uncapped_spent(capped, cappable, lines, start, end, costs)))
 
         return self._run(use_case)

@@ -619,7 +619,7 @@ def import_statement(
 )
 @click.option(
     "--currency", default=None,
-    help="A currency other than EUR that pays for --to-unit; its price or total is stated in it",
+    help="A currency other than EUR that pays for the entry; --to-unit's price or total is stated in it",
 )
 @click.pass_obj
 def record_cmd(
@@ -656,8 +656,6 @@ def record_cmd(
     if currency is not None:
         if currency == BASE_CURRENCY:
             raise click.BadParameter(f"--currency {BASE_CURRENCY} is the default and needs no flag")
-        if from_unit is None and to_unit is None:
-            raise click.BadParameter("--currency requires --from-unit or --to-unit")
         if from_unit is not None:
             raise click.BadParameter("--currency cannot be combined with --from-unit: a sale for a currency needs a rate")
         if currency == to_unit:
@@ -683,7 +681,7 @@ def record_cmd(
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
     if cross is None:
-        click.echo(f"Recorded {quantity} {BASE_CURRENCY}: credited {from_account}, debited {to_account}")
+        click.echo(f"Recorded {quantity} {currency or BASE_CURRENCY}: credited {from_account}, debited {to_account}")
     elif isinstance(cross.price, Total):
         click.echo(
             f"Recorded {quantity} {cross.identifier} for {cross.price.amount} {currency or BASE_CURRENCY}: "
@@ -729,6 +727,8 @@ def entries_in_period(make_session, account_name, start, end):
     res = query.execute(account_name, start, end)
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
+    lines = res.unwrap()
+    priced = any(line.price_unit is not None for line in lines)
     rows = [
         {
             # First column, matching list-unclassified: it is split-line's
@@ -743,8 +743,9 @@ def entries_in_period(make_session, account_name, start, end):
             "quantity": line.quantity,
             "unit": line.unit.identifier,
             "value": line.value,
+            **({"priced in": line.price_unit.identifier if line.price_unit else BASE_CURRENCY} if priced else {}),
         }
-        for line in res.unwrap()
+        for line in lines
     ]
     click.echo(tabulate(rows, headers="keys", floatfmt=".2f"))
 

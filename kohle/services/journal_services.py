@@ -119,7 +119,7 @@ def query_lines_by_period_service(
             session.query(JournalLine)
             # The unit of work closes the session before the caller sees these,
             # so anything the caller reads has to be loaded up front.
-            .options(joinedload(JournalLine.entry), joinedload(JournalLine.unit))
+            .options(joinedload(JournalLine.entry), joinedload(JournalLine.unit), joinedload(JournalLine.price_unit))
             .join(JournalEntry, JournalLine.entry_id == JournalEntry.id)
             .filter(JournalLine.account_id == account_id)
             .filter(JournalEntry.entry_date.between(start_date, end_date))

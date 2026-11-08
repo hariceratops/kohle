@@ -205,6 +205,40 @@ the euros you sent. Shares in euros keep the moving average, as before. The
 price and total you typed for the shares are in rupees, and `entries-in-period`
 lists them as typed.
 
+## Spending a currency
+
+`--currency` on its own, with no `--to-unit` or `--from-unit`, spends that
+currency on a plain entry. Both lines carry the rupees at par, and the euros the
+expense is worth come from the lots the rupees leave, oldest first:
+
+```console
+$ kohle-cli add-account Groceries --type expense
+$ kohle-cli record 2026-03-25 "Groceries" 95000 --from IndianBank --to Groceries --currency INR
+Recorded 95000 INR: credited IndianBank, debited Groceries
+```
+
+With the two remittances above, 95,000 rupees take the whole first lot, 1,000.00
+euros, and 5,000 rupees of the second, 55.00 euros, so `budget` counts the
+groceries as 1,055.00 euros. Nothing is realised, because no rupees were changed
+back into euros, and what stays in `IndianBank` keeps the rest of the cost:
+`positions` shows 95,000 rupees at 1,045.00 euros. As with a purchase, spending
+more than the account holds records, but `budget`, `balance`, `net-worth`,
+`positions` and `realised` then fail until the missing remittance is recorded.
+
+`entries-in-period` lists the entry as typed, 95000.00 for the rupee line, and
+adds a `priced in` column naming the currency whenever a listed line has one:
+
+```console
+$ kohle-cli entries-in-period Groceries 2026-03-01 2026-04-01
+  entry_id  date        description    counterparty    side      quantity  unit      value  priced in
+----------  ----------  -------------  --------------  ------  ----------  ------  -------  -----------
+         3  2026-03-25  Groceries      -               dr        95000.00  INR    95000.00  INR
+```
+
+The column is left out when no listed line has one, so a euro-only account reads
+as before. `--currency` has to name a currency unit other than EUR, and it
+cannot be combined with `--from-unit`.
+
 ## Entries with more than two lines
 
 `record-split` takes every line in full, as

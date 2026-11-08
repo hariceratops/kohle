@@ -881,4 +881,4 @@ class NoCapInForce(CapError):
 
 
 CapWriteError = CapError | AccountError | InvalidRecurrence
-BudgetError = CapError | AccountError | JournalError | InvalidRecurrence | StateError
+BudgetError = CapError | AccountError | JournalError | InvalidRecurrence | StateError | LotError

@@ -132,7 +132,6 @@ def test_a_total_in_a_currency_is_stored_as_the_cost(session_factory) -> None:
     "extra",
     [
         ["--to-unit", "INFY", "--to-price", "1200", "--currency", "EUR"],
-        ["--currency", "INR"],
         ["--from-unit", "INFY", "--from-price", "1200", "--currency", "INR"],
         ["--to-unit", "INR", "--to-price", "1", "--currency", "INR"],
     ],
@@ -174,10 +173,87 @@ def test_a_purchase_beyond_the_lots_fails_the_reports(session_factory) -> None:
         assert "INR in 'IndianBank' on 2026-03-10: disposes of 50000 more than the account holds" in result.output
 
 
-@pytest.mark.skip(reason="TODO scaffold: issue 114")
-def test_record_currency_builds_at_par_lines() -> None:
-    # TODO: --currency
-    raise NotImplementedError
+def _expense_ledger(session_factory) -> None:
+    _purchase_ledger(session_factory)
+    for args in (
+        ["add-account", "Groceries", "--type", "expense"],
+        ["set-cap", "Groceries", "2000", "day 1", "--from", "2026-01-01"],
+    ):
+        result = _run(session_factory, *args)
+        assert result.exit_code == 0, result.output
+
+
+def test_record_currency_builds_at_par_lines(session_factory) -> None:
+    _expense_ledger(session_factory)
+
+    result = _run(
+        session_factory, "record", "2026-03-10", "Groceries", "95000",
+        "--from", "IndianBank", "--to", "Groceries", "--currency", "INR",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert result.output == "Recorded 95000 INR: credited IndianBank, debited Groceries\n"
+    with session_factory() as session:
+        lines = list(session.scalars(select(JournalLine).where(JournalLine.entry_id == 3)))
+        assert len(lines) == 2
+        for line in lines:
+            assert (line.unit.identifier, line.quantity, line.unit_price, line.cost) == ("INR", Decimal(95000), Decimal(1), None)
+            assert line.price_unit.identifier == "INR"
+        assert {line.account.name: line.is_debit for line in lines} == {"IndianBank": False, "Groceries": True}
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [["--currency", "EUR"], ["--currency", "INR", "--total", "5"]],
+)
+def test_currency_without_a_unit_misuse_is_a_flag_error(session_factory, extra) -> None:
+    _expense_ledger(session_factory)
+
+    result = _run(session_factory, "record", "2026-03-10", "Groceries", "100", "--from", "IndianBank", "--to", "Groceries", *extra)
+
+    assert result.exit_code == 2
+
+
+def test_an_at_par_currency_must_be_a_currency_unit(session_factory) -> None:
+    _expense_ledger(session_factory)
+
+    result = _run(
+        session_factory, "record", "2026-03-10", "Groceries", "10",
+        "--from", "IndianBank", "--to", "Groceries", "--currency", "INFY",
+    )
+
+    assert result.exit_code == 1
+    assert "INFY (security) cannot be a price currency" in result.output
+
+
+def test_inr_expense_is_valued_at_lot_cost(session_factory) -> None:
+    _expense_ledger(session_factory)
+    _run(session_factory, "record", "2026-03-10", "Groceries", "95000", "--from", "IndianBank", "--to", "Groceries", "--currency", "INR")
+
+    positions = {p.holding.unit_identifier: p.holding for p in QueryPositions(session_factory()).execute(date(2026, 3, 11), 7).unwrap().positions}
+    budget = _run(session_factory, "budget", "--from", "2026-03-01", "--to", "2026-03-31")
+
+    assert (positions["INR"].quantity, positions["INR"].fifo_cost) == (Decimal(95000), Decimal(1045))
+    assert QueryRealised(session_factory()).execute(None).unwrap() == []
+    assert budget.exit_code == 0, budget.output
+    row = next(line.split() for line in budget.output.splitlines() if line.startswith("Groceries"))
+    assert "1055.00" in row, budget.output
+
+
+def test_entries_in_period_shows_face_values_and_the_currency_priced_in(session_factory) -> None:
+    _expense_ledger(session_factory)
+    _run(session_factory, "record", "2026-03-10", "Groceries", "95000", "--from", "IndianBank", "--to", "Groceries", "--currency", "INR")
+    _run(session_factory, "record", "2026-03-11", "Corner shop", "80", "--from", "Girokonto", "--to", "Groceries")
+
+    mixed = _run(session_factory, "entries-in-period", "Groceries", "2026-03-01", "2026-04-01")
+    euro_only = _run(session_factory, "entries-in-period", "Girokonto", "2026-03-01", "2026-04-01")
+
+    assert mixed.exit_code == 0, mixed.output
+    header, _, inr, eur = mixed.output.splitlines()
+    assert header.split()[-3:] == ["value", "priced", "in"]
+    assert inr.split()[-3:] == ["INR", "95000.00", "INR"]
+    assert eur.split()[-3:] == ["EUR", "80.00", "EUR"]
+    assert "priced in" not in euro_only.output
 
 
 def test_opening_entry_for_a_currency_and_a_security(session_factory) -> None:
@@ -209,12 +285,6 @@ def test_opening_entry_for_a_currency_and_a_security(session_factory) -> None:
         credits = [line for line in lines if not line.is_debit]
         assert sorted(line.quantity for line in credits) == [Decimal(1000), Decimal(1500)]
         assert all(line.account.name == "Opening" for line in credits)
-
-
-@pytest.mark.skip(reason="TODO scaffold")
-def test_inr_expense_is_valued_at_lot_cost() -> None:
-    # TODO: QueryBudget counts it at lot cost, no gain
-    raise NotImplementedError
 
 
 @pytest.mark.skip(reason="TODO scaffold")
