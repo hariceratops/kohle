@@ -51,6 +51,7 @@ from kohle.services.unit_services import get_unit_by_identifier_service
 from kohle.use_cases.rules import compile_rules, match_rule, stored_rules
 from kohle.use_cases.units import get_or_create_unit
 
+_PRICE_SCALE = Decimal("0.00000001")
 UNCLASSIFIED_EXPENSE = "Unclassified Expense"
 PEOPLE_ROOT = "People"
 UNCLASSIFIED_INCOME = "Unclassified Income"
@@ -130,6 +131,17 @@ class RecordJournalEntry(UnitOfWork[JournalEntry, JournalError]):
 
 
 @dataclass(frozen=True, slots=True)
+class Total:
+    """The whole euro value of a holding line, stated rather than derived.
+
+    A remittance of 90,000 INR for 1,000 EUR has no terminating per-unit
+    rate, so only the total is exact (design §2.1).
+    """
+
+    amount: Decimal
+
+
+@dataclass(frozen=True, slots=True)
 class CrossUnitLine:
     """Which side of `record` carries a non-base unit, at what price.
 
@@ -141,7 +153,7 @@ class CrossUnitLine:
     """
 
     identifier: str
-    price: Decimal
+    price: Decimal | Total
     is_debit: bool
 
 
@@ -150,13 +162,20 @@ def _cross_unit_lines(
     holding_account_id: int,
     holding_unit_id: int,
     quantity: Decimal,
-    unit_price: Decimal,
+    unit_price: Decimal | Total,
     cash_account_id: int,
     cash_unit_id: int,
     into_holding: bool,
 ) -> list[LineSpec]:
     """Shared by `record` and imported trades so the cost fold sees one
     definition of a trade."""
+    if isinstance(unit_price, Total):
+        total = unit_price.amount
+        per_unit = (total / quantity).quantize(_PRICE_SCALE)
+        return [
+            LineSpec(holding_account_id, holding_unit_id, quantity, per_unit, is_debit=into_holding, cost=total),
+            LineSpec(cash_account_id, cash_unit_id, total, Decimal(1), is_debit=not into_holding),
+        ]
     return [
         LineSpec(holding_account_id, holding_unit_id, quantity, unit_price, is_debit=into_holding),
         LineSpec(cash_account_id, cash_unit_id, quantity * unit_price, Decimal(1), is_debit=not into_holding),
@@ -553,7 +572,7 @@ class _RunningCost:
 
     def apply(self, line: JournalLine) -> None:
         if line.is_debit:
-            self.basis += line.quantity * line.unit_price
+            self.basis += line.value
             self.quantity += line.quantity
         else:
             if self.quantity == 0:
@@ -562,10 +581,9 @@ class _RunningCost:
                 # from dividing by zero — it is not a claim that this is
                 # meaningful accounting, and should not be "improved" into
                 # something that looks more principled than it is.
-                average = line.unit_price
+                self.basis -= line.value
             else:
-                average = self.basis / self.quantity
-            self.basis -= line.quantity * average
+                self.basis -= line.quantity * (self.basis / self.quantity)
             self.quantity -= line.quantity
 
     @property

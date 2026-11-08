@@ -24,10 +24,11 @@ class LineSpec:
     quantity: Decimal
     unit_price: Decimal
     is_debit: bool
+    cost: Decimal | None = None
 
     @property
     def value(self) -> Decimal:
-        return self.quantity * self.unit_price
+        return self.cost if self.cost is not None else self.quantity * self.unit_price
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +68,7 @@ def add_journal_entry_service(
                 unit_id=line.unit_id,
                 quantity=line.quantity,
                 unit_price=line.unit_price,
+                cost=line.cost,
                 is_debit=line.is_debit,
             )
             for line in lines

@@ -67,10 +67,35 @@ def test_quote_currency_migration_round_trip_and_refusal(old_db) -> None:
         command.downgrade(config, BEFORE_QUOTE_CURRENCIES)
 
 
-@pytest.mark.skip(reason="TODO scaffold")
-def test_cost_migration_round_trip_and_refusal() -> None:
-    # TODO: B
-    raise NotImplementedError
+def test_cost_migration_round_trip_and_refusal(old_db) -> None:
+    db, config = old_db
+    command.upgrade(config, "a1c9e4b7d325")
+    conn = sqlite3.connect(db)
+    conn.execute("INSERT INTO accounts (id, name, type, created_at) VALUES (50, 'A', 'asset', '2026-01-01')")
+    conn.execute("INSERT INTO journal_entries (id, entry_date, reference, description, created_at) VALUES (1, '2026-03-01', 'r', 'd', '2026-01-01')")
+    conn.execute(
+        "INSERT INTO journal_lines (id, entry_id, account_id, unit_id, quantity, unit_price, is_debit, created_at) "
+        "VALUES (1, 1, 50, 1, 10, 1, 1, '2026-01-01')"
+    )
+    conn.commit()
+    conn.close()
+
+    command.upgrade(config, "b4d8f1c6e920")
+    assert "cost" in _columns(db, "journal_lines")
+    conn = sqlite3.connect(db)
+    assert conn.execute("SELECT cost FROM journal_lines").fetchall() == [(None,)]
+
+    command.downgrade(config, "a1c9e4b7d325")
+    assert "cost" not in _columns(db, "journal_lines")
+
+    command.upgrade(config, "b4d8f1c6e920")
+    conn = sqlite3.connect(db)
+    conn.execute("UPDATE journal_lines SET cost = 10")
+    conn.commit()
+    conn.close()
+    with pytest.raises(RuntimeError, match="Refusing to downgrade"):
+        command.downgrade(config, "a1c9e4b7d325")
+    assert "cost" in _columns(db, "journal_lines")
 
 
 @pytest.mark.skip(reason="TODO scaffold")

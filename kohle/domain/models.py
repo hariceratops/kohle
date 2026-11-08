@@ -169,6 +169,10 @@ class JournalLine(base, Archivable):
     # Cash in the base currency is 1, which is what lets cash and asset lines
     # share one shape.
     unit_price: Mapped[Decimal] = mapped_column(QUANTITY, nullable=False)
+    # The line's whole value when it was stated rather than derived: a rate
+    # like 1000/90000 does not terminate, so only the total is exact. Then
+    # `unit_price` is `cost / quantity` rounded, for display only.
+    cost: Mapped[Decimal | None] = mapped_column(QUANTITY, nullable=True)
     is_debit: Mapped[bool] = mapped_column(Boolean, nullable=False)
 
     entry: Mapped["JournalEntry"] = relationship("JournalEntry", back_populates="lines")
@@ -181,7 +185,7 @@ class JournalLine(base, Archivable):
 
     @property
     def value(self) -> Decimal:
-        return self.quantity * self.unit_price
+        return self.cost if self.cost is not None else self.quantity * self.unit_price
 
     def __eq__(self, other) -> bool:
         return (

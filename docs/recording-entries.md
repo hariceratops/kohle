@@ -18,7 +18,7 @@ the account and a credit takes from it. Spending 80 euros on groceries is a
 credit to the account the money left and a debit to the one it went to.
 
 Entries balance by value, not by quantity. A line's value is its quantity times
-its price, in the base unit (EUR, see [Accounts and units](accounts-and-units.md)).
+its price, or the total you stated for it, in the base unit (EUR, see [Accounts and units](accounts-and-units.md)).
 This is what lets ten shares at 100 euros balance 1000 euros.
 
 ## A simple entry
@@ -71,6 +71,43 @@ other side's euros: 1000 for the purchase and 440 for the sale. A unit and its
 price go together; one without the other is refused, and so is naming a unit on
 both sides. Use `record-split` for anything more involved. The unit has to
 exist, so [add it first](accounts-and-units.md#units).
+
+## Sending money abroad
+
+A remittance takes euros from a euro account and puts a foreign currency into
+one of your own accounts. You give the quantity that arrives, in its currency,
+and `--total`, the euros that actually left, fees included. kohle works out the
+rate from the two, so you never type one:
+
+```console
+$ kohle-cli add-account Checking --type asset
+Added account Checking (asset) with id 2
+$ kohle-cli add-account IndianBank --type asset
+Added account IndianBank (asset) with id 3
+$ kohle-cli add-unit INR "Indian rupee" --kind currency
+Added unit INR (currency) with id 1
+$ kohle-cli record 2026-03-05 "Remittance" 90000 --from Checking --to IndianBank --to-unit INR --total 1000
+Recorded 90000 INR for 1000 EUR: credited Checking, debited IndianBank
+$ kohle-cli balance IndianBank
+unit      quantity  price    price date      market value  status                average cost
+------  ----------  -------  ------------  --------------  ------------------  --------------
+INR       90000.00  -        -                    1000.00  no price (at cost)            0.01
+
+Market value: 1000.00
+1 of 1 holdings estimated (0 stale, 1 at cost)
+```
+
+The account now holds 90,000 INR, and that holding costs exactly 1,000.00 euros,
+because the cost is the total you stated and not a rounded rate times the
+quantity. `average cost` prints at two decimals, so it reads 0.01 here; the
+cost behind it is 1000 divided by 90000. Like a purchase of shares, each
+remittance is its own lot, and a later one at a different rate keeps its own
+cost. The `--total` form needs `--from-unit` or `--to-unit`, cannot be combined
+with a price, and both the quantity and the total must be above 0.
+
+Recording reads no fetched rate: the cost comes from the entry alone, so a
+rate fetched later never changes it. The currency unit has to exist first, and
+is added like any other (see [Accounts and units](accounts-and-units.md#currencies)).
 
 ## Entries with more than two lines
 

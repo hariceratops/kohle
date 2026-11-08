@@ -1,12 +1,34 @@
 """Layer 1 — replay of currency lots (issues 111, 113, 115, 117). Design §3, §14."""
 
+from datetime import date
+from decimal import Decimal
+
 import pytest
 
+from kohle.domain.models import JournalEntry, JournalLine, Unit, UnitKind
+from kohle.use_cases.lots import replay
 
-@pytest.mark.skip(reason="TODO scaffold")
+
+def _inr_line(line_id: int, day: int, quantity: str, cost: str, *, is_debit: bool) -> JournalLine:
+    return JournalLine(
+        id=line_id,
+        entry=JournalEntry(id=line_id, entry_date=date(2026, 1, day)),
+        account_id=1,
+        unit=Unit(identifier="INR", kind=UnitKind.currency),
+        unit_id=7,
+        quantity=Decimal(quantity),
+        unit_price=(Decimal(cost) / Decimal(quantity)).quantize(Decimal("0.00000001")),
+        cost=Decimal(cost),
+        is_debit=is_debit,
+    )
+
+
 def test_remittance_gives_one_exact_lot() -> None:
-    # TODO: a 1,000 EUR / 90,000 INR remittance is one INR holding costing exactly Decimal(1000)
-    raise NotImplementedError
+    result = replay([_inr_line(1, 1, "90000", "1000", is_debit=True)], {1: "IndianBank"}).unwrap()
+
+    (holding,) = result.holdings
+    assert (holding.unit_identifier, holding.quantity, holding.fifo_cost) == ("INR", Decimal(90000), Decimal(1000))
+    assert result.sales == []
 
 
 @pytest.mark.skip(reason="TODO scaffold")

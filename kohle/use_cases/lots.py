@@ -10,6 +10,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
+from fractions import Fraction
 
 from kohle.core.result import Result
 from kohle.domain.domain_errors import (
@@ -19,7 +20,7 @@ from kohle.domain.domain_errors import (
     SecurityMoveWithPeople,
     UnbalancedOwnMove,
 )
-from kohle.domain.models import JournalLine, Unit, UnitKind
+from kohle.domain.models import BASE_CURRENCY, JournalLine, Unit, UnitKind
 from kohle.infrastructure.transaction_context import DbTransactionContext
 from kohle.infrastructure.uow import UnitOfWork
 from kohle.services.journal_services import account_lines_service
@@ -31,11 +32,15 @@ class Lot:
     acquired: date
     line_id: int
     quantity: Decimal
-    unit_cost: Decimal
+    unit_cost: Fraction
 
     @property
-    def cost(self) -> Decimal:
-        return self.quantity * self.unit_cost
+    def cost(self) -> Fraction:
+        return Fraction(self.quantity) * self.unit_cost
+
+
+def _decimal(value: Fraction) -> Decimal:
+    return Decimal(value.numerator) / Decimal(value.denominator)
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,9 +72,9 @@ class LotReplay:
 
 
 def _replayed(unit: Unit) -> bool:
-    """The one place the feature names a kind. A wider filter must still
-    exclude the base currency."""
-    return unit.kind is UnitKind.security
+    """The one place the feature names a kind. The base currency is cash, not
+    a lot."""
+    return unit.kind is UnitKind.security or (unit.kind is UnitKind.currency and unit.identifier != BASE_CURRENCY)
 
 
 def _acquisition(lot: Lot) -> tuple[date, int]:
@@ -99,8 +104,8 @@ def _sale(line: JournalLine, account_name: str, taken: list[Lot]) -> Sale:
         account_name=account_name,
         unit_identifier=line.unit.identifier,
         quantity=line.quantity,
-        proceeds=line.quantity * line.unit_price,
-        fifo_cost=sum((lot.cost for lot in taken), Decimal(0)),
+        proceeds=line.value,
+        fifo_cost=_decimal(sum((lot.cost for lot in taken), Fraction(0))),
     )
 
 
@@ -176,7 +181,9 @@ def replay(
 
         for line in debits:
             queue = queues.setdefault((line.account_id, identifier), [])
-            bisect.insort(queue, Lot(line.entry.entry_date, line.id, line.quantity, line.unit_price), key=_acquisition)
+            # A stated total is exact where a per-unit price rounded to the column is not.
+            unit_cost = Fraction(line.value) / Fraction(line.quantity)
+            bisect.insort(queue, Lot(line.entry.entry_date, line.id, line.quantity, unit_cost), key=_acquisition)
         for line in credits:
             queue = queues.setdefault((line.account_id, identifier), [])
             taken, shortfall = _take(queue, line.quantity)
@@ -189,7 +196,9 @@ def replay(
         held = [lot for (_, ident), queue in queues.items() if ident == identifier for lot in queue]
         quantity = sum((lot.quantity for lot in held), Decimal(0))
         if quantity != 0:
-            holdings.append(FifoHolding(identifier, unit_id, quantity, sum((lot.cost for lot in held), Decimal(0))))
+            holdings.append(
+                FifoHolding(identifier, unit_id, quantity, _decimal(sum((lot.cost for lot in held), Fraction(0))))
+            )
     return Result.ok(LotReplay(sales, holdings))
 
 
