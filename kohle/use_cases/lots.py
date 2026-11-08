@@ -63,6 +63,7 @@ class FifoHolding:
     unit_id: int
     quantity: Decimal
     fifo_cost: Decimal
+    kind: UnitKind | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,6 +152,7 @@ def replay(
 
     queues: dict[tuple[int, str], list[Lot]] = {}
     unit_ids: dict[str, int] = {}
+    unit_kinds: dict[str, UnitKind] = {}
     sales: list[Sale] = []
 
     for entry_lines in groups.values():
@@ -170,6 +172,7 @@ def replay(
             continue
         identifier = group[0].unit.identifier
         unit_ids.setdefault(identifier, group[0].unit_id)
+        unit_kinds.setdefault(identifier, group[0].unit.kind)
         credits = [line for line in group if not line.is_debit]
         debits = [line for line in group if line.is_debit]
 
@@ -197,7 +200,13 @@ def replay(
         quantity = sum((lot.quantity for lot in held), Decimal(0))
         if quantity != 0:
             holdings.append(
-                FifoHolding(identifier, unit_id, quantity, _decimal(sum((lot.cost for lot in held), Fraction(0))))
+                FifoHolding(
+                    identifier,
+                    unit_id,
+                    quantity,
+                    _decimal(sum((lot.cost for lot in held), Fraction(0))),
+                    unit_kinds[identifier],
+                )
             )
     return Result.ok(LotReplay(sales, holdings))
 

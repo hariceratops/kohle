@@ -547,6 +547,7 @@ class UnitBalance:
     quantity: Decimal
     average_cost: Decimal | None
     unit_id: int
+    kind: UnitKind | None = None
 
     @property
     def at_cost(self) -> Decimal:
@@ -563,10 +564,11 @@ class UnitBalance:
 class _RunningCost:
     """Per-unit accumulator for the moving-average cost fold (design §6.4)."""
 
-    __slots__ = ("basis", "quantity", "unit_id")
+    __slots__ = ("basis", "kind", "quantity", "unit_id")
 
-    def __init__(self, unit_id: int) -> None:
+    def __init__(self, unit_id: int, kind: UnitKind) -> None:
         self.unit_id = unit_id
+        self.kind = kind
         self.basis = Decimal(0)
         self.quantity = Decimal(0)
 
@@ -609,13 +611,13 @@ def aggregate_by_unit(lines: Iterable[JournalLine]) -> list[UnitBalance]:
 def _apply(running: dict[str, _RunningCost], line: JournalLine) -> None:
     identifier = line.unit.identifier
     if identifier not in running:
-        running[identifier] = _RunningCost(line.unit_id)
+        running[identifier] = _RunningCost(line.unit_id, line.unit.kind)
     running[identifier].apply(line)
 
 
 def _unit_balances(running: dict[str, _RunningCost]) -> list[UnitBalance]:
     return [
-        UnitBalance(identifier, cost.quantity, cost.average_cost, cost.unit_id)
+        UnitBalance(identifier, cost.quantity, cost.average_cost, cost.unit_id, cost.kind)
         for identifier, cost in running.items()
     ]
 

@@ -1,6 +1,7 @@
 import os
 import tempfile
 import tomllib
+from collections.abc import Sequence
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -69,6 +70,7 @@ from kohle.use_cases.prices import (
 from kohle.use_cases.reporting import (
     EstimateSummary,
     NetWorthHistory,
+    Position,
     QueryPositions,
     QueryValuedBalance,
     ValuedBalance,
@@ -758,7 +760,7 @@ def balance_cmd(make_session, account_name: str, max_age_days: int):
     # column: a str in an otherwise-Decimal column makes tabulate treat
     # the whole column as non-numeric, silently disabling floatfmt for
     # every other row in it (not just the one with the missing value).
-    click.echo(tabulate(rows, headers="keys", floatfmt=".2f", missingval="-"))
+    click.echo(_market_table(rows, [*valued, *[None] * (len(rows) - len(valued))]))
     # Gated on `holdings`, not on "any non-base row": a sold-out security is a
     # non-base row but not a holding. The total sums `valued`, never `rows`,
     # so the restatement row cannot be counted.
@@ -1130,6 +1132,43 @@ def _market_columns(row: ValuedRow) -> dict[str, object]:
     }
 
 
+def _unit_kind(row: ValuedRow) -> UnitKind | None:
+    return row.holding.kind if isinstance(row, Position) else row.balance.kind
+
+
+def _market_table(rows: list[dict], sources: Sequence[ValuedRow | None]) -> str:
+    """Tabulate rows whose `price` came from `sources` (None for rows that have
+    no valued source). When some close is quoted outside euros, a `quoted in`
+    column labels each price, and a currency's own price is shown to 8 places
+    because a rate such as 0.0104 would otherwise print as 0.01. Otherwise the
+    table is exactly the plain one."""
+    quotes: list[str | None] = [
+        s.close.close.currency if s is not None and isinstance(s.close, Fresh | Stale) else None
+        for s in sources
+    ]
+    if all(q in (None, BASE_CURRENCY) for q in quotes):
+        return tabulate(rows, headers="keys", floatfmt=".2f", missingval="-")
+    shown: list[dict] = []
+    for row, source, quote in zip(rows, sources, quotes, strict=True):
+        new: dict = {}
+        for key, value in row.items():
+            if key == "price" and value is not None:
+                places = 8 if source is not None and _unit_kind(source) is UnitKind.currency else 2
+                new[key] = f"{value:.{places}f}"
+                new["quoted in"] = quote
+            else:
+                new[key] = value
+                if key == "price":
+                    new["quoted in"] = None
+        shown.append(new)
+    width = max(len(r["price"]) for r in shown if r["price"] is not None)
+    for r in shown:
+        if r["price"] is not None:
+            r["price"] = r["price"].rjust(width)
+    price_column = list(shown[0]).index("price")
+    return tabulate(shown, headers="keys", floatfmt=".2f", missingval="-", disable_numparse=[price_column])
+
+
 def _net_worth_rows(section: str, rows: list[ValuedBalance]) -> list[dict]:
     return [
         {
@@ -1164,7 +1203,7 @@ def net_worth_cmd(make_session, max_age_days: int):
     rows = _net_worth_rows("Own accounts", report.own) + _net_worth_rows(
         "Receivables (People)", report.receivables
     )
-    click.echo(tabulate(rows, headers="keys", floatfmt=".2f", missingval="-"))
+    click.echo(_market_table(rows, [*report.own, *report.receivables]))
     # The total folds receivables in rather than reporting them separately
     # (design §2.4) — the breakdown above is what makes that checkable
     # rather than a bare number the user has to trust.
@@ -1195,7 +1234,7 @@ def positions_cmd(make_session, max_age_days: int):
             }
             for p in positions
         ]
-        click.echo(tabulate(rows, headers="keys", floatfmt=".2f", missingval="-"))
+        click.echo(_market_table(rows, positions))
     click.echo(f"\nMarket value: {at_market(positions):.2f}")
     click.echo(f"FIFO cost: {fifo_cost(positions):.2f}")
     click.echo(f"Unrealised gain: {unrealised_gain(positions):.2f}")

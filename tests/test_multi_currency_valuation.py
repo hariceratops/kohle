@@ -231,3 +231,73 @@ def test_subtotals_with_a_missing_member_show_a_dash() -> None:
 def test_history_values_each_date_at_its_own_close_and_rate() -> None:
     # TODO: net-worth-history as of each sample date
     raise NotImplementedError
+
+
+def _positions_ledger(session_factory, rate: str | None) -> None:
+    from datetime import timedelta
+
+    from click.testing import CliRunner
+
+    from kohle.app.cli.cli import cli
+
+    for args in (
+        ["add-account", "People", "--type", "asset"],
+        ["add-account", "Girokonto", "--type", "asset"],
+        ["add-account", "Demat", "--type", "asset"],
+        ["add-account", "Opening", "--type", "income"],
+        ["add-unit", "EUR", "Euro", "--kind", "currency"],
+        ["add-unit", "INR", "Indian rupee", "--kind", "currency"],
+        ["add-unit", "INFY", "Infosys", "--kind", "security"],
+        ["record", "2026-01-01", "Opening", "1000", "--from", "Opening", "--to", "Girokonto"],
+        ["record", "2026-01-02", "Remit", "90000", "--from", "Girokonto", "--to", "Demat", "--to-unit", "INR", "--total", "1000"],
+        ["record", "2026-01-03", "Opening", "100", "--from", "Opening", "--to", "Demat", "--to-unit", "INFY", "--total", "1500"],
+    ):
+        result = CliRunner().invoke(cli, args, obj=session_factory)
+        assert result.exit_code == 0, result.output
+    today = date.today()  # noqa: DTZ011 - matches the CLI's own clock
+    with session_factory() as session:
+        ctx = DbTransactionContext(session)
+        infy = get_unit_by_identifier_service(ctx, "INFY").unwrap()
+        add_price_service(ctx, infy.id, today - timedelta(days=1), Decimal(1500), "file", "INR").unwrap()
+        if rate is not None:
+            inr = get_unit_by_identifier_service(ctx, "INR").unwrap()
+            add_price_service(ctx, inr.id, today - timedelta(days=1), Decimal(rate), "file", "EUR").unwrap()
+        session.commit()
+
+
+def test_positions_label_the_quote_currency_and_list_inr_cash(session_factory) -> None:
+    from click.testing import CliRunner
+
+    from kohle.app.cli.cli import cli
+
+    _positions_ledger(session_factory, "0.0104")
+
+    result = CliRunner().invoke(cli, ["positions"], obj=session_factory)
+
+    assert result.exit_code == 0, result.output
+    lines = result.output.splitlines()
+    assert lines[0].split()[:5] == ["unit", "quantity", "price", "quoted", "in"]
+    rows = {line.split()[0]: line.split() for line in lines[2:4]}
+    # price in the quote currency; market value, FIFO cost and gain in euros
+    assert rows["INFY"][2:4] == ["1500.00", "INR"]
+    assert {"1560.00", "1500.00", "60.00"} <= set(rows["INFY"])
+    assert rows["INR"][2:4] == ["0.01040000", "EUR"]
+    assert {"936.00", "1000.00", "-64.00"} <= set(rows["INR"])
+
+
+def test_positions_without_a_foreign_close_have_no_quoted_in_column(session_factory) -> None:
+    from click.testing import CliRunner
+
+    from kohle.app.cli.cli import cli
+
+    _positions_ledger(session_factory, None)
+    # drop the INFY INR close so every close is in euros
+    with session_factory() as session:
+        for price in session.query(Price).all():
+            session.delete(price)
+        session.commit()
+
+    result = CliRunner().invoke(cli, ["positions"], obj=session_factory)
+
+    assert result.exit_code == 0, result.output
+    assert "quoted" not in result.output

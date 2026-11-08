@@ -99,6 +99,17 @@ date, and their dates need not match.
 The rate is an ordinary price of the currency unit, fetched like any other (see
 [Prices](prices.md)).
 
+When any close in a table is quoted in another currency, `balance`, `net-worth`
+and `positions` add a `quoted in` column after `price` that names the currency of
+each price. A currency's own price, such as the rate of the rupee, is shown to
+eight places. A table with only euro prices is unchanged.
+
+`positions` shows `price` in that quote currency, while `market value`, `FIFO
+cost` and `unrealised gain` are always in euros. Rupees you hold are a row of
+their own: their FIFO cost is the euros you sent, so their unrealised gain is
+the unrealised exchange-rate gain. A share quoted in rupees has the same gain
+folded in with its price gain, since both are measured in euros.
+
 ## Positions and profit
 
 `positions` lists each security still held, summed over all your own accounts,
