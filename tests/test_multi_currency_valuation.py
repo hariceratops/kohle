@@ -1,33 +1,233 @@
-"""Layer 1 — valuing holdings quoted in another currency, and subtotals (issues 120, 121, 122, 123). Design §8, §14."""
+"""Layer 1/2 — valuing holdings quoted in another currency, and subtotals (issues 120, 121, 122, 123). Design §8, §14."""
+
+from datetime import date
+from decimal import Decimal
 
 import pytest
+from sqlalchemy.orm import Session
+
+from kohle.domain.models import AccountType, Price, UnitKind
+from kohle.infrastructure.transaction_context import DbTransactionContext
+from kohle.services.account_services import add_account_service
+from kohle.services.journal_services import LineSpec, add_journal_entry_service
+from kohle.services.price_services import add_price_service
+from kohle.services.unit_services import (
+    add_unit_service,
+    get_unit_by_identifier_service,
+)
+from kohle.use_cases.journal import UnitBalance
+from kohle.use_cases.prices import Fresh, NoClose, Stale
+from kohle.use_cases.reporting import (
+    QueryValuedBalance,
+    ValuedBalance,
+    ValuedNetWorth,
+    summarise,
+    valuation_status,
+)
+
+TODAY = date(2026, 3, 10)
 
 
-@pytest.mark.skip(reason="TODO scaffold")
-def test_market_value_is_quantity_times_close_times_rate() -> None:
-    # TODO: each read as the latest on or before the date
-    raise NotImplementedError
+def _price(day: date, price: str = "1", currency: str = "EUR") -> Price:
+    return Price(
+        unit_id=1,
+        price_date=day,
+        price=Decimal(price),
+        source="file",
+        currency=currency,
+    )
 
 
-@pytest.mark.skip(reason="TODO scaffold")
+def _balance(identifier: str, quantity: str, average_cost: str) -> UnitBalance:
+    return UnitBalance(identifier, Decimal(quantity), Decimal(average_cost), 1)
+
+
+def test_valuation_status_without_a_rate_is_the_close() -> None:
+    close = Stale(_price(date(2026, 1, 1)))
+    assert valuation_status(close, None) is close
+    assert valuation_status(None, None) is None
+
+
 def test_status_is_the_worse_of_close_and_rate() -> None:
-    # TODO: every combination; a stale rate with a fresh close shows the rate's date
-    raise NotImplementedError
+    old, mid, new = date(2026, 1, 1), date(2026, 2, 1), date(2026, 3, 9)
+    fresh_close, fresh_rate = Fresh(_price(new)), Fresh(_price(new))
+
+    assert valuation_status(fresh_close, fresh_rate) is fresh_close
+    assert valuation_status(fresh_close, NoClose()) == NoClose()
+    assert valuation_status(NoClose(), fresh_rate) == NoClose()
+    assert valuation_status(NoClose(), NoClose()) == NoClose()
+    assert valuation_status(Stale(_price(old)), NoClose()) == NoClose()
+
+    # A stale rate beside a fresh close shows the rate's date, and the other way round.
+    assert valuation_status(fresh_close, Stale(_price(mid))) == Stale(_price(mid))
+    assert valuation_status(Stale(_price(mid)), fresh_rate) == Stale(_price(mid))
+    # Both stale: the older date.
+    assert valuation_status(Stale(_price(mid)), Stale(_price(old))) == Stale(
+        _price(old)
+    )
+    assert valuation_status(Stale(_price(old)), Stale(_price(mid))) == Stale(
+        _price(old)
+    )
 
 
-@pytest.mark.skip(reason="TODO scaffold")
-def test_missing_close_or_rate_falls_back_to_cost() -> None:
-    # TODO: marked `no price (at cost)`
-    raise NotImplementedError
+def test_pure_market_value_is_quantity_times_close_times_rate() -> None:
+    row = ValuedBalance(
+        _balance("X1", "2", "10"),
+        Fresh(_price(TODAY, "5000", "INR")),
+        Fresh(_price(TODAY, "0.011")),
+    )
+    assert row.market_value == Decimal(110)
 
 
-@pytest.mark.skip(reason="TODO scaffold")
+@pytest.mark.parametrize("missing", ["close", "rate"])
+def test_pure_missing_close_or_rate_falls_back_to_cost(missing: str) -> None:
+    close = NoClose() if missing == "close" else Fresh(_price(TODAY, "5000", "INR"))
+    rate = NoClose() if missing == "rate" else Fresh(_price(TODAY, "0.011"))
+    row = ValuedBalance(_balance("X1", "2", "10"), close, rate)
+    assert row.market_value == Decimal(20)
+    assert row.status == NoClose()
+    assert summarise([row]).no_price == 1
+
+
+@pytest.fixture
+def ledger(session: Session, people_root) -> Session:
+    """Account Cash holds 2000 EUR; Depot holds 2 X1 (quoted in INR) and 90,000 INR."""
+    ctx = DbTransactionContext(session)
+    depot = add_account_service(ctx, "Depot", AccountType.asset).unwrap()
+    cash = add_account_service(ctx, "Cash", AccountType.asset).unwrap()
+    equity = add_account_service(ctx, "Salary", AccountType.income).unwrap()
+    eur = add_unit_service(ctx, "EUR", "Euro", UnitKind.currency).unwrap()
+    inr = add_unit_service(ctx, "INR", "Indian rupee", UnitKind.currency).unwrap()
+    x1 = add_unit_service(ctx, "X1", "Thing", UnitKind.security).unwrap()
+    add_journal_entry_service(
+        ctx,
+        date(2026, 1, 1),
+        "open",
+        "open",
+        [
+            LineSpec(cash.id, eur.id, Decimal(2000), Decimal(1), is_debit=True),
+            LineSpec(equity.id, eur.id, Decimal(2000), Decimal(1), is_debit=False),
+        ],
+    ).unwrap()
+    add_journal_entry_service(
+        ctx,
+        date(2026, 1, 2),
+        "buy",
+        "buy X1",
+        [
+            LineSpec(depot.id, x1.id, Decimal(2), Decimal(10), is_debit=True),
+            LineSpec(cash.id, eur.id, Decimal(20), Decimal(1), is_debit=False),
+        ],
+    ).unwrap()
+    add_journal_entry_service(
+        ctx,
+        date(2026, 1, 3),
+        "remit",
+        "remit",
+        [
+            LineSpec(
+                depot.id,
+                inr.id,
+                Decimal(90000),
+                Decimal(0),
+                is_debit=True,
+                cost=Decimal(1000),
+            ),
+            LineSpec(cash.id, eur.id, Decimal(1000), Decimal(1), is_debit=False),
+        ],
+    ).unwrap()
+    session.commit()
+    return session
+
+
+def _add(
+    session: Session, identifier: str, day: date, price: str, currency: str
+) -> None:
+    ctx = DbTransactionContext(session)
+    unit = get_unit_by_identifier_service(ctx, identifier).unwrap()
+    add_price_service(ctx, unit.id, day, Decimal(price), "file", currency).unwrap()
+    session.commit()
+
+
+def _rows(session: Session) -> dict[str, ValuedBalance]:
+    valued = QueryValuedBalance(session).execute("Depot", TODAY, 7).unwrap()
+    return {v.balance.unit_identifier: v for v in valued}
+
+
+def test_market_value_is_quantity_times_close_times_rate(ledger: Session) -> None:
+    # Older prices must lose to the latest on or before the date; later ones are ignored.
+    _add(ledger, "X1", date(2026, 3, 1), "4000", "INR")
+    _add(ledger, "X1", date(2026, 3, 9), "5000", "INR")
+    _add(ledger, "X1", date(2026, 3, 11), "9999", "INR")
+    _add(ledger, "INR", date(2026, 3, 5), "0.010", "EUR")
+    _add(ledger, "INR", date(2026, 3, 8), "0.011", "EUR")
+
+    rows = _rows(ledger)
+
+    assert rows["X1"].market_value == Decimal(2) * Decimal(5000) * Decimal("0.011")
+    assert rows["INR"].market_value == Decimal(90000) * Decimal("0.011")
+    assert isinstance(rows["X1"].status, Fresh)
+    assert isinstance(rows["INR"].status, Fresh)
+
+
+def test_closes_and_rates_need_not_share_a_date(ledger: Session) -> None:
+    _add(ledger, "X1", date(2026, 3, 9), "5000", "INR")
+    _add(ledger, "INR", date(2026, 3, 3), "0.011", "EUR")  # 7 days old: still fresh
+
+    assert _rows(ledger)["X1"].market_value == Decimal(110)
+
+
+def test_stale_rate_makes_the_row_stale_at_the_rates_date(ledger: Session) -> None:
+    _add(ledger, "X1", date(2026, 3, 9), "5000", "INR")
+    _add(ledger, "INR", date(2026, 2, 1), "0.011", "EUR")
+
+    row = _rows(ledger)["X1"]
+
+    assert isinstance(row.status, Stale)
+    assert row.status.close.price_date == date(2026, 2, 1)
+    assert row.market_value == Decimal(110)
+
+
+def test_missing_close_or_rate_falls_back_to_cost(ledger: Session) -> None:
+    # No rate stored at all: the stock falls back to its euro cost (2 x 10) and so does the rupee cash.
+    _add(ledger, "X1", date(2026, 3, 9), "5000", "INR")
+
+    rows = _rows(ledger)
+
+    assert rows["X1"].status == NoClose()
+    assert rows["X1"].market_value == Decimal(20)
+    assert rows["INR"].status == NoClose()
+    assert round(rows["INR"].market_value, 6) == Decimal(1000)
+
+
+def test_a_rate_without_a_close_leaves_the_stock_at_cost(ledger: Session) -> None:
+    _add(ledger, "INR", date(2026, 3, 8), "0.011", "EUR")
+
+    rows = _rows(ledger)
+
+    assert rows["X1"].status == NoClose()
+    assert rows["X1"].market_value == Decimal(20)
+    assert rows["INR"].market_value == Decimal(990)
+
+
+def test_net_worth_totals_the_converted_values(ledger: Session) -> None:
+    _add(ledger, "X1", date(2026, 3, 9), "5000", "INR")
+    _add(ledger, "INR", date(2026, 3, 8), "0.011", "EUR")
+
+    report = ValuedNetWorth(ledger).execute(TODAY, 7).unwrap()
+
+    # 980 EUR cash + 110 for X1 + 990 for the rupees
+    assert report.net_worth_at_market == Decimal(2080)
+    assert report.estimates.estimated == 0
+
+
+@pytest.mark.skip(reason="TODO scaffold: issue 122")
 def test_subtotals_with_a_missing_member_show_a_dash() -> None:
     # TODO: also a zero row and an EUR-only set giving []
     raise NotImplementedError
 
 
-@pytest.mark.skip(reason="TODO scaffold")
+@pytest.mark.skip(reason="TODO scaffold: issue 123")
 def test_history_values_each_date_at_its_own_close_and_rate() -> None:
     # TODO: net-worth-history as of each sample date
     raise NotImplementedError

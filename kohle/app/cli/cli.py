@@ -1105,20 +1105,23 @@ def _print_who_owes_what_by_group(make_session):
 
 
 def _market_columns(row: ValuedRow) -> dict[str, object]:
-    price: Decimal | None
-    price_date: date | None
+    price: Decimal | None = None
+    price_date: date | None = None
     status: str | None
     match row.close:
-        case Fresh(c):
-            price, price_date, status = c.price, c.price_date, "fresh"
+        case Fresh(c) | Stale(c):
+            price, price_date = c.price, c.price_date
+    match row.status:
+        case Fresh():
+            status = "fresh"
         case Stale(c):
-            price, price_date, status = c.price, c.price_date, f"stale ({c.price_date.isoformat()})"
+            status = f"stale ({c.price_date.isoformat()})"
         case NoClose():
-            price, price_date, status = None, None, "no price (at cost)"
+            status = "no price (at cost)"
         case None:
-            price, price_date, status = None, None, None
+            status = None
         case _:
-            assert_never(row.close)
+            assert_never(row.status)
     return {
         "price": price,
         "price date": price_date,

@@ -20,6 +20,7 @@ from kohle.infrastructure.transaction_context import DbTransactionContext
 from kohle.infrastructure.uow import UnitOfWork
 from kohle.services.account_services import get_account_by_name_service
 from kohle.services.state_services import list_state_entries_service
+from kohle.services.unit_services import get_unit_by_identifier_service
 from kohle.use_cases.bundesland import state_lookup
 from kohle.use_cases.journal import (
     BASE_CURRENCY,
@@ -35,12 +36,23 @@ from kohle.use_cases.prices import Fresh, LatestClose, NoClose, Stale, latest_cl
 from kohle.use_cases.sampling import Role, current_sampling_rules, sample_dates
 
 
-def _market_value(quantity: Decimal, close: LatestClose | None, at_cost: Decimal) -> Decimal:
+def _market_value(
+    quantity: Decimal, close: LatestClose | None, at_cost: Decimal, rate: LatestClose | None = None
+) -> Decimal:
     """One valuation rule for both cost bases: the caller says what a row with
-    no close falls back to."""
+    no close falls back to. A close quoted in another currency is converted by
+    `rate`; a missing rate falls back like a missing close."""
     match close:
         case Fresh(c) | Stale(c):
-            return quantity * c.price
+            match rate:
+                case None:
+                    return quantity * c.price
+                case Fresh(r) | Stale(r):
+                    return quantity * c.price * r.price
+                case NoClose():
+                    return at_cost
+                case _:
+                    assert_never(rate)
         case NoClose():
             return at_cost
         case None:
@@ -49,24 +61,76 @@ def _market_value(quantity: Decimal, close: LatestClose | None, at_cost: Decimal
             assert_never(close)
 
 
+def valuation_status(close: LatestClose | None, rate: LatestClose | None) -> LatestClose | None:
+    """The worse of the close and its rate; a stale result carries the older date."""
+    if rate is None:
+        return close
+    if isinstance(close, NoClose) or isinstance(rate, NoClose):
+        return NoClose()
+    if isinstance(close, Stale) or isinstance(rate, Stale):
+        stale = [x.close for x in (close, rate) if isinstance(x, Stale)]
+        return Stale(min(stale, key=lambda p: p.price_date))
+    return close
+
+
+def _quote(
+    ctx: DbTransactionContext,
+    unit_id: int,
+    as_of: date,
+    max_age_days: int,
+    rates: dict[str, LatestClose],
+) -> Result[tuple[LatestClose, LatestClose | None], PriceError]:
+    """A unit's latest close and, when that close is quoted in a non-base
+    currency, the latest rate of that currency. `rates` holds the rates already
+    read by one report, so every row of it uses the same rate."""
+    close_res = latest_close(ctx, unit_id, as_of, max_age_days)
+    if close_res.is_err:
+        return Result.err(close_res.unwrap_err())
+    close = close_res.unwrap()
+    if isinstance(close, NoClose) or close.close.currency == BASE_CURRENCY:
+        return Result.ok((close, None))
+    code = close.close.currency
+    if code not in rates:
+        unit_res = get_unit_by_identifier_service(ctx, code)
+        if unit_res.is_err:
+            return Result.err(PriceError(str(unit_res.unwrap_err())))
+        rate_res = latest_close(ctx, unit_res.unwrap().id, as_of, max_age_days)
+        if rate_res.is_err:
+            return Result.err(rate_res.unwrap_err())
+        rates[code] = rate_res.unwrap()
+    return Result.ok((close, rates[code]))
+
+
 @dataclass(frozen=True, slots=True)
 class ValuedBalance:
     balance: UnitBalance
     close: LatestClose | None  # None: no close was looked up (base currency or zero quantity)
+    rate: LatestClose | None = None  # the close's currency in euros, when the close is not in euros
+
+    @property
+    def status(self) -> LatestClose | None:
+        return valuation_status(self.close, self.rate)
 
     @property
     def market_value(self) -> Decimal:
-        return _market_value(self.balance.quantity, self.close, self.balance.at_cost)
+        return _market_value(self.balance.quantity, self.close, self.balance.at_cost, self.rate)
 
 
 @dataclass(frozen=True, slots=True)
 class Position:
     holding: FifoHolding
     close: LatestClose  # never None: a positions row is always nonzero and non-base
+    rate: LatestClose | None = None
+
+    @property
+    def status(self) -> LatestClose:
+        status = valuation_status(self.close, self.rate)
+        assert status is not None
+        return status
 
     @property
     def market_value(self) -> Decimal:
-        return _market_value(self.holding.quantity, self.close, self.holding.fifo_cost)
+        return _market_value(self.holding.quantity, self.close, self.holding.fifo_cost, self.rate)
 
     @property
     def unrealised_gain(self) -> Decimal:
@@ -85,14 +149,16 @@ def value_balances(
     """The only place a close is read, and the only place the lookup
     condition is written."""
     valued: list[ValuedBalance] = []
+    rates: dict[str, LatestClose] = {}
     for b in balances:
         if b.quantity == 0 or b.unit_identifier == BASE_CURRENCY:
             valued.append(ValuedBalance(b, None))
             continue
-        close_res = latest_close(ctx, b.unit_id, as_of, max_age_days)
-        if close_res.is_err:
-            return Result.err(close_res.unwrap_err())
-        valued.append(ValuedBalance(b, close_res.unwrap()))
+        quote_res = _quote(ctx, b.unit_id, as_of, max_age_days, rates)
+        if quote_res.is_err:
+            return Result.err(quote_res.unwrap_err())
+        close, rate = quote_res.unwrap()
+        valued.append(ValuedBalance(b, close, rate))
     return Result.ok(valued)
 
 
@@ -124,12 +190,13 @@ def summarise(rows: Iterable[ValuedRow]) -> EstimateSummary:
     # so M is the nonzero non-base rows without a second definition.
     holdings = stale = no_price = 0
     for r in rows:
-        if r.close is None:
+        status = r.status
+        if status is None:
             continue
         holdings += 1
-        if isinstance(r.close, Stale):
+        if isinstance(status, Stale):
             stale += 1
-        elif isinstance(r.close, NoClose):
+        elif isinstance(status, NoClose):
             no_price += 1
     return EstimateSummary(holdings, stale, no_price)
 
@@ -218,11 +285,13 @@ class QueryPositions(UnitOfWork[list[Position], PositionsError]):
                 return Result.err(replay_res.unwrap_err())
 
             positions: list[Position] = []
+            rates: dict[str, LatestClose] = {}
             for holding in replay_res.unwrap().holdings:
-                close_res = latest_close(ctx, holding.unit_id, today, max_age_days)
-                if close_res.is_err:
-                    return Result.err(close_res.unwrap_err())
-                positions.append(Position(holding, close_res.unwrap()))
+                quote_res = _quote(ctx, holding.unit_id, today, max_age_days, rates)
+                if quote_res.is_err:
+                    return Result.err(quote_res.unwrap_err())
+                close, rate = quote_res.unwrap()
+                positions.append(Position(holding, close, rate))
             return Result.ok(positions)
 
         return self._run(use_case)

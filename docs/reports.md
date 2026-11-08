@@ -81,6 +81,24 @@ totals the `market value` column across both sections. The estimates line
 counts the holdings that are not euros and not zero, so `GLOBEX`, whose close is
 fifteen days old, is the one estimate above.
 
+### Holdings quoted in another currency
+
+A stock can be quoted in a currency other than euros, for example a share
+bound with a quote currency of `INR`. `balance`, `net-worth` and `positions`
+then value it as quantity times its latest close times the latest rate of that
+currency, and rupees you hold as cash are valued as quantity times the rate.
+The close and the rate are each the latest stored on or before the report's
+date, and their dates need not match.
+
+- `price` and `price date` show the close in its own currency.
+- `status` is the worse of the two: a stale close or a stale rate makes the row
+  stale, and the date shown is the older of the two.
+- If the close or the rate is missing, the holding is valued at its cost in
+  euros and reads `no price (at cost)`.
+
+The rate is an ordinary price of the currency unit, fetched like any other (see
+[Prices](prices.md)).
+
 ## Positions and profit
 
 `positions` lists each security still held, summed over all your own accounts,
