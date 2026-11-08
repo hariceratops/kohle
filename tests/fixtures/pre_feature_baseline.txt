@@ -1,0 +1,576 @@
+$ add-account Checking --type asset --iban DE89370400440532013000
+[exit 0]
+Added account Checking (asset) with id 1
+
+$ add-account Depot --type asset
+[exit 0]
+Added account Depot (asset) with id 2
+
+$ add-account Salary --type income
+[exit 0]
+Added account Salary (income) with id 3
+
+$ add-account Groceries --type expense
+[exit 0]
+Added account Groceries (expense) with id 4
+
+$ add-account Rent --type expense
+[exit 0]
+Added account Rent (expense) with id 5
+
+$ add-account People --type asset
+[exit 0]
+Added account People (asset) with id 6
+
+$ add-account Alice --type asset --parent People
+[exit 0]
+Added account Alice (asset) with id 7
+
+$ add-account Savings --type asset
+[exit 0]
+Added account Savings (asset) with id 8
+
+$ add-account Holiday --type asset --parent Savings
+[exit 0]
+Added account Holiday (asset) with id 9
+
+$ add-unit EUR Euro --kind currency
+[exit 0]
+Added unit EUR (currency) with id 1
+
+$ add-unit X1 First thing --kind security
+[exit 0]
+Added unit X1 (security) with id 2
+
+$ add-unit X2 Second thing --kind security
+[exit 0]
+Added unit X2 (security) with id 3
+
+$ add-unit X3 Third thing --kind security
+[exit 0]
+Added unit X3 (security) with id 4
+
+$ add-unit DE0005190003 Broker thing --kind security
+[exit 0]
+Added unit DE0005190003 (security) with id 5
+
+$ list-units
+[exit 0]
+5: DE0005190003 (security) Broker thing
+1: EUR (currency) Euro
+2: X1 (security) First thing
+3: X2 (security) Second thing
+4: X3 (security) Third thing
+
+$ list-accounts
+[exit 0]
+account     type     iban
+----------  -------  ----------------------
+Checking    asset    DE89370400440532013000
+Depot       asset    -
+Groceries   expense  -
+People/     asset    -
+|- Alice    asset    -
+Rent        expense  -
+Salary      income   -
+Savings/    asset    -
+|- Holiday  asset    -
+
+$ list-accounts Savings
+[exit 0]
+account     type    iban
+----------  ------  ------
+Savings/    asset   -
+|- Holiday  asset   -
+
+$ list-child-accounts Savings
+[exit 0]
+9: name=Holiday, type=asset
+
+$ move-state --from start BY
+[exit 0]
+Set state from start to BY
+
+$ move-state --from 2026-03-01 NW
+[exit 0]
+Set state from 2026-03-01 to NW
+
+$ list-states
+[exit 0]
+from        state
+----------  -------
+start       BY
+2026-03-01  NW
+
+$ list-settings
+[exit 0]
+
+ledger:   (in memory)
+revision: (none)
+
+$ record 2026-01-02 salary 3000 --from Salary --to Checking
+[exit 0]
+Recorded 3000 EUR: credited Salary, debited Checking
+
+$ record 2026-01-03 rent 900 --from Checking --to Rent
+[exit 0]
+Recorded 900 EUR: credited Checking, debited Rent
+
+$ record 2026-01-10 buy X1 10 --from Checking --to Depot --to-unit X1 --to-price 100
+[exit 0]
+Recorded 10 X1 @ 100: credited Checking, debited Depot
+
+$ record 2026-02-10 buy X1 again 5 --from Checking --to Depot --to-unit X1 --to-price 120.5
+[exit 0]
+Recorded 5 X1 @ 120.5: credited Checking, debited Depot
+
+$ record 2026-02-12 buy X2 8 --from Checking --to Depot --to-unit X2 --to-price 40
+[exit 0]
+Recorded 8 X2 @ 40: credited Checking, debited Depot
+
+$ record 2026-02-14 buy X3 3 --from Checking --to Depot --to-unit X3 --to-price 7.5
+[exit 0]
+Recorded 3 X3 @ 7.5: credited Checking, debited Depot
+
+$ record 2026-04-01 sell X1 6 --from Depot --to Checking --from-unit X1 --from-price 125
+[exit 0]
+Recorded 6 X1 @ 125: credited Depot, debited Checking
+
+$ record-split 2026-03-05 Groceries and gift --line Checking:80:EUR:1:credit --line Groceries:60:EUR:1:debit --line Holiday:20:EUR:1:debit
+[exit 0]
+Recorded entry with 3 lines
+
+$ record 2026-03-06 dinner 45.50 --from Checking --to Groceries
+[exit 0]
+Recorded 45.50 EUR: credited Checking, debited Groceries
+
+$ add-group Trip
+[exit 0]
+Added split group Trip with id 1
+
+$ set-cap --from 2026-01-01 Groceries 100 day 1
+[exit 0]
+Set cap on Groceries from 2026-01-01: 100.00, day 1
+
+$ set-cap --from 2026-01-01 Rent 950 day 1
+[exit 0]
+Set cap on Rent from 2026-01-01: 950.00, day 1
+
+$ end-cap --from 2026-05-01 Rent
+[exit 0]
+Ended cap on Rent from 2026-05-01
+
+$ list-caps
+[exit 0]
+account    from           cap  rule
+---------  ----------  ------  ------
+Groceries  2026-01-01  100.00  day 1
+Rent       2026-01-01  950.00  day 1
+Rent       2026-05-01    -     no cap
+
+$ list-sampling-rules
+[exit 0]
+mid-month: day 15; salary: last workday
+
+$ set-sampling-rules mid-month: day 10; salary: last workday
+[exit 0]
+Set sampling rules to mid-month: day 10; salary: last workday
+
+$ list-sampling-rules
+[exit 0]
+mid-month: day 10; salary: last workday
+
+$ set-sampling-rules mid-month: day 15; salary: last workday
+[exit 0]
+Set sampling rules to mid-month: day 15; salary: last workday
+
+$ list-importer-plugins
+[exit 0]
+kohle-deutsche-bank
+kohle-simple-broker
+
+$ import-statement kohle-deutsche-bank Checking deutsche_bank_statement.csv
+[exit 0]
+Import succeeded, 4 entries imported
+
+$ import-statement kohle-simple-broker Checking Depot simple_broker.csv
+[exit 0]
+Import succeeded, 3 entries imported
+
+$ list-unclassified
+[exit 0]
+  entry_id  date        description                                       counterparty      amount  account
+----------  ----------  ------------------------------------------------  --------------  --------  --------------------
+        10  2026-03-16  Rent March                                        Max Mustermann    950.00  Unclassified Expense
+        11  2026-03-17  Card 0001 ALDI SUED 17-03-2026T18:45:12 purchase  ALDI SUED          42.30  Unclassified Expense
+        12  2026-03-25  Salary March                                      ACME GmbH        2500.00  Unclassified Income
+        13  2026-03-27  Account fee                                       -                   5.90  Unclassified Expense
+        16  2026-04-15  Dividend DE0005190003                             -                  12.40  Unclassified Income
+
+$ show-rules
+[exit 0]
+# kohle classification rules, in priority order: the first rule that matches
+# a line wins. Keys under [rule.when] must all hold; any = [...] needs one of
+# its tables to hold; not = {...} must not hold.
+# Leave `base` as it is: apply-rules uses it to refuse if the stored rules
+# changed after this file was rendered.
+base = "e3b0c44298fc1c14"
+
+$ apply-rules rules.toml --yes
+[exit 0]
+1 added, 0 retired, 0 reordered, 0 note changed, 0 unchanged
+  rule 1 (new) -> Groceries { description = "aldi" }
+Applied: 1 added, 0 retired, 0 reordered, 0 note changed, 0 unchanged
+
+$ show-rules
+[exit 0]
+# kohle classification rules, in priority order: the first rule that matches
+# a line wins. Keys under [rule.when] must all hold; any = [...] needs one of
+# its tables to hold; not = {...} must not hold.
+# Leave `base` as it is: apply-rules uses it to refuse if the stored rules
+# changed after this file was rendered.
+base = "35832037965f8201"
+
+[[rule]]
+account = "Groceries"
+[rule.when]
+description = "aldi"
+
+$ classify-rules --yes
+[exit 0]
+  entry_id  date        description                                         amount  from                  to           rule
+----------  ----------  ------------------------------------------------  --------  --------------------  ---------  ------
+        11  2026-03-17  Card 0001 ALDI SUED 17-03-2026T18:45:12 purchase    -42.30  Unclassified Expense  Groceries       1
+Moved 1 line(s)
+
+$ list-unclassified
+[exit 0]
+  entry_id  date        description            counterparty      amount  account
+----------  ----------  ---------------------  --------------  --------  --------------------
+        10  2026-03-16  Rent March             Max Mustermann    950.00  Unclassified Expense
+        12  2026-03-25  Salary March           ACME GmbH        2500.00  Unclassified Income
+        13  2026-03-27  Account fee            -                   5.90  Unclassified Expense
+        16  2026-04-15  Dividend DE0005190003  -                  12.40  Unclassified Income
+
+$ reclassify 10 Rent
+[exit 0]
+Reclassified entry 10 to Rent
+
+$ split-line 11 --mine 30 --share Alice:12.30 --group Trip
+[exit 0]
+Split entry 11: 30 own, Alice 12.30
+
+$ who-owes-what
+[exit 0]
+person    unit      balance
+--------  ------  ---------
+Alice     EUR         12.30
+
+$ who-owes-what --by-group
+[exit 0]
+
+Trip
+person    unit      from splits
+--------  ------  -------------
+Alice     EUR             12.30
+
+Note: group figures are historical allocations, not settlement-adjusted balances.
+
+$ settle-up
+[exit 0]
+payer    payee    unit      quantity
+-------  -------  ------  ----------
+Alice    you      EUR          12.30
+Settle with: kohle-cli record <date> "<description>" 12.30 --from Alice --to <your account>
+
+$ settle-up --group Trip
+[exit 0]
+payer    payee    unit      quantity
+-------  -------  ------  ----------
+Alice    you      EUR          12.30
+Settle with: kohle-cli record <date> "<description>" 12.30 --from Alice --to <your account>
+
+$ unsplit-line 11
+[exit 0]
+Undid the split of entry 11
+
+$ set-price-source X1 file X1
+[exit 0]
+Price source for X1: file X1
+
+$ set-price-source X2 file X2
+[exit 0]
+Price source for X2: file X2
+
+$ fetch-prices
+[exit 0]
+unit          source    outcome    date        close    detail
+------------  --------  ---------  ----------  -------  -------------
+DE0005190003  -         unbound    -           -        -
+X1            file:X1   priced     2026-06-12  130.5    previous none
+X2            file:X2   priced     2026-05-01  44.25    previous none
+X3            -         unbound    -           -        -
+
+$ fetch-prices
+[exit 0]
+unit          source    outcome         date        close    detail
+------------  --------  --------------  ----------  -------  --------
+DE0005190003  -         unbound         -           -        -
+X1            file:X1   already stored  2026-06-12  -        -
+X2            file:X2   already stored  2026-05-01  -        -
+X3            -         unbound         -           -        -
+
+$ balance Checking
+[exit 0]
+unit                     quantity  price    price date      market value  status      average cost
+---------------------  ----------  -------  ------------  --------------  --------  --------------
+EUR                       1743.70  -        -                    1743.70  -                   1.00
+Total (base currency)     1743.70  -        -                    1743.70  -                   -
+
+$ balance Depot
+[exit 0]
+unit            quantity    price  price date      market value  status                average cost
+------------  ----------  -------  ------------  --------------  ------------------  --------------
+X1                  9.00   130.50  2026-06-12           1174.50  fresh                       106.83
+X2                  8.00    44.25  2026-05-01            354.00  stale (2026-05-01)           40.00
+X3                  3.00     -     -                      22.50  no price (at cost)            7.50
+DE0005190003        6.00     -     -                     573.00  no price (at cost)           95.50
+
+Market value: 2124.00
+3 of 4 holdings estimated (1 stale, 2 at cost)
+
+$ balance Depot --max-age-days 1
+[exit 0]
+unit            quantity    price  price date      market value  status                average cost
+------------  ----------  -------  ------------  --------------  ------------------  --------------
+X1                  9.00   130.50  2026-06-12           1174.50  stale (2026-06-12)          106.83
+X2                  8.00    44.25  2026-05-01            354.00  stale (2026-05-01)           40.00
+X3                  3.00     -     -                      22.50  no price (at cost)            7.50
+DE0005190003        6.00     -     -                     573.00  no price (at cost)           95.50
+
+Market value: 2124.00
+4 of 4 holdings estimated (2 stale, 2 at cost)
+
+$ balance Savings
+[exit 0]
+unit                     quantity  price    price date      market value  status      average cost
+---------------------  ----------  -------  ------------  --------------  --------  --------------
+EUR                         20.00  -        -                      20.00  -                   1.00
+Total (base currency)       20.00  -        -                      20.00  -                   -
+
+$ entries-in-period Checking 2026-01-01 2026-12-31
+[exit 0]
+  entry_id  date        description                                       counterparty    side      quantity  unit      value
+----------  ----------  ------------------------------------------------  --------------  ------  ----------  ------  -------
+         1  2026-01-02  salary                                            -               dr         3000.00  EUR     3000.00
+         2  2026-01-03  rent                                              -               cr          900.00  EUR      900.00
+         3  2026-01-10  buy X1                                            -               cr         1000.00  EUR     1000.00
+         4  2026-02-10  buy X1 again                                      -               cr          602.50  EUR      602.50
+         5  2026-02-12  buy X2                                            -               cr          320.00  EUR      320.00
+         6  2026-02-14  buy X3                                            -               cr           22.50  EUR       22.50
+        14  2026-03-02  Buy DE0005190003                                  -               cr          955.00  EUR      955.00
+         8  2026-03-05  Groceries and gift                                -               cr           80.00  EUR       80.00
+         9  2026-03-06  dinner                                            -               cr           45.50  EUR       45.50
+        10  2026-03-16  Rent March                                        Max Mustermann  cr          950.00  EUR      950.00
+        11  2026-03-17  Card 0001 ALDI SUED 17-03-2026T18:45:12 purchase  ALDI SUED       cr           42.30  EUR       42.30
+        15  2026-03-20  Sell DE0005190003                                 -               dr          405.00  EUR      405.00
+        12  2026-03-25  Salary March                                      ACME GmbH       dr         2500.00  EUR     2500.00
+        13  2026-03-27  Account fee                                       -               cr            5.90  EUR        5.90
+         7  2026-04-01  sell X1                                           -               dr          750.00  EUR      750.00
+        16  2026-04-15  Dividend DE0005190003                             -               dr           12.40  EUR       12.40
+
+$ entries-in-period Depot 2026-01-01 2026-12-31
+[exit 0]
+  entry_id  date        description        counterparty    side      quantity  unit            value
+----------  ----------  -----------------  --------------  ------  ----------  ------------  -------
+         3  2026-01-10  buy X1             -               dr           10.00  X1            1000.00
+         4  2026-02-10  buy X1 again       -               dr            5.00  X1             602.50
+         5  2026-02-12  buy X2             -               dr            8.00  X2             320.00
+         6  2026-02-14  buy X3             -               dr            3.00  X3              22.50
+        14  2026-03-02  Buy DE0005190003   -               dr           10.00  DE0005190003   955.00
+        15  2026-03-20  Sell DE0005190003  -               cr            4.00  DE0005190003   405.00
+         7  2026-04-01  sell X1            -               cr            6.00  X1             750.00
+
+$ net-worth
+[exit 0]
+section               unit            quantity    price  price date      market value  status                at cost
+--------------------  ------------  ----------  -------  ------------  --------------  ------------------  ---------
+Own accounts          EUR              1763.70     -     -                    1763.70  -                     1763.70
+Own accounts          X1                  9.00   130.50  2026-06-12           1174.50  fresh                  961.50
+Own accounts          X2                  8.00    44.25  2026-05-01            354.00  stale (2026-05-01)     320.00
+Own accounts          X3                  3.00     -     -                      22.50  no price (at cost)      22.50
+Own accounts          DE0005190003        6.00     -     -                     573.00  no price (at cost)     573.00
+Receivables (People)  EUR                 0.00     -     -                       0.00  -                        0.00
+
+Net worth (at cost): 3640.70
+Net worth (at market): 3887.70
+3 of 4 holdings estimated (1 stale, 2 at cost)
+
+$ net-worth --max-age-days 1
+[exit 0]
+section               unit            quantity    price  price date      market value  status                at cost
+--------------------  ------------  ----------  -------  ------------  --------------  ------------------  ---------
+Own accounts          EUR              1763.70     -     -                    1763.70  -                     1763.70
+Own accounts          X1                  9.00   130.50  2026-06-12           1174.50  stale (2026-06-12)     961.50
+Own accounts          X2                  8.00    44.25  2026-05-01            354.00  stale (2026-05-01)     320.00
+Own accounts          X3                  3.00     -     -                      22.50  no price (at cost)      22.50
+Own accounts          DE0005190003        6.00     -     -                     573.00  no price (at cost)     573.00
+Receivables (People)  EUR                 0.00     -     -                       0.00  -                        0.00
+
+Net worth (at cost): 3640.70
+Net worth (at market): 3887.70
+4 of 4 holdings estimated (2 stale, 2 at cost)
+
+$ positions
+[exit 0]
+unit            quantity    price  price date      market value  status                FIFO cost    unrealised gain
+------------  ----------  -------  ------------  --------------  ------------------  -----------  -----------------
+X1                  9.00   130.50  2026-06-12           1174.50  fresh                   1002.50             172.00
+X2                  8.00    44.25  2026-05-01            354.00  stale (2026-05-01)       320.00              34.00
+X3                  3.00     -     -                      22.50  no price (at cost)        22.50               0.00
+DE0005190003        6.00     -     -                     573.00  no price (at cost)       573.00               0.00
+
+Market value: 2124.00
+FIFO cost: 1918.00
+Unrealised gain: 206.00
+3 of 4 holdings estimated (1 stale, 2 at cost)
+
+$ positions --max-age-days 1
+[exit 0]
+unit            quantity    price  price date      market value  status                FIFO cost    unrealised gain
+------------  ----------  -------  ------------  --------------  ------------------  -----------  -----------------
+X1                  9.00   130.50  2026-06-12           1174.50  stale (2026-06-12)      1002.50             172.00
+X2                  8.00    44.25  2026-05-01            354.00  stale (2026-05-01)       320.00              34.00
+X3                  3.00     -     -                      22.50  no price (at cost)        22.50               0.00
+DE0005190003        6.00     -     -                     573.00  no price (at cost)       573.00               0.00
+
+Market value: 2124.00
+FIFO cost: 1918.00
+Unrealised gain: 206.00
+4 of 4 holdings estimated (2 stale, 2 at cost)
+
+$ realised
+[exit 0]
+date        account    unit            quantity    proceeds    FIFO cost    gain
+----------  ---------  ------------  ----------  ----------  -----------  ------
+2026-03-20  Depot      DE0005190003        4.00      405.00       382.00   23.00
+2026-04-01  Depot      X1                  6.00      750.00       600.00  150.00
+
+Realised gain: 173.00
+
+$ realised --year 2026
+[exit 0]
+date        account    unit            quantity    proceeds    FIFO cost    gain
+----------  ---------  ------------  ----------  ----------  -----------  ------
+2026-03-20  Depot      DE0005190003        4.00      405.00       382.00   23.00
+2026-04-01  Depot      X1                  6.00      750.00       600.00  150.00
+
+Realised gain: 173.00
+
+$ net-worth-history --from 2026-01-01
+[exit 0]
+date          at cost    at market  estimated    role
+----------  ---------  -----------  -----------  ---------
+2026-01-15    2100.00      2100.00  1 of 1       mid-month
+2026-01-30    2100.00      2100.00  1 of 1       salary
+2026-02-15    2100.00      2100.00  3 of 3       mid-month
+2026-02-27    2100.00      2100.00  3 of 3       salary
+2026-03-15    1994.50      1994.50  4 of 4       mid-month
+2026-03-31    3519.30      3519.30  4 of 4       salary
+2026-04-15    3640.70      3640.70  4 of 4       mid-month
+2026-04-30    3640.70      3640.70  4 of 4       salary
+2026-05-15    3640.70      3674.70  4 of 4       mid-month
+2026-05-29    3640.70      3674.70  4 of 4       salary
+2026-06-15    3640.70      3887.70  3 of 4       mid-month
+
+$ net-worth-history --from 2026-01-01 --role salary
+[exit 0]
+date          at cost    at market  estimated    role
+----------  ---------  -----------  -----------  ---------
+2026-01-30    2100.00      2100.00  1 of 1       salary
+2026-02-27    2100.00      2100.00  3 of 3       salary
+2026-03-31    3519.30      3519.30  4 of 4       salary
+2026-04-30    3640.70      3640.70  4 of 4       salary
+2026-05-29    3640.70      3674.70  4 of 4       salary
+2026-06-15    3640.70      3887.70  3 of 4       mid-month
+
+$ budget --from 2026-01-01
+[exit 0]
+account               from        to             cap    spent    over/under  note
+--------------------  ----------  ----------  ------  -------  ------------  --------------------
+Groceries             2026-01-01  2026-01-31  100.00     0.00       -100.00  -
+Groceries             2026-02-01  2026-02-28  100.00     0.00       -100.00  -
+Groceries             2026-03-01  2026-03-31  100.00   147.80         47.80  over
+Groceries             2026-04-01  2026-04-30  100.00     0.00       -100.00  -
+Groceries             2026-05-01  2026-05-31  100.00     0.00       -100.00  -
+Groceries             2026-06-01  2026-06-30  100.00     0.00       -100.00  partial day 15 of 30
+Rent                  2026-01-01  2026-01-31  950.00   900.00        -50.00  -
+Rent                  2026-02-01  2026-02-28  950.00     0.00       -950.00  -
+Rent                  2026-03-01  2026-03-31  950.00   950.00          0.00  -
+Rent                  2026-04-01  2026-04-30  950.00     0.00       -950.00  -
+Unclassified Expense  2026-01-01  2026-06-15    -        5.90          -     -
+(uncapped)            2026-01-01  2026-06-15    -        0.00          -     -
+
+$ list-operations
+[exit 0]
+  group  entity_type            entity_id  action
+-------  -------------------  -----------  --------
+     41  prices                         1  create
+     41  prices                         2  create
+     40  price_bindings                 2  create
+     39  price_bindings                 1  create
+     38  journal_entries               20  create
+     38  splits                         1  update
+     37  journal_entries               19  create
+     37  splits                         1  create
+     37  splits                         1  update
+     36  journal_entries               18  create
+     36  classifications                1  update
+     35  journal_entries               17  create
+     35  classifications                2  update
+     34  rules                          1  create
+     33  journal_entries               14  create
+     33  journal_entries               15  create
+     33  journal_entries               16  create
+     33  classifications                5  create
+     32  accounts                      10  create
+     32  accounts                      11  create
+     32  journal_entries               10  create
+     32  classifications                1  create
+     32  journal_entries               11  create
+     32  classifications                2  create
+     32  journal_entries               12  create
+     32  classifications                3  create
+     32  journal_entries               13  create
+     32  classifications                4  create
+     31  sampling_rule_lists            3  create
+     30  sampling_rule_lists            2  create
+     29  cap_entries                    3  create
+     28  cap_entries                    2  create
+     27  cap_entries                    1  create
+     26  split_groups                   1  create
+     25  journal_entries                9  create
+     24  journal_entries                8  create
+     23  journal_entries                7  create
+     22  journal_entries                6  create
+     21  journal_entries                5  create
+     20  journal_entries                4  create
+     19  journal_entries                3  create
+     18  journal_entries                2  create
+     17  journal_entries                1  create
+     16  state_entries                  2  create
+     15  state_entries                  1  create
+     14  units                          5  create
+     13  units                          4  create
+     12  units                          3  create
+     11  units                          2  create
+     10  units                          1  create
+      9  accounts                       9  create
+      8  accounts                       8  create
+      7  accounts                       7  create
+      6  accounts                       6  create
+      5  accounts                       5  create
+      4  accounts                       4  create
+      3  accounts                       3  create
+      2  accounts                       2  create
+      1  accounts                       1  create
