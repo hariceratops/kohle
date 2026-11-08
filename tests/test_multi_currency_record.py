@@ -303,3 +303,48 @@ def test_rate_is_euros_per_unit_and_quantised() -> None:
 def test_record_split_expresses_the_same_entries() -> None:
     # TODO: =T total and the sixth currency field
     raise NotImplementedError
+
+
+def test_changing_a_currency_back_into_euros_realises_the_fx_gain(session_factory) -> None:
+    _purchase_ledger(session_factory)
+    _run(
+        session_factory, "record", "2026-03-10", "Buy INFY", "100",
+        "--from", "IndianBank", "--to", "Demat", "--to-unit", "INFY", "--to-price", "1200", "--currency", "INR",
+    )
+
+    result = _run(
+        session_factory, "record", "2026-03-20", "Back to euros", "70000",
+        "--from", "IndianBank", "--to", "Girokonto", "--from-unit", "INR", "--total", "800",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert result.output == "Recorded 70000 INR for 800 EUR: credited IndianBank, debited Girokonto\n"
+    with session_factory() as session:
+        lines = list(session.scalars(select(JournalLine).where(JournalLine.entry_id == 4)))
+        inr = next(line for line in lines if line.unit.identifier == "INR")
+        eur = next(line for line in lines if line.unit.identifier == "EUR")
+        assert (inr.quantity, inr.cost, inr.is_debit) == (Decimal(70000), Decimal(800), False)
+        assert (eur.quantity, eur.unit_price, eur.is_debit) == (Decimal(800), Decimal(1), True)
+
+    sales = QueryRealised(session_factory()).execute(None).unwrap()
+    assert [(s.unit_identifier, s.quantity, s.proceeds, s.fifo_cost, s.gain) for s in sales] == [
+        ("INR", Decimal(70000), Decimal(800), Decimal(770), Decimal(30))
+    ]
+    realised = _run(session_factory, "realised")
+    assert realised.exit_code == 0, realised.output
+    assert "INR" in realised.output
+    assert "Realised gain: 30.00" in realised.output
+
+
+def test_changing_more_currency_than_the_lots_hold_fails_the_reports(session_factory) -> None:
+    _purchase_ledger(session_factory)
+
+    result = _run(
+        session_factory, "record", "2026-03-20", "Back to euros", "200000",
+        "--from", "IndianBank", "--to", "Girokonto", "--from-unit", "INR", "--total", "2300",
+    )
+
+    assert result.exit_code == 0, result.output
+    realised = _run(session_factory, "realised")
+    assert realised.exit_code == 1
+    assert "INR in 'IndianBank' on 2026-03-20: disposes of 10000 more than the account holds" in realised.output

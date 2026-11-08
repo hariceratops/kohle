@@ -209,6 +209,17 @@ same 3 `ACME`, so the two can disagree about what a lot cost. `positions` and
 - The `People` branch is excluded from both reports. `positions` never fetches
   prices.
 
+### Exchange-rate gain
+
+Rupees are lots like shares. Buying shares or spending rupees realises nothing;
+the gain is realised when rupees are changed back into euros (see
+[Changing a currency back into euros](recording-entries.md#changing-a-currency-back-into-euros)).
+`realised` then lists a row with the unit `INR`: the proceeds are the euros
+received, the FIFO cost is the euros the rupees used up cost, and the gain is
+the difference. It counts under the same `Realised gain` total as share sales,
+and `--year` filters it the same way. A shortfall of rupees fails `realised`
+and `positions` as a whole.
+
 ### FIFO across your own depots
 
 A security can sit in more than one depot of your own. Lots are tracked per

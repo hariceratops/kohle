@@ -212,7 +212,18 @@ currency on a plain entry. Both lines carry the rupees at par, and the euros the
 expense is worth come from the lots the rupees leave, oldest first:
 
 ```console
+$ kohle-cli add-account Checking --type asset
+Added account Checking (asset) with id 2
+$ kohle-cli add-account IndianBank --type asset
+Added account IndianBank (asset) with id 3
+$ kohle-cli add-unit INR "Indian rupee" --kind currency
+Added unit INR (currency) with id 1
+$ kohle-cli record 2026-03-05 "Remittance" 90000 --from Checking --to IndianBank --to-unit INR --total 1000
+Recorded 90000 INR for 1000 EUR: credited Checking, debited IndianBank
+$ kohle-cli record 2026-03-12 "Remittance" 100000 --from Checking --to IndianBank --to-unit INR --total 1100
+Recorded 100000 INR for 1100 EUR: credited Checking, debited IndianBank
 $ kohle-cli add-account Groceries --type expense
+Added account Groceries (expense) with id 4
 $ kohle-cli record 2026-03-25 "Groceries" 95000 --from IndianBank --to Groceries --currency INR
 Recorded 95000 INR: credited IndianBank, debited Groceries
 ```
@@ -229,15 +240,67 @@ more than the account holds records, but `budget`, `balance`, `net-worth`,
 adds a `priced in` column naming the currency whenever a listed line has one:
 
 ```console
+$ kohle-cli add-account Checking --type asset
+Added account Checking (asset) with id 2
+$ kohle-cli add-account IndianBank --type asset
+Added account IndianBank (asset) with id 3
+$ kohle-cli add-unit INR "Indian rupee" --kind currency
+Added unit INR (currency) with id 1
+$ kohle-cli record 2026-03-05 "Remittance" 90000 --from Checking --to IndianBank --to-unit INR --total 1000
+Recorded 90000 INR for 1000 EUR: credited Checking, debited IndianBank
+$ kohle-cli record 2026-03-12 "Remittance" 100000 --from Checking --to IndianBank --to-unit INR --total 1100
+Recorded 100000 INR for 1100 EUR: credited Checking, debited IndianBank
+$ kohle-cli add-account Groceries --type expense
+Added account Groceries (expense) with id 4
+$ kohle-cli record 2026-03-25 "Groceries" 95000 --from IndianBank --to Groceries --currency INR
+Recorded 95000 INR: credited IndianBank, debited Groceries
 $ kohle-cli entries-in-period Groceries 2026-03-01 2026-04-01
-  entry_id  date        description    counterparty    side      quantity  unit      value  priced in
-----------  ----------  -------------  --------------  ------  ----------  ------  -------  -----------
-         3  2026-03-25  Groceries      -               dr        95000.00  INR    95000.00  INR
+  entry_id  date        description    counterparty    side      quantity  unit       value  priced in
+----------  ----------  -------------  --------------  ------  ----------  ------  --------  -----------
+         3  2026-03-25  Groceries      -               dr        95000.00  INR     95000.00  INR
 ```
 
 The column is left out when no listed line has one, so a euro-only account reads
 as before. `--currency` has to name a currency unit other than EUR, and it
 cannot be combined with `--from-unit`.
+
+## Changing a currency back into euros
+
+Taking a currency out of one of your own accounts and putting euros into a euro
+account is the remittance in reverse, and it is written the same way, as two
+amounts: the quantity that leaves, in its currency, and `--total`, the euros
+that arrive. This is the one place an exchange-rate gain is realised. Take the
+two remittances above and change 70,000 of the 190,000 rupees back:
+
+```console
+$ kohle-cli add-account Checking --type asset
+Added account Checking (asset) with id 2
+$ kohle-cli add-account IndianBank --type asset
+Added account IndianBank (asset) with id 3
+$ kohle-cli add-unit INR "Indian rupee" --kind currency
+Added unit INR (currency) with id 1
+$ kohle-cli record 2026-03-05 "Remittance" 90000 --from Checking --to IndianBank --to-unit INR --total 1000
+Recorded 90000 INR for 1000 EUR: credited Checking, debited IndianBank
+$ kohle-cli record 2026-03-12 "Remittance" 100000 --from Checking --to IndianBank --to-unit INR --total 1100
+Recorded 100000 INR for 1100 EUR: credited Checking, debited IndianBank
+$ kohle-cli record 2026-04-02 "Back to euros" 70000 --from IndianBank --to Checking --from-unit INR --total 800
+Recorded 70000 INR for 800 EUR: credited IndianBank, debited Checking
+$ kohle-cli realised
+date        account     unit      quantity    proceeds    FIFO cost    gain
+----------  ----------  ------  ----------  ----------  -----------  ------
+2026-04-02  IndianBank  INR       70000.00      800.00       777.78   22.22
+
+Realised gain: 22.22
+```
+
+The rupees leave oldest lot first, so these 70,000 come out of the first
+remittance and cost 1000 × 70000 / 90000 = 777.78 euros, and 800.00 euros came
+back: a gain of 22.22. `realised` lists it as a row with the unit `INR`, under
+the same total as the sales of shares. Asking for more rupees than the
+account's lots hold records, but `realised`, `positions`, `balance` and
+`net-worth` then fail, naming the shortfall, until the missing remittance is
+recorded. The quantity and `--total` must be above 0, and the entry reads no
+fetched rate.
 
 ## Entries with more than two lines
 
