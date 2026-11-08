@@ -75,10 +75,35 @@ def test_record_currency_builds_at_par_lines() -> None:
     raise NotImplementedError
 
 
-@pytest.mark.skip(reason="TODO scaffold")
-def test_opening_entry_for_a_currency_and_a_security() -> None:
-    # TODO: from a named opening account
-    raise NotImplementedError
+def test_opening_entry_for_a_currency_and_a_security(session_factory) -> None:
+    _remittance_ledger(session_factory)
+    for args in (
+        ["add-account", "Opening", "--type", "income"],
+        ["add-account", "Demat", "--type", "asset"],
+        ["add-unit", "INFY", "Infosys", "--kind", "security"],
+    ):
+        assert _run(session_factory, *args).exit_code == 0
+
+    currency = _run(
+        session_factory, "record", "2026-01-01", "Opening", "90000",
+        "--from", "Opening", "--to", "IndianBank", "--to-unit", "INR", "--total", "1000",
+    )
+    security = _run(
+        session_factory, "record", "2026-01-01", "Opening", "100",
+        "--from", "Opening", "--to", "Demat", "--to-unit", "INFY", "--total", "1500",
+    )
+
+    assert currency.exit_code == 0, currency.output
+    assert security.exit_code == 0, security.output
+    assert security.output == "Recorded 100 INFY for 1500 EUR: credited Opening, debited Demat\n"
+    with session_factory() as session:
+        lines = list(session.scalars(select(JournalLine)))
+        held = {line.unit.identifier: line for line in lines if line.unit.identifier != "EUR"}
+        assert (held["INR"].quantity, held["INR"].cost) == (Decimal(90000), Decimal(1000))
+        assert (held["INFY"].quantity, held["INFY"].cost) == (Decimal(100), Decimal(1500))
+        credits = [line for line in lines if not line.is_debit]
+        assert sorted(line.quantity for line in credits) == [Decimal(1000), Decimal(1500)]
+        assert all(line.account.name == "Opening" for line in credits)
 
 
 @pytest.mark.skip(reason="TODO scaffold")

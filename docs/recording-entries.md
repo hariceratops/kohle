@@ -109,6 +109,35 @@ Recording reads no fetched rate: the cost comes from the entry alone, so a
 rate fetched later never changes it. The currency unit has to exist first, and
 is added like any other (see [Accounts and units](accounts-and-units.md#currencies)).
 
+## Opening balances
+
+Holdings you already have when you start enter as an opening entry, not as a
+backdated history. It is the remittance form with `--from` an account you name
+for the purpose. Make that account an `income` account: the opening then raises
+your net worth, whereas an asset account would cancel it out. You state the
+quantity and the total euro cost you paid for it, and the lot's cost is that
+total. It works the same for a currency and for a security:
+
+```console
+$ kohle-cli add-account Opening --type income
+Added account Opening (income) with id 2
+$ kohle-cli add-account IndianBank --type asset
+Added account IndianBank (asset) with id 3
+$ kohle-cli add-account Demat --type asset
+Added account Demat (asset) with id 4
+$ kohle-cli add-unit INR "Indian rupee" --kind currency
+Added unit INR (currency) with id 1
+$ kohle-cli add-unit INFY "Infosys" --kind security
+Added unit INFY (security) with id 2
+$ kohle-cli record 2026-01-01 "Opening" 90000 --from Opening --to IndianBank --to-unit INR --total 1000
+Recorded 90000 INR for 1000 EUR: credited Opening, debited IndianBank
+$ kohle-cli record 2026-01-01 "Opening" 100 --from Opening --to Demat --to-unit INFY --total 1500
+Recorded 100 INFY for 1500 EUR: credited Opening, debited Demat
+```
+
+The rules are those of [Sending money abroad](#sending-money-abroad): the
+quantity and the total must be above 0, and the units must exist first.
+
 ## Entries with more than two lines
 
 `record-split` takes every line in full, as
