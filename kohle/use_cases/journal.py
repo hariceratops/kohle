@@ -377,8 +377,9 @@ class LineInput:
     account_name: str
     quantity: Decimal
     unit_identifier: str
-    unit_price: Decimal
+    unit_price: Decimal | Total
     is_debit: bool
+    price_currency: str | None = None
 
 
 class RecordSplitEntry(UnitOfWork[JournalEntry, RecordEntryError]):
@@ -412,13 +413,36 @@ class RecordSplitEntry(UnitOfWork[JournalEntry, RecordEntryError]):
                 )
                 if unit_res.is_err:
                     return Result.err(unit_res.unwrap_err())
+                unit = unit_res.unwrap()
+
+                price_unit_id = None
+                if line.price_currency is not None and line.price_currency != BASE_CURRENCY:
+                    currency_res = get_unit_by_identifier_service(ctx, line.price_currency)
+                    if currency_res.is_err:
+                        return Result.err(currency_res.unwrap_err())
+                    currency = currency_res.unwrap()
+                    if currency.kind is not UnitKind.currency:
+                        return Result.err(NotACurrencyUnit(currency.identifier, currency.kind.value))
+                    price_unit_id = currency.id
+
+                cost = None
+                if isinstance(line.unit_price, Total):
+                    cost = line.unit_price.amount
+                    unit_price = (cost / line.quantity).quantize(_PRICE_SCALE)
+                else:
+                    unit_price = line.unit_price
+                    if price_unit_id is not None and unit.id != price_unit_id:
+                        # Quantised so that what is validated is what is stored.
+                        cost = (line.quantity * unit_price).quantize(_PRICE_SCALE)
                 specs.append(
                     LineSpec(
                         account_res.unwrap().id,
-                        unit_res.unwrap().id,
+                        unit.id,
                         line.quantity,
-                        line.unit_price,
+                        unit_price,
                         line.is_debit,
+                        cost=cost,
+                        price_unit_id=price_unit_id,
                     )
                 )
 

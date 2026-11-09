@@ -5,9 +5,12 @@ from decimal import Decimal
 
 import pytest
 from click.testing import CliRunner
-from sqlalchemy import select
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from kohle.app.cli.cli import cli
+from kohle.db.connection import base
 from kohle.domain.models import JournalLine
 from kohle.use_cases.lots import QueryRealised
 from kohle.use_cases.reporting import QueryPositions
@@ -397,10 +400,124 @@ def test_rate_misuse_is_a_usage_error(session_factory, extra: list[str]) -> None
     assert result.exit_code == 2, result.output
 
 
-@pytest.mark.skip(reason="TODO scaffold")
-def test_record_split_expresses_the_same_entries() -> None:
-    # TODO: =T total and the sixth currency field
-    raise NotImplementedError
+def _form_ledger(session_factory) -> None:
+    for args in (
+        ["add-account", "People", "--type", "asset"],
+        ["add-account", "Girokonto", "--type", "asset"],
+        ["add-account", "IndianBank", "--type", "asset"],
+        ["add-account", "Demat", "--type", "asset"],
+        ["add-account", "DematCash", "--type", "asset"],
+        ["add-account", "Opening", "--type", "income"],
+        ["add-account", "Dividends", "--type", "income"],
+        ["add-account", "Groceries", "--type", "expense"],
+        ["add-unit", "INR", "Indian rupee", "--kind", "currency"],
+        ["add-unit", "INFY", "Infosys", "--kind", "security"],
+        ["record", "2026-03-01", "Buy INFY", "100", "--from", "Girokonto", "--to", "Demat", "--to-unit", "INFY", "--to-price", "12"],
+        ["record", "2026-03-05", "Remittance", "90000", "--from", "Girokonto", "--to", "IndianBank", "--to-unit", "INR", "--total", "1000"],
+        ["record", "2026-03-06", "Remittance", "100000", "--from", "Girokonto", "--to", "IndianBank", "--to-unit", "INR", "--total", "1100"],
+    ):
+        result = _run(session_factory, *args)
+        assert result.exit_code == 0, result.output
+
+
+def _fresh_factory():
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    base.metadata.create_all(bind=engine)
+    return sessionmaker(bind=engine, expire_on_commit=False)
+
+
+def _last_entry(session_factory) -> list[tuple]:
+    with session_factory() as session:
+        entry_id = max(line.entry_id for line in session.scalars(select(JournalLine)))
+        lines = session.scalars(select(JournalLine).where(JournalLine.entry_id == entry_id))
+        return sorted(
+            (line.account.name, line.unit.identifier, line.quantity, line.is_debit,
+             line.price_unit.identifier if line.price_unit else None, line.cost)
+            for line in lines
+        )
+
+
+_FORMS = {
+    "remittance": (
+        ["90000", "--from", "Girokonto", "--to", "IndianBank", "--to-unit", "INR", "--total", "1000"],
+        ["Girokonto:1000:EUR:1:credit", "IndianBank:90000:INR:=1000:debit"],
+    ),
+    "opening": (
+        ["100", "--from", "Opening", "--to", "Demat", "--to-unit", "INFY", "--total", "1500"],
+        ["Opening:1500:EUR:1:credit", "Demat:100:INFY:=1500:debit"],
+    ),
+    "back to euros": (
+        ["70000", "--from", "IndianBank", "--to", "Girokonto", "--from-unit", "INR", "--total", "800"],
+        ["IndianBank:70000:INR:=800:credit", "Girokonto:800:EUR:1:debit"],
+    ),
+    "purchase in INR": (
+        ["100", "--from", "IndianBank", "--to", "Demat", "--to-unit", "INFY", "--to-price", "1200", "--currency", "INR"],
+        ["IndianBank:120000:INR:1:credit:INR", "Demat:100:INFY:1200:debit:INR"],
+    ),
+    "expense in INR": (
+        ["1500", "--from", "IndianBank", "--to", "Groceries", "--currency", "INR"],
+        ["IndianBank:1500:INR:1:credit:INR", "Groceries:1500:INR:1:debit:INR"],
+    ),
+    "move": (
+        ["50000", "--from", "IndianBank", "--to", "DematCash", "--currency", "INR"],
+        ["IndianBank:50000:INR:1:credit:INR", "DematCash:50000:INR:1:debit:INR"],
+    ),
+    "sale at a rate": (
+        ["50", "--from", "Demat", "--to", "DematCash", "--from-unit", "INFY", "--from-price", "1300",
+         "--currency", "INR", "--rate", "0.0104"],
+        ["Demat:50:INFY:=676:credit", "DematCash:65000:INR:0.0104:debit"],
+    ),
+    "dividend at a rate": (
+        ["2000", "--from", "Dividends", "--to", "DematCash", "--currency", "INR", "--rate", "0.0104"],
+        ["Dividends:2000:INR:0.0104:credit", "DematCash:2000:INR:0.0104:debit"],
+    ),
+}
+
+
+@pytest.mark.parametrize("form", _FORMS)
+def test_record_split_expresses_the_same_entries(form: str) -> None:
+    record_args, split_lines = _FORMS[form]
+    via_record, via_split = _fresh_factory(), _fresh_factory()
+    _form_ledger(via_record)
+    _form_ledger(via_split)
+
+    recorded = _run(via_record, "record", "2026-03-10", form, *record_args)
+    split = _run(via_split, "record-split", "2026-03-10", form, *(arg for line in split_lines for arg in ("--line", line)))
+
+    assert recorded.exit_code == 0, recorded.output
+    assert split.exit_code == 0, split.output
+    from_record, from_split = _last_entry(via_record), _last_entry(via_split)
+    if form in ("sale at a rate", "dividend at a rate"):
+        # The rated rupee line carries no cost in record-split (design 6.2).
+        from_record = [line[:5] for line in from_record]
+        from_split = [line[:5] for line in from_split]
+    assert from_split == from_record
+    day = date(2026, 3, 11)
+    assert QueryPositions(via_split()).execute(day, 7).unwrap() == QueryPositions(via_record()).execute(day, 7).unwrap()
+    assert QueryRealised(via_split()).execute(None).unwrap() == QueryRealised(via_record()).execute(None).unwrap()
+
+
+def test_record_split_price_currency_must_be_a_currency_unit(session_factory) -> None:
+    _form_ledger(session_factory)
+
+    result = _run(
+        session_factory, "record-split", "2026-03-10", "Bad",
+        "--line", "IndianBank:120000:INR:1:credit:INFY", "--line", "Demat:100:INFY:1200:debit:INFY",
+    )
+
+    assert result.exit_code == 1
+    assert "INFY" in result.output
+    with session_factory() as session:
+        assert max(line.entry_id for line in session.scalars(select(JournalLine))) == 3
+
+
+@pytest.mark.parametrize("line", ["Demat:0:INFY:=100:debit", "Demat:10:INFY:=0:debit", "Demat:10:INFY:=x:debit"])
+def test_record_split_total_needs_positive_quantity_and_amount(session_factory, line: str) -> None:
+    _form_ledger(session_factory)
+
+    result = _run(session_factory, "record-split", "2026-03-10", "Bad", "--line", line, "--line", "Girokonto:1:EUR:1:credit")
+
+    assert result.exit_code == 2
 
 
 def test_changing_a_currency_back_into_euros_realises_the_fx_gain(session_factory) -> None:

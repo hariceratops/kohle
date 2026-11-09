@@ -138,24 +138,35 @@ MAX_AGE_DAYS = click.option(
 
 def _parse_line(raw: str) -> LineInput:
     fields = raw.split(":")
-    if len(fields) != 5:
-        raise click.BadParameter(f"{raw!r} does not split into ACCOUNT:QUANTITY:UNIT:PRICE:SIDE")
-    account_name, quantity_str, unit_identifier, price_str, side = fields
+    if len(fields) not in (5, 6):
+        raise click.BadParameter(f"{raw!r} does not split into ACCOUNT:QUANTITY:UNIT:PRICE:SIDE[:CURRENCY]")
+    account_name, quantity_str, unit_identifier, price_str, side = fields[:5]
+    price_currency = fields[5] if len(fields) == 6 else None
 
     try:
         quantity = Decimal(quantity_str)
     except InvalidOperation:
         raise click.BadParameter(f"{raw!r}: {quantity_str!r} is not a valid decimal quantity") from None
 
+    is_total = price_str.startswith("=")
     try:
-        unit_price = Decimal(price_str)
+        unit_price = Decimal(price_str.removeprefix("="))
     except InvalidOperation:
         raise click.BadParameter(f"{raw!r}: {price_str!r} is not a valid decimal price") from None
+    if is_total and (quantity <= 0 or unit_price <= 0):
+        raise click.BadParameter(f"{raw!r}: a total needs a quantity and a total above 0")
 
     if side not in ("debit", "credit"):
         raise click.BadParameter(f"{raw!r}: {side!r} must be 'debit' or 'credit'")
 
-    return LineInput(account_name, quantity, unit_identifier, unit_price, is_debit=side == "debit")
+    return LineInput(
+        account_name,
+        quantity,
+        unit_identifier,
+        Total(unit_price) if is_total else unit_price,
+        is_debit=side == "debit",
+        price_currency=price_currency,
+    )
 
 
 def _parse_lines(ctx, param, values: tuple[str, ...]) -> list[LineInput]:
@@ -719,7 +730,7 @@ def record_cmd(
     "lines",
     multiple=True,
     callback=_parse_lines,
-    help="ACCOUNT:QUANTITY:UNIT:PRICE:SIDE, repeatable, one per journal line; SIDE is debit or credit",
+    help="ACCOUNT:QUANTITY:UNIT:PRICE:SIDE[:CURRENCY], repeatable, one per journal line; SIDE is debit or credit, PRICE may be =TOTAL, CURRENCY is the price currency (default EUR)",
 )
 @click.pass_obj
 def record_split_cmd(make_session, entry_date, description: str, lines: list[LineInput]):

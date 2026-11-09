@@ -437,6 +437,53 @@ $ kohle-cli record-split 2026-03-08 "Shared dinner" --line Checking:120:EUR:1:cr
 Error: Entry does not balance: debits 50 against credits 120
 ```
 
+### Currencies in `record-split`
+
+`record-split` writes every form the two-amount `record` does. Two extensions
+to the line:
+
+- A price written `=TOTAL` states the whole euro value of the line instead of
+  a price per unit, as `--total` does. It needs a quantity and a total above 0.
+- An optional sixth field names the currency the price is stated in. It
+  defaults to `EUR`, and any other value has to be a currency unit.
+
+```console
+$ kohle-cli add-account Girokonto --type asset
+Added account Girokonto (asset) with id 2
+$ kohle-cli add-account IndianBank --type asset
+Added account IndianBank (asset) with id 3
+$ kohle-cli add-account Demat --type asset
+Added account Demat (asset) with id 4
+$ kohle-cli add-account DematCash --type asset
+Added account DematCash (asset) with id 5
+$ kohle-cli add-account Groceries --type expense
+Added account Groceries (expense) with id 6
+$ kohle-cli add-unit INR "Indian rupee" --kind currency
+Added unit INR (currency) with id 1
+$ kohle-cli add-unit INFY "Infosys" --kind security
+Added unit INFY (security) with id 2
+$ kohle-cli record 2026-03-01 "Buy INFY" 100 --from Girokonto --to Demat --to-unit INFY --to-price 12
+Recorded 100 INFY @ 12: credited Girokonto, debited Demat
+$ kohle-cli record-split 2026-03-05 "Remittance" --line Girokonto:1000:EUR:1:credit --line IndianBank:90000:INR:=1000:debit
+Recorded entry with 2 lines
+$ kohle-cli record-split 2026-03-10 "Buy INFY" --line IndianBank:120000:INR:1:credit:INR --line Demat:100:INFY:1200:debit:INR
+Recorded entry with 2 lines
+$ kohle-cli record-split 2026-03-12 "Groceries" --line IndianBank:1500:INR:1:credit:INR --line Groceries:1500:INR:1:debit:INR
+Recorded entry with 2 lines
+$ kohle-cli record-split 2026-03-20 "Sell INFY" --line Demat:50:INFY:=676:credit --line DematCash:65000:INR:0.0104:debit
+Recorded entry with 2 lines
+```
+
+The first is a remittance, the second a purchase paid in rupees, the third an
+expense in rupees and the fourth a sale for rupees at a rate: the rupee line
+at a euro price is how rupees arriving are valued, so a dividend is
+`Dividends:2000:INR:0.0104:credit` against `DematCash:2000:INR:0.0104:debit`.
+Opening balances and changing rupees back into euros take the same shapes as
+the first and fourth rows of the earlier sections. The reports read the same
+figures as for `record`. The rated rupee line carries no stored cost and is
+valued as quantity times rate, and the displayed price is not rounded the same
+way when the rate has more than 8 decimals.
+
 [People and splitting](people-and-splitting.md) shows how to do this with
 people under the `People` root, and how to split a line that came from an
 imported statement.
