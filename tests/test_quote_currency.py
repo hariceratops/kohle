@@ -10,12 +10,33 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from kohle.app.plugins.kohle_alphavantage_price_fetcher import AlphaVantagePriceFetcher
-from kohle.app.plugins.kohle_file_price_fetcher import FilePriceFetcher, MalformedPriceFile
+from kohle.app.plugins.kohle_file_price_fetcher import (
+    FilePriceFetcher,
+    MalformedPriceFile,
+)
 from kohle.core.result import Result
-from kohle.domain.domain_errors import NonBaseCurrency, NotAQuoteCurrency, NotASecurityUnit, RateNotQuotedInEur
-from kohle.domain.models import Account, AccountType, Operation, Price, PriceBinding, Unit, UnitKind
+from kohle.domain.domain_errors import (
+    NonBaseCurrency,
+    NotAQuoteCurrency,
+    NotASecurityUnit,
+    RateNotQuotedInEur,
+)
+from kohle.domain.models import (
+    Account,
+    AccountType,
+    Operation,
+    Price,
+    PriceBinding,
+    Unit,
+    UnitKind,
+)
 from kohle.infrastructure.transaction_context import DbTransactionContext
-from kohle.plugin.price_plugin import Close, PriceFetcherPlugin, PriceFetchError, PriceResult
+from kohle.plugin.price_plugin import (
+    Close,
+    PriceFetcherPlugin,
+    PriceFetchError,
+    PriceResult,
+)
 from kohle.services.account_services import add_account_service
 from kohle.services.journal_services import LineSpec, add_journal_entry_service
 from kohle.services.unit_services import add_unit_service

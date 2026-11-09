@@ -7,16 +7,16 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import date
 from decimal import Decimal
-from typing import assert_never
+from typing import assert_never, overload
 
 from kohle.core.result import Result
-from kohle.domain.models import UnitKind
 from kohle.domain.domain_errors import (
     HistoryError,
     PositionsError,
     PriceError,
     ValuationError,
 )
+from kohle.domain.models import UnitKind
 from kohle.infrastructure.transaction_context import DbTransactionContext
 from kohle.infrastructure.uow import UnitOfWork
 from kohle.services.account_services import get_account_by_name_service
@@ -63,6 +63,10 @@ def _market_value(
             assert_never(close)
 
 
+@overload
+def valuation_status(close: LatestClose, rate: LatestClose | None) -> LatestClose: ...
+@overload
+def valuation_status(close: LatestClose | None, rate: LatestClose | None) -> LatestClose | None: ...
 def valuation_status(close: LatestClose | None, rate: LatestClose | None) -> LatestClose | None:
     """The worse of the close and its rate; a stale result carries the older date."""
     if rate is None:
@@ -126,9 +130,7 @@ class Position:
 
     @property
     def status(self) -> LatestClose:
-        status = valuation_status(self.close, self.rate)
-        assert status is not None
-        return status
+        return valuation_status(self.close, self.rate)
 
     @property
     def market_value(self) -> Decimal:
@@ -182,7 +184,7 @@ def _row_unit(row: ValuedRow) -> tuple[int, str, Decimal]:
     return row.balance.unit_id, row.balance.unit_identifier, row.balance.quantity
 
 
-def _row_kind(row: ValuedRow) -> UnitKind | None:
+def row_kind(row: ValuedRow) -> UnitKind | None:
     return row.holding.kind if isinstance(row, Position) else row.balance.kind
 
 
@@ -192,13 +194,13 @@ def holding_currencies(
     """The currency each row's unit is held in: a currency unit is itself, a
     bound security is its binding's quote currency, anything else is euros."""
     rows = list(rows)
-    securities = [_row_unit(r)[0] for r in rows if _row_kind(r) is not UnitKind.currency]
+    securities = [_row_unit(r)[0] for r in rows if row_kind(r) is not UnitKind.currency]
     bindings_res = price_bindings_service(ctx, securities)
     if bindings_res.is_err:
         return Result.err(bindings_res.unwrap_err())
     quote = {b.unit_id: b.quote_currency for b in bindings_res.unwrap()}
     currencies = {
-        unit_id: identifier if _row_kind(r) is UnitKind.currency else quote.get(unit_id, BASE_CURRENCY)
+        unit_id: identifier if row_kind(r) is UnitKind.currency else quote.get(unit_id, BASE_CURRENCY)
         for r in rows
         for unit_id, identifier, _ in [_row_unit(r)]
     }
@@ -214,7 +216,7 @@ class Subtotal:
 
 def _native_value(row: ValuedRow, currency: str) -> Decimal | None:
     _, identifier, quantity = _row_unit(row)
-    if identifier == currency and _row_kind(row) is UnitKind.currency:
+    if identifier == currency and row_kind(row) is UnitKind.currency:
         return quantity
     if quantity == 0:
         return Decimal(0)

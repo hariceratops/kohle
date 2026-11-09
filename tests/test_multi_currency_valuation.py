@@ -326,7 +326,7 @@ def _positions_ledger(session_factory, rate: str | None) -> None:
     ):
         result = CliRunner().invoke(cli, args, obj=session_factory)
         assert result.exit_code == 0, result.output
-    today = date.today()  # noqa: DTZ011 - matches the CLI's own clock
+    today = date.today()
     with session_factory() as session:
         ctx = DbTransactionContext(session)
         infy = get_unit_by_identifier_service(ctx, "INFY").unwrap()
@@ -386,7 +386,7 @@ def test_positions_and_net_worth_print_subtotals_but_balance_does_not(session_fa
         infy = get_unit_by_identifier_service(ctx, "INFY").unwrap()
         set_price_binding_service(ctx, infy.id, "file", "INFY", "INR").unwrap()
         session.commit()
-    run = lambda *a: CliRunner().invoke(cli, list(a), obj=session_factory)  # noqa: E731
+    run = lambda *a: CliRunner().invoke(cli, list(a), obj=session_factory)
 
     for command in ("positions", "net-worth"):
         result = run(command)

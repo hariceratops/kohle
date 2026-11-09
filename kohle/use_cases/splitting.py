@@ -8,6 +8,7 @@ from kohle.domain.domain_errors import (
     AccountError,
     EmptySplitGroupName,
     JournalError,
+    LotError,
     NoSplitForEntry,
     NotAPersonAccount,
     SplitDoesNotSumToLine,
@@ -42,7 +43,7 @@ from kohle.use_cases.journal import (
 )
 
 UnsplitEntryError = JournalError | SplitError
-WhoOwesWhatError = AccountError | JournalError | SplitError
+WhoOwesWhatError = AccountError | JournalError | SplitError | LotError
 
 # splitting.py may import from journal.py (post_entry, PEOPLE_ROOT) and reach
 # classification_by_entry_service in the services layer directly; journal.py

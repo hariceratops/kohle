@@ -31,7 +31,14 @@ from kohle.domain.domain_errors import (
     UnitNotFoundError,
     UnknownInstruments,
 )
-from kohle.domain.models import BASE_CURRENCY, AccountType, JournalEntry, JournalLine, Unit, UnitKind
+from kohle.domain.models import (
+    BASE_CURRENCY,
+    AccountType,
+    JournalEntry,
+    JournalLine,
+    Unit,
+    UnitKind,
+)
 from kohle.infrastructure.transaction_context import DbTransactionContext
 from kohle.infrastructure.uow import UnitOfWork
 from kohle.plugin.importer_plugin import CashRow, SecurityRow, StatementRow
@@ -51,12 +58,12 @@ from kohle.services.journal_services import (
     existing_references_service,
     query_lines_by_period_service,
 )
-from kohle.services.unit_services import get_unit_by_identifier_service, units_by_id_service
-from kohle.use_cases.accounts import (  # noqa: F401 - moved to accounts.py; callers still import them from here
-    PEOPLE_ROOT,
-    BalanceSheetAccounts,
-    balance_sheet_accounts,
+from kohle.services.unit_services import (
+    get_unit_by_identifier_service,
+    units_by_id_service,
 )
+from kohle.use_cases.accounts import PEOPLE_ROOT as PEOPLE_ROOT
+from kohle.use_cases.accounts import balance_sheet_accounts
 from kohle.use_cases.lots import line_costs
 from kohle.use_cases.rules import compile_rules, match_rule, stored_rules
 from kohle.use_cases.units import get_or_create_unit
@@ -137,16 +144,16 @@ def _validate_price_currencies(ctx: DbTransactionContext, lines: list[LineSpec])
             elif units[line.unit_id].kind is UnitKind.currency:
                 return ConversionBetweenCurrencies(units[line.unit_id].identifier, currency)
 
-        credited = [line for line in lines if line.price_unit_id is not None and not line.is_debit]
+        credited = [(line, line.price_unit_id) for line in lines if line.price_unit_id is not None and not line.is_debit]
         if credited:
             accounts_res = list_accounts_service(ctx)
             if accounts_res.is_err:
                 return JournalError(str(accounts_res.unwrap_err()))
             accounts = {account.id: account for account in accounts_res.unwrap()}
-            for line in credited:
+            for line, priced_in in credited:
                 account = accounts[line.account_id]
-                if line.unit_id != line.price_unit_id or account.type not in (AccountType.asset, AccountType.liability):
-                    return CurrencyInflowWithoutRate(account.name, units[line.price_unit_id].identifier)
+                if line.unit_id != priced_in or account.type not in (AccountType.asset, AccountType.liability):
+                    return CurrencyInflowWithoutRate(account.name, units[priced_in].identifier)
 
     for price_unit_id in [None, *priced]:
         in_currency = [line for line in lines if line.price_unit_id == price_unit_id]
@@ -305,8 +312,7 @@ class RecordSimpleEntry(UnitOfWork[JournalEntry, RecordEntryError]):
                 if currency.kind is not UnitKind.currency or currency.identifier == BASE_CURRENCY:
                     return Result.err(NotACurrencyUnit(currency.identifier, currency.kind.value))
 
-            if currency_side is not None and currency_side.rate is not None:
-                assert currency is not None
+            if currency_side is not None and currency is not None and currency_side.rate is not None:
                 if cross is None:
                     amount = quantity
                 elif isinstance(cross.price, Total):

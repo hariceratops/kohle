@@ -10,7 +10,7 @@ def test_every_command_matches_the_107_baseline(session_factory) -> None:
 def test_eur_only_tables_are_byte_identical(session_factory) -> None:
     output = run_script(session_factory)
 
-    tables = {}
+    tables: dict[str, str] = {}
     for block in output.split("\n$ "):
         command, _, body = block.removeprefix("$ ").partition("\n")
         tables.setdefault(command, body)

@@ -67,10 +67,10 @@ def test_opening_remittance_purchase_sale_and_reconversion(session_factory, pin_
         session.commit()
 
     net_worth = _run(session_factory, "net-worth")
-    rows = {ln.split()[2]: ln.split() for ln in net_worth.splitlines() if ln.startswith("Own accounts")}
+    worth_rows = {ln.split()[2]: ln.split() for ln in net_worth.splitlines() if ln.startswith("Own accounts")}
     # 30 INFY at 1700 INR and 127,000 INR (190,000 - 75,000 + 32,000 - 20,000), both at 0.0106 EUR
-    assert rows["INFY"][3] == "30.00"
-    assert rows["INR"][3] == "127000.00"
-    assert "540.60" in rows["INFY"] and "1346.20" in rows["INR"]
+    assert worth_rows["INFY"][3] == "30.00"
+    assert worth_rows["INR"][3] == "127000.00"
+    assert "540.60" in worth_rows["INFY"] and "1346.20" in worth_rows["INR"]
     assert "Net worth (at market): 6016.80" in net_worth
     assert "Net worth (at cost): 6011.00" in net_worth

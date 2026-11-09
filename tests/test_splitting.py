@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from kohle.domain.domain_errors import (
     AccountNotFoundError,
+    CurrencyWithPeople,
     DuplicateSplitGroup,
     EmptySplitGroupName,
     NoClassificationForEntry,
@@ -265,6 +266,28 @@ def test_who_owes_what(session: Session, people_root) -> None:
     assert people["Alice"].balances[0].quantity == Decimal(0)
     # Bob was never split against: absence, not a zero UnitBalance.
     assert people["Bob"].balances == []
+
+
+def test_who_owes_what_refuses_a_currency_line_on_a_people_account(session: Session, people_root) -> None:
+    ctx = DbTransactionContext(session)
+    bank = add_account_service(ctx, "IndianBank", AccountType.asset, "IN1").unwrap().id
+    alice = add_account_service(ctx, "Alice", AccountType.asset, None, people_root.id).unwrap().id
+    inr = add_unit_service(ctx, "INR", "Indian rupee", UnitKind.currency).unwrap().id
+    add_journal_entry_service(
+        ctx, date(2026, 3, 6), "lend-alice", "Lend Alice rupees",
+        [
+            LineSpec(alice, inr, Decimal(5000), Decimal(1), is_debit=True, price_unit_id=inr),
+            LineSpec(bank, inr, Decimal(5000), Decimal(1), is_debit=False, price_unit_id=inr),
+        ],
+    ).unwrap()
+    session.commit()
+
+    result = WhoOwesWhat(session).execute()
+
+    assert result.is_err
+    error = result.unwrap_err()
+    assert isinstance(error, CurrencyWithPeople)
+    assert str(error).startswith("Entry 1 on 2026-03-06 puts INR on People account 'Alice'")
 
 
 def test_settle_up_use_case(session: Session, people_root) -> None:
