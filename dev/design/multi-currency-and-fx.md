@@ -1525,3 +1525,36 @@ The user accepted every recommendation in the architect's hand-back:
 - `entries-in-period` shows an INR expense in rupees with a `priced in` column.
 - `set-price-source EUR` still fails with `NotASecurityUnit`.
 - Issue scope and order changes as proposed; 120 is implemented before 113.
+
+## Implementation notes
+
+Findings made while building issues 107-125; none changes a decision above.
+
+- **Baseline for 124.** The design left the file and format open. The first
+  slice-107 commit holds `tests/pre_feature_baseline.py` (its
+  `run_script(session_factory)` returns the text, with today pinned to
+  2026-06-15) and `tests/fixtures/pre_feature_baseline.txt`, the output of 69
+  commands on a EUR-and-securities ledger. `test_multi_currency_regression.py`
+  compares against it byte for byte.
+- **`lots_for` default.** §3 writes `replay(..., lots_for=_replayed)`, which
+  contradicts the rule that a unit with no kind takes the security path
+  (`test_lots.py` calls `replay` with kind-less units). The default is every
+  unit; `replay_ledger` passes `_replayed` and `line_costs` passes
+  `_foreign_currency`.
+- **`holding_currencies`** takes the valued rows rather than `unit_ids`: the
+  signature in §8 cannot tell a currency unit (bound, quoted in EUR) from a
+  bound security.
+- **Open decision 7** is implemented literally: the EUR subtotal row's native
+  figure is `-` whenever a EUR member is valued at cost.
+- **Not covered, left open.** An entry whose lines are all priced in INR with
+  no INR line to pay them gets no lot-derived cost, and the fold reads the INR
+  face as euros. `record-split` can produce it. A guard would also reject a
+  legitimate move of INR-priced securities, so it needs a decision.
+- **Messages the design did not give:** `RateNotQuotedInEur`, the `nse`
+  `Unavailable` detail, and the `--currency` help text on `set-price-source`
+  (still says "EUR or an existing currency unit").
+- **Not verified:** `mkdocs build --strict` (mkdocs is not in the project
+  environment) and a recorded live fetch for the `ecb` test body, which is
+  hand-written to §7.1's structure.
+- **AGENTS.md** still lacks the Context sentence proposed above; that edit is
+  the user's.
