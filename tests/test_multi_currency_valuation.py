@@ -18,6 +18,7 @@ from kohle.services.unit_services import (
 from kohle.use_cases.journal import UnitBalance
 from kohle.use_cases.prices import Fresh, NoClose, Stale
 from kohle.use_cases.reporting import (
+    NetWorthHistory,
     QueryValuedBalance,
     Subtotal,
     ValuedBalance,
@@ -282,10 +283,26 @@ def test_unbound_security_and_euro_cash_group_under_euro(ledger: Session) -> Non
     assert currencies == {b.balance.unit_id: b.balance.unit_identifier if b.balance.kind is UnitKind.currency else "EUR" for b in depot}
 
 
-@pytest.mark.skip(reason="TODO scaffold: issue 123")
-def test_history_values_each_date_at_its_own_close_and_rate() -> None:
-    # TODO: net-worth-history as of each sample date
-    raise NotImplementedError
+def test_history_values_each_date_at_its_own_close_and_rate(ledger: Session, start_state) -> None:
+    _add(ledger, "X1", date(2026, 2, 10), "4000", "INR")
+    _add(ledger, "INR", date(2026, 2, 10), "0.010", "EUR")
+    _add(ledger, "X1", date(2026, 3, 1), "5000", "INR")
+    _add(ledger, "INR", date(2026, 3, 1), "0.011", "EUR")
+
+    rows = NetWorthHistory(ledger).execute(date(2026, 1, 10), TODAY, 30).unwrap()
+    by_date = {r.on: r.report for r in rows}
+
+    # Jan 15 predates every close and rate: all three holdings fall back to cost (980 + 20 + 1000).
+    assert by_date[date(2026, 1, 15)].net_worth_at_market == Decimal(2000)
+    assert by_date[date(2026, 1, 15)].estimates.estimated == 2
+    # Feb 15 uses the 10 Feb close and rate; the 1 Mar ones are later and ignored.
+    assert by_date[date(2026, 2, 15)].net_worth_at_market == Decimal(980 + 80 + 900)
+    assert by_date[date(2026, 2, 15)].estimates.estimated == 0
+    # The final row uses the 1 Mar close and rate.
+    assert by_date[TODAY].net_worth_at_market == Decimal(2080)
+    assert by_date[TODAY].net_worth_at_market == (
+        ValuedNetWorth(ledger).execute(TODAY, 30).unwrap().net_worth_at_market
+    )
 
 
 def _positions_ledger(session_factory, rate: str | None) -> None:

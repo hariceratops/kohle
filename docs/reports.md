@@ -363,6 +363,12 @@ before that date, never a later one, and a date before any stored close values
 the holding at cost. Both count in the `estimated` column, which reads `K of M`
 like the last line of `net-worth`.
 
+A holding quoted in another currency is valued the same way at each date: its
+latest close on or before the date times the latest rate of that currency on or
+before the same date, and rupees held as cash at the rate alone. A date with no
+close or no rate for a holding values it at cost and counts it in `estimated`,
+as `net-worth` does. Closes and rates need not share a date.
+
 That is why the history is flat at cost while the market column moves: buying
 shares swaps cash for shares at the same value, and the market column only moves
 once there is a close to value them at. `fetch-prices` stores only the latest
