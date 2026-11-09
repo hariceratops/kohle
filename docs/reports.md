@@ -220,6 +220,60 @@ the difference. It counts under the same `Realised gain` total as share sales,
 and `--year` filters it the same way. A shortfall of rupees fails `realised`
 and `positions` as a whole.
 
+### Economic gain, not tax basis
+
+The euro gain kohle reports is the economic gain: what you ended up with in
+euros against what you actually sent. Cost is the euros actually sent, the
+`--total` of the remittance, carried through the rupee lots to the shares they
+bought. Proceeds use the rate recorded on the entry that received the rupees.
+No report reads a fetched rate for a gain, so a rate fetched later never
+changes it.
+
+This is not the basis German tax law converts on. As far as the author
+understands it (unverified), that basis uses the exchange rate on the purchase
+date and on the sale date, and treats the currency itself as a separate private
+sale. No German broker certificate exists for these holdings, so there is
+nothing to check kohle's figure against. Do not read it as a tax figure.
+
+Take a remittance of 90,000 rupees for 1,000 euros, a purchase of 50 shares at
+1,200 rupees paid from those rupees, and a sale of the 50 shares at 1,300 rupees
+with a recorded rate of 0.0104 euros per rupee:
+
+```console
+$ kohle-cli add-account Checking --type asset
+Added account Checking (asset) with id 2
+$ kohle-cli add-account IndianBank --type asset
+Added account IndianBank (asset) with id 3
+$ kohle-cli add-account Demat --type asset
+Added account Demat (asset) with id 4
+$ kohle-cli add-account DematCash --type asset
+Added account DematCash (asset) with id 5
+$ kohle-cli add-unit INR "Indian rupee" --kind currency
+Added unit INR (currency) with id 1
+$ kohle-cli add-unit INFY "Infosys" --kind security
+Added unit INFY (security) with id 2
+$ kohle-cli record 2026-03-05 "Remittance" 90000 --from Checking --to IndianBank --to-unit INR --total 1000
+Recorded 90000 INR for 1000 EUR: credited Checking, debited IndianBank
+$ kohle-cli record 2026-03-20 "Buy INFY" 50 --from IndianBank --to Demat --to-unit INFY --to-price 1200 --currency INR
+Recorded 50 INFY @ 1200 INR: credited IndianBank, debited Demat
+$ kohle-cli record 2026-05-10 "Sell INFY" 50 --from Demat --to DematCash --from-unit INFY --from-price 1300 --currency INR --rate 0.0104
+Recorded 50 INFY @ 1300 INR at 0.0104 EUR: credited Demat, debited DematCash
+$ kohle-cli realised
+date        account    unit      quantity    proceeds    FIFO cost    gain
+----------  ---------  ------  ----------  ----------  -----------  ------
+2026-05-10  Demat      INFY         50.00      676.00       666.67    9.33
+
+Realised gain: 9.33
+```
+
+The 60,000 rupees spent on the shares cost 1000 × 60000 / 90000 = 666.67 euros
+of the euros sent, so that is the shares' FIFO cost. The sale brought in 65,000
+rupees, which the entry values at 65000 × 0.0104 = 676.00 euros, so the gain is
+676.00 - 666.67 = 9.33. It folds the price gain and the exchange-rate gain
+together. A tax computation would instead convert the purchase at the rate on
+the purchase date, which kohle never looks up, and the sale at the rate on the
+sale date, which here is whatever you recorded.
+
 ### FIFO across your own depots
 
 A security can sit in more than one depot of your own. Lots are tracked per
