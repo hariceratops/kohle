@@ -71,7 +71,6 @@ from kohle.use_cases.prices import (
 from kohle.use_cases.reporting import (
     EstimateSummary,
     NetWorthHistory,
-    Position,
     QueryPositions,
     QueryValuedBalance,
     Subtotal,
@@ -124,7 +123,7 @@ class EffectiveFromType(click.ParamType):
         if value == "start":
             return START
         try:
-            return datetime.strptime(value, "%Y-%m-%d").date()
+            return datetime.strptime(value, "%Y-%m-%d").date()  # noqa: DTZ007 - a calendar date, no zone
         except ValueError:
             self.fail(f"{value!r} is not start or a date YYYY-MM-DD", param, ctx)
 
@@ -784,7 +783,7 @@ def entries_in_period(make_session, account_name, start, end):
 @click.pass_obj
 def balance_cmd(make_session, account_name: str, max_age_days: int):
     """Show an account's balance valued in the base unit."""
-    res = QueryValuedBalance(make_session()).execute(account_name, date.today(), max_age_days)
+    res = QueryValuedBalance(make_session()).execute(account_name, date.today(), max_age_days)  # noqa: DTZ011 - the user's local date, by design
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
     valued = res.unwrap()
@@ -1250,7 +1249,7 @@ def _estimates_line(summary: EstimateSummary) -> str:
 @click.pass_obj
 def net_worth_cmd(make_session, max_age_days: int):
     """Show net worth valued in the base unit."""
-    res = ValuedNetWorth(make_session()).execute(date.today(), max_age_days)
+    res = ValuedNetWorth(make_session()).execute(date.today(), max_age_days)  # noqa: DTZ011 - the user's local date, by design
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
     report = res.unwrap()
@@ -1272,7 +1271,7 @@ def net_worth_cmd(make_session, max_age_days: int):
 @click.pass_obj
 def positions_cmd(make_session, max_age_days: int):
     """Show open positions with their cost and market value."""
-    res = QueryPositions(make_session()).execute(date.today(), max_age_days)
+    res = QueryPositions(make_session()).execute(date.today(), max_age_days)  # noqa: DTZ011 - the user's local date, by design
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
     positions = res.unwrap().positions
@@ -1457,7 +1456,7 @@ def fetch_prices_cmd(make_session):
 
     plugins = load_price_plugins() if targets.by_plugin else {}
     fetched = call_price_plugins(targets, plugins)
-    report_res = AppendPrices(make_session()).execute(targets, fetched, date.today())
+    report_res = AppendPrices(make_session()).execute(targets, fetched, date.today())  # noqa: DTZ011 - the user's local date, by design
     if report_res.is_err:
         raise click.ClickException(str(report_res.unwrap_err()))
     report = report_res.unwrap()
@@ -1488,7 +1487,7 @@ def fetch_prices_cmd(make_session):
 @click.pass_obj
 def net_worth_history_cmd(make_session, start, end, role: str | None, max_age_days: int):
     """Show net worth sampled over time."""
-    today = date.today()
+    today = date.today()  # noqa: DTZ011 - the user's local date, by design
     end_date = end.date() if end is not None else today
     start_date = start.date() if start is not None else None
     if end_date > today:
@@ -1527,7 +1526,7 @@ def net_worth_history_cmd(make_session, start, end, role: str | None, max_age_da
 @click.pass_obj
 def budget_cmd(make_session, start, end):
     """Show spending against caps for each period."""
-    today = date.today()
+    today = date.today()  # noqa: DTZ011 - the user's local date, by design
     end_date = end.date() if end is not None else today
     start_date = start.date() if start is not None else date(end_date.year, 1, 1)
     if end_date > today:

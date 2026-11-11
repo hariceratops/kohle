@@ -31,8 +31,9 @@ from kohle.services.account_services import (
 from kohle.services.cap_services import list_cap_entries_service, put_cap_entry_service
 from kohle.services.journal_services import account_lines_service
 from kohle.services.state_services import list_state_entries_service
+from kohle.use_cases.accounts import PEOPLE_ROOT
 from kohle.use_cases.bundesland import state_lookup
-from kohle.use_cases.journal import PEOPLE_ROOT, UNCLASSIFIED_EXPENSE
+from kohle.use_cases.journal import UNCLASSIFIED_EXPENSE
 from kohle.use_cases.lots import line_costs
 from kohle.use_cases.recurrence import (
     Recurrence,

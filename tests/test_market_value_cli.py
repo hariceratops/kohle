@@ -16,8 +16,7 @@ from kohle.infrastructure.transaction_context import DbTransactionContext
 from kohle.services.account_services import add_account_service
 from kohle.services.journal_services import LineSpec, add_journal_entry_service
 from kohle.services.unit_services import add_unit_service
-from kohle.use_cases.accounts import AddAccount
-from kohle.use_cases.journal import PEOPLE_ROOT
+from kohle.use_cases.accounts import PEOPLE_ROOT, AddAccount
 
 EUR = Decimal(1)
 

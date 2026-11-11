@@ -34,8 +34,8 @@ from kohle.services.split_services import (
     split_by_entry_service,
     splits_in_group_service,
 )
+from kohle.use_cases.accounts import PEOPLE_ROOT
 from kohle.use_cases.journal import (
-    PEOPLE_ROOT,
     UnitBalance,
     account_balance,
     aggregate_by_unit,

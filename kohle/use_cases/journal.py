@@ -62,7 +62,6 @@ from kohle.services.unit_services import (
     get_unit_by_identifier_service,
     units_by_id_service,
 )
-from kohle.use_cases.accounts import PEOPLE_ROOT as PEOPLE_ROOT
 from kohle.use_cases.accounts import balance_sheet_accounts
 from kohle.use_cases.lots import line_costs
 from kohle.use_cases.rules import compile_rules, match_rule, stored_rules
