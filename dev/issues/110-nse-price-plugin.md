@@ -12,3 +12,6 @@ Depends on: 107
 - A file whose columns are not the expected ones is a plugin `Err`, never a guess; an ISIN with no `EQ` row is `Unavailable(no_symbol)`.
 - The HTTP call sits behind a seam; tests use recorded fixtures and make no network calls.
 - `prices.md` lists the plugin.
+
+## Review 2026-11-11
+- The criterion asks for recorded responses, but the zip fixtures are built inside the tests from the real UDiFF header names. No live fetch has been run against the NSE endpoint, and the terms of use stay unverified.

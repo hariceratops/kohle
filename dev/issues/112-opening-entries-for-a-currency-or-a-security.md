@@ -10,3 +10,6 @@ Depends on: 111
 - It is the two-amount form of 111 with a different source account, not a second mechanism.
 - It works for a currency unit and for a security.
 - `recording-entries.md` documents opening balances.
+
+## Review 2026-11-11
+- The test checks that the lot's cost equals the stated total, but not that `net-worth` rises by the opening amount, which is why the docs recommend an `income` opening account.

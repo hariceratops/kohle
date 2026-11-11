@@ -12,3 +12,6 @@ Depends on: 108
 - The HTTP call sits behind a seam; tests use recorded responses and make no network calls.
 - The design's findings on the endpoint, final-rate marking and terms of use are recorded in `dev/design/multi-currency-and-fx.md`.
 - `prices.md` lists the plugin.
+
+## Review 2026-11-11
+- The criterion asks for recorded responses, but the test body is hand-written to the design's structure, not saved from a live fetch. No live fetch has been run against the endpoint.
