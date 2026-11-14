@@ -24,13 +24,12 @@ from kohle.domain.models import (
 )
 from kohle.plugin.importer_plugin import CashRow, StatementImporterPlugin
 from kohle.use_cases import classification as classification_module
-from kohle.use_cases.accounts import AddAccount
+from kohle.use_cases.accounts import PEOPLE_ROOT, AddAccount
 from kohle.use_cases.classification import (
     ApplyClassifyRules,
     PlanClassifyRules,
     Reclassify,
 )
-from kohle.use_cases.journal import PEOPLE_ROOT
 
 BUCKET = "Unclassified Expense"
 IBAN = "DE89370400440532013000"

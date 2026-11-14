@@ -19,6 +19,8 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from kohle.db.connection import base
 from kohle.infrastructure.model_serde import PassAll, PassId, SerdePolicy
 
+BASE_CURRENCY = "EUR"
+
 # Quantities span cash (2dp) and fractional units of securities and gold, so the
 # scale is set by the latter.
 QUANTITY = Numeric(20, 8)
@@ -167,11 +169,22 @@ class JournalLine(base, Archivable):
     # Cash in the base currency is 1, which is what lets cash and asset lines
     # share one shape.
     unit_price: Mapped[Decimal] = mapped_column(QUANTITY, nullable=False)
+    # The line's whole value when it was stated rather than derived: a rate
+    # like 1000/90000 does not terminate, so only the total is exact. Then
+    # `unit_price` is `cost / quantity` rounded, for display only.
+    cost: Mapped[Decimal | None] = mapped_column(QUANTITY, nullable=True)
+    # The currency `unit_price` and `cost` are in. NULL is the base currency,
+    # which every older row is. A non-base currency means the line has no euro
+    # figure of its own: its euro value is derived from that currency's lots.
+    price_unit_id: Mapped[int | None] = mapped_column(
+        ForeignKey("units.id", name="fk_journal_lines_price_unit_id_units"), nullable=True
+    )
     is_debit: Mapped[bool] = mapped_column(Boolean, nullable=False)
 
     entry: Mapped["JournalEntry"] = relationship("JournalEntry", back_populates="lines")
     account: Mapped["Account"] = relationship("Account")
-    unit: Mapped["Unit"] = relationship("Unit")
+    unit: Mapped["Unit"] = relationship("Unit", foreign_keys=[unit_id])
+    price_unit: Mapped["Unit | None"] = relationship("Unit", foreign_keys=[price_unit_id])
 
     __table_args__ = (
         UniqueConstraint("entry_id", "account_id", "unit_id", "is_debit", name="uq_journal_line_entry_account_unit_side"),
@@ -179,7 +192,7 @@ class JournalLine(base, Archivable):
 
     @property
     def value(self) -> Decimal:
-        return self.quantity * self.unit_price
+        return self.cost if self.cost is not None else self.quantity * self.unit_price
 
     def __eq__(self, other) -> bool:
         return (
@@ -351,6 +364,12 @@ class Price(base):
     price_date: Mapped[date] = mapped_column(Date, nullable=False)
     price: Mapped[Decimal] = mapped_column(QUANTITY, nullable=False)
     source: Mapped[str] = mapped_column(String, nullable=False)
+    # The currency this close is quoted in, written with the row so that rebinding
+    # cannot reinterpret history. The Python default keeps the attribute loaded on
+    # a detached row; the server default fills existing rows at migration.
+    currency: Mapped[str] = mapped_column(
+        String, nullable=False, default=BASE_CURRENCY, server_default=BASE_CURRENCY
+    )
 
     unit: Mapped["Unit"] = relationship("Unit")
 
@@ -371,7 +390,7 @@ class Price(base):
 
 class PriceBinding(base):
     """Where a security's price comes from: a plugin and the symbol it knows
-    the unit by. At most one per unit; no currency, the plugin reports it."""
+    the unit by, and the currency its closes are quoted in. At most one per unit."""
 
     __tablename__ = "price_bindings"
 
@@ -379,6 +398,9 @@ class PriceBinding(base):
     unit_id: Mapped[int] = mapped_column(ForeignKey("units.id"), nullable=False)
     plugin_name: Mapped[str] = mapped_column(String, nullable=False)
     symbol: Mapped[str] = mapped_column(String, nullable=False)
+    quote_currency: Mapped[str] = mapped_column(
+        String, nullable=False, default=BASE_CURRENCY, server_default=BASE_CURRENCY
+    )
 
     __table_args__ = (UniqueConstraint("unit_id", name="uq_price_binding_unit"),)
 

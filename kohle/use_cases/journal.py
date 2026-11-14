@@ -1,5 +1,5 @@
-from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
 from typing import assert_never
@@ -7,9 +7,11 @@ from uuid import uuid4
 
 from kohle.core.result import Result
 from kohle.domain.domain_errors import (
-    AccountError,
     BalanceError,
     BaseCurrencyAsCrossUnit,
+    ConversionBetweenCurrencies,
+    CurrencyInflowWithoutRate,
+    CurrencyLineNotAtPar,
     DuplicateReferenceInStatement,
     EmptyEntry,
     EndDatePrecedesStartDateError,
@@ -18,6 +20,8 @@ from kohle.domain.domain_errors import (
     JournalError,
     MalformedStatementRow,
     MissingInstrumentAccount,
+    NonPositiveQuantity,
+    NotACurrencyUnit,
     NotASecurityUnit,
     PostingToNonLeafAccount,
     QueryJournalByPeriodError,
@@ -27,7 +31,14 @@ from kohle.domain.domain_errors import (
     UnitNotFoundError,
     UnknownInstruments,
 )
-from kohle.domain.models import AccountType, JournalEntry, JournalLine, Unit, UnitKind
+from kohle.domain.models import (
+    BASE_CURRENCY,
+    AccountType,
+    JournalEntry,
+    JournalLine,
+    Unit,
+    UnitKind,
+)
 from kohle.infrastructure.transaction_context import DbTransactionContext
 from kohle.infrastructure.uow import UnitOfWork
 from kohle.plugin.importer_plugin import CashRow, SecurityRow, StatementRow
@@ -47,13 +58,17 @@ from kohle.services.journal_services import (
     existing_references_service,
     query_lines_by_period_service,
 )
-from kohle.services.unit_services import get_unit_by_identifier_service
+from kohle.services.unit_services import (
+    get_unit_by_identifier_service,
+    units_by_id_service,
+)
+from kohle.use_cases.accounts import balance_sheet_accounts
+from kohle.use_cases.lots import line_costs
 from kohle.use_cases.rules import compile_rules, match_rule, stored_rules
 from kohle.use_cases.units import get_or_create_unit
 
-BASE_CURRENCY = "EUR"
+_PRICE_SCALE = Decimal("0.00000001")
 UNCLASSIFIED_EXPENSE = "Unclassified Expense"
-PEOPLE_ROOT = "People"
 UNCLASSIFIED_INCOME = "Unclassified Income"
 
 
@@ -87,10 +102,9 @@ def validate_lines(
     if len(lines) < 2:
         return EmptyEntry()
 
-    debits = sum((line.value for line in lines if line.is_debit), Decimal(0))
-    credits = sum((line.value for line in lines if not line.is_debit), Decimal(0))
-    if debits != credits:
-        return UnbalancedEntry(debits, credits)
+    invalid = _validate_price_currencies(ctx, lines)
+    if invalid:
+        return invalid
 
     for line in lines:
         has_children = account_has_children_service(ctx, line.account_id)
@@ -99,6 +113,53 @@ def validate_lines(
         if has_children.unwrap():
             return PostingToNonLeafAccount(line.account_id)
 
+    return None
+
+
+def _validate_price_currencies(ctx: DbTransactionContext, lines: list[LineSpec]) -> JournalError | None:
+    """Balance within each price currency, the base currency first. The line
+    rules run, and the unit lookup is made, only when some line states a total
+    or names a price currency, so an entry in the base currency alone is
+    checked and refused exactly as it always was."""
+    for line in lines:
+        if (line.cost is not None or line.price_unit_id is not None) and line.quantity <= 0:
+            return NonPositiveQuantity(line.quantity)
+
+    priced = sorted({line.price_unit_id for line in lines if line.price_unit_id is not None})
+    units: dict[int, Unit] = {}
+    if priced:
+        units_res = units_by_id_service(ctx, priced + [line.unit_id for line in lines])
+        if units_res.is_err:
+            return JournalError(str(units_res.unwrap_err()))
+        units = units_res.unwrap()
+
+        for line in lines:
+            if line.price_unit_id is None:
+                continue
+            currency = units[line.price_unit_id].identifier
+            if line.unit_id == line.price_unit_id:
+                if line.unit_price != 1 or line.cost is not None:
+                    return CurrencyLineNotAtPar(currency)
+            elif units[line.unit_id].kind is UnitKind.currency:
+                return ConversionBetweenCurrencies(units[line.unit_id].identifier, currency)
+
+        credited = [(line, line.price_unit_id) for line in lines if line.price_unit_id is not None and not line.is_debit]
+        if credited:
+            accounts_res = list_accounts_service(ctx)
+            if accounts_res.is_err:
+                return JournalError(str(accounts_res.unwrap_err()))
+            accounts = {account.id: account for account in accounts_res.unwrap()}
+            for line, priced_in in credited:
+                account = accounts[line.account_id]
+                if line.unit_id != priced_in or account.type not in (AccountType.asset, AccountType.liability):
+                    return CurrencyInflowWithoutRate(account.name, units[priced_in].identifier)
+
+    for price_unit_id in [None, *priced]:
+        in_currency = [line for line in lines if line.price_unit_id == price_unit_id]
+        debits = sum((line.value for line in in_currency if line.is_debit), Decimal(0))
+        credits = sum((line.value for line in in_currency if not line.is_debit), Decimal(0))
+        if debits != credits:
+            return UnbalancedEntry(debits, credits, None if price_unit_id is None else units[price_unit_id].identifier)
     return None
 
 
@@ -131,6 +192,30 @@ class RecordJournalEntry(UnitOfWork[JournalEntry, JournalError]):
 
 
 @dataclass(frozen=True, slots=True)
+class Total:
+    """The whole euro value of a holding line, stated rather than derived.
+
+    A remittance of 90,000 INR for 1,000 EUR has no terminating per-unit
+    rate, so only the total is exact (design §2.1).
+    """
+
+    amount: Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class CurrencySide:
+    """The currency the side without a unit flag carries at par, and in which
+    the unit's price or total is stated.
+
+    A value of its own, like `CrossUnitLine`, so that what a later rate needs
+    (a currency to apply it to) cannot be supplied without it.
+    """
+
+    identifier: str
+    rate: Decimal | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class CrossUnitLine:
     """Which side of `record` carries a non-base unit, at what price.
 
@@ -142,7 +227,7 @@ class CrossUnitLine:
     """
 
     identifier: str
-    price: Decimal
+    price: Decimal | Total
     is_debit: bool
 
 
@@ -151,13 +236,31 @@ def _cross_unit_lines(
     holding_account_id: int,
     holding_unit_id: int,
     quantity: Decimal,
-    unit_price: Decimal,
+    unit_price: Decimal | Total,
     cash_account_id: int,
     cash_unit_id: int,
     into_holding: bool,
+    paid_in_currency: bool = False,
 ) -> list[LineSpec]:
     """Shared by `record` and imported trades so the cost fold sees one
-    definition of a trade."""
+    definition of a trade. With `paid_in_currency`, `cash_unit_id` is the
+    currency paid, and both lines are priced in it: the euro value of the trade
+    is then the cost of the currency's lots, derived when the ledger is read."""
+    price_unit_id = cash_unit_id if paid_in_currency else None
+    if isinstance(unit_price, Total):
+        total = unit_price.amount
+        per_unit = (total / quantity).quantize(_PRICE_SCALE)
+        return [
+            LineSpec(holding_account_id, holding_unit_id, quantity, per_unit, is_debit=into_holding, cost=total, price_unit_id=price_unit_id),
+            LineSpec(cash_account_id, cash_unit_id, total, Decimal(1), is_debit=not into_holding, price_unit_id=price_unit_id),
+        ]
+    if paid_in_currency:
+        # Quantised so that what is validated is what is stored.
+        value = (quantity * unit_price).quantize(_PRICE_SCALE)
+        return [
+            LineSpec(holding_account_id, holding_unit_id, quantity, unit_price, is_debit=into_holding, cost=value, price_unit_id=price_unit_id),
+            LineSpec(cash_account_id, cash_unit_id, value, Decimal(1), is_debit=not into_holding, price_unit_id=price_unit_id),
+        ]
     return [
         LineSpec(holding_account_id, holding_unit_id, quantity, unit_price, is_debit=into_holding),
         LineSpec(cash_account_id, cash_unit_id, quantity * unit_price, Decimal(1), is_debit=not into_holding),
@@ -181,6 +284,7 @@ class RecordSimpleEntry(UnitOfWork[JournalEntry, RecordEntryError]):
         from_account: str,
         to_account: str,
         cross: CrossUnitLine | None = None,
+        currency_side: CurrencySide | None = None,
     ) -> Result[JournalEntry, RecordEntryError]:
         def use_case(ctx: DbTransactionContext) -> Result[JournalEntry, RecordEntryError]:
             from_res = get_account_by_name_service(ctx, from_account)
@@ -198,7 +302,42 @@ class RecordSimpleEntry(UnitOfWork[JournalEntry, RecordEntryError]):
             to_account_obj = to_res.unwrap()
             base_unit_id = base_unit_res.unwrap().id
 
-            if cross is None:
+            currency = None
+            if currency_side is not None:
+                currency_res = get_unit_by_identifier_service(ctx, currency_side.identifier)
+                if currency_res.is_err:
+                    return Result.err(currency_res.unwrap_err())
+                currency = currency_res.unwrap()
+                if currency.kind is not UnitKind.currency or currency.identifier == BASE_CURRENCY:
+                    return Result.err(NotACurrencyUnit(currency.identifier, currency.kind.value))
+
+            if currency_side is not None and currency is not None and currency_side.rate is not None:
+                if cross is None:
+                    amount = quantity
+                elif isinstance(cross.price, Total):
+                    amount = cross.price.amount
+                else:
+                    amount = (quantity * cross.price).quantize(_PRICE_SCALE)
+                # Quantised so that what is validated is what is stored.
+                value = (amount * currency_side.rate).quantize(_PRICE_SCALE)
+                arriving = LineSpec(to_account_obj.id, currency.id, amount, currency_side.rate, is_debit=True, cost=value)
+                if cross is None:
+                    lines = [arriving, LineSpec(from_account_obj.id, currency.id, amount, currency_side.rate, is_debit=False, cost=value)]
+                else:
+                    sold_res = get_unit_by_identifier_service(ctx, cross.identifier)
+                    if sold_res.is_err:
+                        return Result.err(sold_res.unwrap_err())
+                    per_unit = (value / quantity).quantize(_PRICE_SCALE)
+                    lines = [
+                        arriving,
+                        LineSpec(from_account_obj.id, sold_res.unwrap().id, quantity, per_unit, is_debit=False, cost=value),
+                    ]
+            elif cross is None and currency is not None:
+                lines = [
+                    LineSpec(to_account_obj.id, currency.id, quantity, Decimal(1), is_debit=True, price_unit_id=currency.id),
+                    LineSpec(from_account_obj.id, currency.id, quantity, Decimal(1), is_debit=False, price_unit_id=currency.id),
+                ]
+            elif cross is None:
                 lines = [
                     LineSpec(to_account_obj.id, base_unit_id, quantity, Decimal(1), is_debit=True),
                     LineSpec(from_account_obj.id, base_unit_id, quantity, Decimal(1), is_debit=False),
@@ -221,8 +360,9 @@ class RecordSimpleEntry(UnitOfWork[JournalEntry, RecordEntryError]):
                     quantity=quantity,
                     unit_price=cross.price,
                     cash_account_id=base_account.id,
-                    cash_unit_id=base_unit_id,
+                    cash_unit_id=base_unit_id if currency is None else currency.id,
                     into_holding=cross.is_debit,
+                    paid_in_currency=currency is not None,
                 )
 
             entry_res = post_entry(ctx, entry_date, uuid4().hex, description, lines)
@@ -242,8 +382,9 @@ class LineInput:
     account_name: str
     quantity: Decimal
     unit_identifier: str
-    unit_price: Decimal
+    unit_price: Decimal | Total
     is_debit: bool
+    price_currency: str | None = None
 
 
 class RecordSplitEntry(UnitOfWork[JournalEntry, RecordEntryError]):
@@ -277,13 +418,36 @@ class RecordSplitEntry(UnitOfWork[JournalEntry, RecordEntryError]):
                 )
                 if unit_res.is_err:
                     return Result.err(unit_res.unwrap_err())
+                unit = unit_res.unwrap()
+
+                price_unit_id = None
+                if line.price_currency is not None and line.price_currency != BASE_CURRENCY:
+                    currency_res = get_unit_by_identifier_service(ctx, line.price_currency)
+                    if currency_res.is_err:
+                        return Result.err(currency_res.unwrap_err())
+                    currency = currency_res.unwrap()
+                    if currency.kind is not UnitKind.currency:
+                        return Result.err(NotACurrencyUnit(currency.identifier, currency.kind.value))
+                    price_unit_id = currency.id
+
+                cost = None
+                if isinstance(line.unit_price, Total):
+                    cost = line.unit_price.amount
+                    unit_price = (cost / line.quantity).quantize(_PRICE_SCALE)
+                else:
+                    unit_price = line.unit_price
+                    if price_unit_id is not None and unit.id != price_unit_id:
+                        # Quantised so that what is validated is what is stored.
+                        cost = (line.quantity * unit_price).quantize(_PRICE_SCALE)
                 specs.append(
                     LineSpec(
                         account_res.unwrap().id,
-                        unit_res.unwrap().id,
+                        unit.id,
                         line.quantity,
-                        line.unit_price,
+                        unit_price,
                         line.is_debit,
+                        cost=cost,
+                        price_unit_id=price_unit_id,
                     )
                 )
 
@@ -529,6 +693,7 @@ class UnitBalance:
     quantity: Decimal
     average_cost: Decimal | None
     unit_id: int
+    kind: UnitKind | None = None
 
     @property
     def at_cost(self) -> Decimal:
@@ -545,17 +710,24 @@ class UnitBalance:
 class _RunningCost:
     """Per-unit accumulator for the moving-average cost fold (design §6.4)."""
 
-    __slots__ = ("basis", "quantity", "unit_id")
+    __slots__ = ("basis", "kind", "quantity", "unit_id")
 
-    def __init__(self, unit_id: int) -> None:
+    def __init__(self, unit_id: int, kind: UnitKind) -> None:
         self.unit_id = unit_id
+        self.kind = kind
         self.basis = Decimal(0)
         self.quantity = Decimal(0)
 
-    def apply(self, line: JournalLine) -> None:
+    def apply(self, line: JournalLine, cost: Decimal | None) -> None:
+        """`cost` is the line's euro value from the currency lots, when it has
+        one; the basis then moves by exactly that, so a currency's basis is its
+        FIFO cost."""
         if line.is_debit:
-            self.basis += line.quantity * line.unit_price
+            self.basis += line.value if cost is None else cost
             self.quantity += line.quantity
+        elif cost is not None:
+            self.basis -= cost
+            self.quantity -= line.quantity
         else:
             if self.quantity == 0:
                 # Net-short in a non-base unit: basis/quantity is undefined.
@@ -563,10 +735,9 @@ class _RunningCost:
                 # from dividing by zero — it is not a claim that this is
                 # meaningful accounting, and should not be "improved" into
                 # something that looks more principled than it is.
-                average = line.unit_price
+                self.basis -= line.value
             else:
-                average = self.basis / self.quantity
-            self.basis -= line.quantity * average
+                self.basis -= line.quantity * (self.basis / self.quantity)
             self.quantity -= line.quantity
 
     @property
@@ -576,8 +747,10 @@ class _RunningCost:
         return self.basis / self.quantity
 
 
-def aggregate_by_unit(lines: Iterable[JournalLine]) -> list[UnitBalance]:
-    """Moving-average cost fold, one accumulator per unit.
+def aggregate_by_unit(lines: Iterable[JournalLine], costs: Mapping[int, Decimal] | None = None) -> list[UnitBalance]:
+    """Moving-average cost fold, one accumulator per unit. `costs` maps a line id
+    to the euro value `lots.line_costs` derived for it: a currency's lines, and
+    the lines paid for with it, take it in place of a price.
 
     Order-dependent: consumes the caller's ordering as-is and must not sort,
     since `account_lines_service`'s `(entry_date, line id)` order is what
@@ -585,26 +758,26 @@ def aggregate_by_unit(lines: Iterable[JournalLine]) -> list[UnitBalance]:
     """
     running: dict[str, _RunningCost] = {}
     for line in lines:
-        _apply(running, line)
+        _apply(running, line, costs)
     return _unit_balances(running)
 
 
-def _apply(running: dict[str, _RunningCost], line: JournalLine) -> None:
+def _apply(running: dict[str, _RunningCost], line: JournalLine, costs: Mapping[int, Decimal] | None) -> None:
     identifier = line.unit.identifier
     if identifier not in running:
-        running[identifier] = _RunningCost(line.unit_id)
-    running[identifier].apply(line)
+        running[identifier] = _RunningCost(line.unit_id, line.unit.kind)
+    running[identifier].apply(line, costs.get(line.id) if costs else None)
 
 
 def _unit_balances(running: dict[str, _RunningCost]) -> list[UnitBalance]:
     return [
-        UnitBalance(identifier, cost.quantity, cost.average_cost, cost.unit_id)
+        UnitBalance(identifier, cost.quantity, cost.average_cost, cost.unit_id, cost.kind)
         for identifier, cost in running.items()
     ]
 
 
 def aggregate_by_unit_through(
-    lines: Iterable[JournalLine], dates: Iterable[date]
+    lines: Iterable[JournalLine], dates: Iterable[date], costs: Mapping[int, Decimal] | None = None
 ) -> list[list[UnitBalance]]:
     """`aggregate_by_unit` of the lines dated on or before each date, in one
     pass: re-folding a prefix per date is quadratic. `lines` must be in ledger
@@ -615,7 +788,7 @@ def aggregate_by_unit_through(
     snapshots: list[list[UnitBalance]] = []
     for day in dates:
         while held is not None and held.entry.entry_date <= day:
-            _apply(running, held)
+            _apply(running, held, costs)
             held = next(pending, None)
         snapshots.append(_unit_balances(running))
     return snapshots
@@ -633,8 +806,13 @@ def account_balance(ctx: DbTransactionContext, account_id: int) -> Result[list[U
     lines_res = account_lines_service(ctx, descendants_res.unwrap())
     if lines_res.is_err:
         return Result.err(lines_res.unwrap_err())
+    lines = lines_res.unwrap()
 
-    return Result.ok(aggregate_by_unit(lines_res.unwrap()))
+    costs_res = line_costs(ctx, lines)
+    if costs_res.is_err:
+        return Result.err(costs_res.unwrap_err())
+
+    return Result.ok(aggregate_by_unit(lines, costs_res.unwrap()))
 
 
 def held_units(ctx: DbTransactionContext) -> Result[list[Unit], BalanceError]:
@@ -697,41 +875,12 @@ class NetWorthReport:
 
 
 @dataclass(frozen=True, slots=True)
-class BalanceSheetAccounts:
-    own: dict[int, str]
-    people: dict[int, str]
-
-
-def balance_sheet_accounts(ctx: DbTransactionContext) -> Result[BalanceSheetAccounts, AccountError]:
-    """The net-worth partition, account id to name: asset and liability
-    accounts outside the People subtree (`own`), and the People subtree of any
-    type (`people`). Shared so "own account" has one definition."""
-    people_res = get_account_by_name_service(ctx, PEOPLE_ROOT)
-    if people_res.is_err:
-        return Result.err(people_res.unwrap_err())
-
-    people_ids_res = descendant_account_ids_service(ctx, people_res.unwrap().id)
-    if people_ids_res.is_err:
-        return Result.err(people_ids_res.unwrap_err())
-    people_ids = set(people_ids_res.unwrap())
-
-    accounts_res = list_accounts_service(ctx)
-    if accounts_res.is_err:
-        return Result.err(accounts_res.unwrap_err())
-    accounts = accounts_res.unwrap()
-    return Result.ok(BalanceSheetAccounts(
-        own={
-            a.id: a.name for a in accounts
-            if a.type in (AccountType.asset, AccountType.liability) and a.id not in people_ids
-        },
-        people={a.id: a.name for a in accounts if a.id in people_ids},
-    ))
-
-
-@dataclass(frozen=True, slots=True)
 class NetWorthLines:
     own: list[JournalLine]
     receivables: list[JournalLine]
+    # A line's cost depends only on earlier lines, so one mapping serves every
+    # sample date of the history.
+    costs: Mapping[int, Decimal] = field(default_factory=dict)
 
 
 def net_worth_lines(ctx: DbTransactionContext) -> Result[NetWorthLines, BalanceError]:
@@ -750,7 +899,13 @@ def net_worth_lines(ctx: DbTransactionContext) -> Result[NetWorthLines, BalanceE
     if receivables_lines_res.is_err:
         return Result.err(receivables_lines_res.unwrap_err())
 
-    return Result.ok(NetWorthLines(own_lines_res.unwrap(), receivables_lines_res.unwrap()))
+    own_lines = own_lines_res.unwrap()
+    receivables_lines = receivables_lines_res.unwrap()
+    costs_res = line_costs(ctx, [*own_lines, *receivables_lines])
+    if costs_res.is_err:
+        return Result.err(costs_res.unwrap_err())
+
+    return Result.ok(NetWorthLines(own_lines, receivables_lines, costs_res.unwrap()))
 
 
 def net_worth(ctx: DbTransactionContext) -> Result[NetWorthReport, BalanceError]:
@@ -768,8 +923,8 @@ def net_worth(ctx: DbTransactionContext) -> Result[NetWorthReport, BalanceError]
         return Result.err(lines_res.unwrap_err())
     lines = lines_res.unwrap()
     return Result.ok(NetWorthReport(
-        own=aggregate_by_unit(lines.own),
-        receivables=aggregate_by_unit(lines.receivables),
+        own=aggregate_by_unit(lines.own, lines.costs),
+        receivables=aggregate_by_unit(lines.receivables, lines.costs),
     ))
 
 

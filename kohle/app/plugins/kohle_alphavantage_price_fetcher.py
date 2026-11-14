@@ -60,10 +60,10 @@ def _latest_finished_close(series: Mapping[str, Mapping[str, str]], before: date
 
 
 class AlphaVantagePriceFetcher(PriceFetcherPlugin):
-    """Alpha Vantage `TIME_SERIES_DAILY` symbols, as Alpha Vantage knows them, quoted in EUR.
+    """Alpha Vantage `TIME_SERIES_DAILY` symbols, as Alpha Vantage knows them, quoted in the currency the binding names (EUR by default).
 
     Needs network access and the API key in `KOHLE_ALPHAVANTAGE_KEY`. Each
-    symbol is looked up as given, so use the EUR listing with its exchange
+    symbol is looked up as given, so use the listing in the binding's currency with its exchange
     suffix. The newest bar dated before today (UTC) is the close.
     """
 
@@ -81,6 +81,11 @@ class AlphaVantagePriceFetcher(PriceFetcherPlugin):
 
     def fetch_latest_closes(
         self, symbols: Sequence[str]
+    ) -> Result[dict[str, PriceResult], PriceFetchError]:
+        return self.fetch_bound_closes(symbols, dict.fromkeys(symbols, "EUR"))
+
+    def fetch_bound_closes(
+        self, symbols: Sequence[str], quote_currencies: Mapping[str, str]
     ) -> Result[dict[str, PriceResult], PriceFetchError]:
         key = os.environ.get(KEY_VARIABLE)
         if not key:
@@ -127,8 +132,8 @@ class AlphaVantagePriceFetcher(PriceFetcherPlugin):
                     )
                 else:
                     day, price = found
-                    # A literal, not the ledger's base currency: this is the plugin's claim about its data.
-                    results[symbol] = Close(price_date=day, price=price, currency="EUR")
+                    # Alpha Vantage does not report a currency; the binding is the user's assertion of it.
+                    results[symbol] = Close(price_date=day, price=price, currency=quote_currencies[symbol])
             elif "Error Message" in payload:
                 results[symbol] = Unavailable(
                     reason=UnavailableReason.not_covered, detail=redact(str(payload["Error Message"]))

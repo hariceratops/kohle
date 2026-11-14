@@ -86,8 +86,6 @@ Planned, in no particular order:
   commands are added.
 - A terminal interface (the TUI, which is not wired up yet) over the same use
   cases as the command line, for tables and graphs.
-- Accounts and holdings in more than one currency, with one comparable total in
-  euros and gains that reflect what was actually paid.
 - Debts and liabilities such as mortgages and credit cards, with each payment
   split between what is spent and what is repaid.
 - Savings targets per period, and where contributions fell short of them.

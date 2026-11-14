@@ -167,7 +167,10 @@ symbols bound to it. Reports never call a plugin.
 
 - Every close is checked before it is stored: the price must be finite and
   above zero, the date must not be in the future, and the currency must be the
-  base currency. A rejected close leaves only that symbol's units unpriced.
+  quote currency of the unit's binding (EUR unless the user bound it
+  otherwise). A rejected close leaves only that unit unpriced. A plugin that
+  cannot know a symbol's currency may override `fetch_bound_closes` and report
+  the currency the binding names; any other plugin reports the truth.
 - A date is stored once, so fetching again is a no-op.
 - There is no fallback to another plugin. To change a unit's source, bind it
   again.

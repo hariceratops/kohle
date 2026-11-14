@@ -13,14 +13,25 @@ entry never depends on a price.
 
 ## Choosing a price source
 
-`set-price-source UNIT PLUGIN SYMBOL` binds a unit to exactly one plugin and the
-symbol that plugin knows it by. Only `security` units can be bound. Running it
-again replaces the binding, and the symbol is taken as you give it, never
-guessed.
+`set-price-source UNIT PLUGIN SYMBOL [--currency CODE]` binds a unit to exactly
+one plugin and the symbol that plugin knows it by. Only `security` units and
+currency units other than EUR can be bound; commodities and EUR itself cannot. Running it again replaces the binding, and the symbol is taken as you
+give it, never guessed.
 
-Binding a symbol is also your assertion that it quotes in euros. kohle accepts
-only euro closes, and cannot tell that a wrongly bound symbol is really quoted
+## The quote currency
+
+A binding also records the currency its closes are quoted in. It is EUR unless
+you say otherwise with `--currency`, and it must be EUR or the identifier of a
+currency unit you have already added. Binding a symbol is your assertion of its
+quote currency: kohle cannot tell that a wrongly bound symbol is really quoted
 in another currency.
+
+Every close is compared with the quote currency of the unit it is stored for. A
+euro close for a unit bound with `--currency INR` is refused, and so is a rupee
+close for a unit bound in euros; the unit stays unpriced with the reason and
+nothing is stored for it. Each stored close keeps its own currency, so
+rebinding a unit to a different quote currency is allowed: older closes stay
+in the currency they were fetched in.
 
 ```console
 $ kohle-cli add-unit ACME "Acme Global Equity" --kind security
@@ -33,8 +44,32 @@ $ kohle-cli set-price-source ACME file ACME-EUR
 Price source for ACME: file ACME-EUR
 $ kohle-cli set-price-source GOLD-G file GOLD
 Error: Unit 'GOLD-G' is a commodity, not a security
+$ kohle-cli set-price-source ACME file ACME-INR --currency INR
+Error: 'INR' is not EUR or a currency unit, so it cannot be a quote currency
+$ kohle-cli add-unit INR "Indian rupee" --kind currency
+Added unit INR (currency) with id 3
+$ kohle-cli set-price-source ACME file ACME-INR --currency INR
+Price source for ACME: file ACME-INR
+$ kohle-cli set-price-source ACME file ACME-EUR
+Price source for ACME: file ACME-EUR
 $ kohle-cli set-price-source ACME nosuchplugin ACME
-Error: Unknown price plugin 'nosuchplugin'. Available: alphavantage, file
+Error: Unknown price plugin 'nosuchplugin'. Available: alphavantage, ecb, file, nse
+```
+
+## Binding a currency
+
+A currency unit such as `INR` is bound like a security, and its rate is fetched
+like a close. The stored rate is an ordinary row in the price history, the price
+of one unit of the currency in euros, so a currency must be quoted in EUR:
+`--currency` on a currency unit other than EUR is refused with the reason.
+
+```console
+$ kohle-cli add-unit INR "Indian rupee" --kind currency
+Added unit INR (currency) with id 1
+$ kohle-cli set-price-source INR file INR --currency INR
+Error: The rate of 'INR' is a price in EUR, so it cannot be quoted in 'INR'
+$ kohle-cli set-price-source INR file INR
+Price source for INR: file INR
 ```
 
 Physical gold and other commodity units are not priced yet, so they stay valued
@@ -43,8 +78,11 @@ at cost.
 ## Fetching prices
 
 `fetch-prices` asks each plugin once for the latest daily close of the
-securities you hold that are bound to it, and appends it to the price history.
-It prints one row per held security. The examples here use the bundled `file`
+securities and non-euro currency units you hold that are bound to it, and
+appends it to the price history. It prints one row per held unit. It also
+fetches the rate of every currency a held, bound security is quoted in, even
+when you hold none of that currency, because the security cannot be valued
+without it; an unbound one shows as `unbound`. The examples here use the bundled `file`
 plugin, which reads a CSV of `identifier,date,close` rows from the file named
 by the environment variable `KOHLE_PRICE_FILE`. It works offline, and each
 symbol gets its most recent row:
@@ -165,8 +203,10 @@ GLOBEX  file:GLOBEX  already stored  2026-06-02  -        -
 dates. A close that is already stored cannot be corrected in this version.
 
 Every close is checked before it is written: the price must be finite and above
-zero, the date not in the future, and the currency EUR. A rejected close leaves
-only that symbol's units unpriced, and the other symbols are still stored.
+zero, the date not in the future, and the currency the one its unit's binding
+quotes in. A rejected close leaves only that unit unpriced, and the other units
+are still stored. A close in a currency other than EUR shows its currency after
+the close, for example `1181.40 INR`.
 
 ## How reports use prices
 
@@ -264,7 +304,9 @@ running `fetch-prices` on a schedule (see
 ## The bundled price plugins
 
 - **`file`** reads `identifier,date,close` rows from the CSV named by
-  `KOHLE_PRICE_FILE` and returns each symbol's most recent row, as above. It is
+  `KOHLE_PRICE_FILE` and returns each symbol's most recent row, as above. An
+  optional fourth column, `currency`, names a row's currency; a missing column
+  or an empty cell means EUR. It is
   the way to price a unit no other plugin covers, and the one to use when you
   want to type prices yourself or keep them in a spreadsheet export.
 - **`alphavantage`** reads Alpha Vantage's `TIME_SERIES_DAILY`, with the API key
@@ -273,8 +315,28 @@ running `fetch-prices` on a schedule (see
   allows one symbol per request and about 25 requests a day. Symbols are
   requested with the oldest stored close first, so prices rotate, and a
   throttled run keeps what it fetched and reports the rest as `transient`.
-  Symbols carry the exchange suffix (for example `.DEX`), so look up the euro
-  listing yourself.
+  Symbols carry the exchange suffix (for example `.DEX`), so look up the
+  listing in the binding's currency yourself. It does not report a currency of
+  its own: it stores each close in the quote currency of the binding.
+- **`ecb`** reads the European Central Bank's daily euro reference rates, with
+  no key. The symbol is the ISO currency code, for example `INR`. The ECB
+  quotes units of the currency per euro; the stored figure is the reciprocal,
+  the price of one unit in euros, rounded to 8 places, so it is kohle's
+  number and not the ECB's. The rate is the latest working day's, fixed around
+  14:10 CET and published around 16:00 CET, and a published rate is treated as
+  final, so a revision by the ECB is never picked up. A code the ECB does not
+  publish is `unpriced` with that reason. The rates are for information; using
+  them to value holdings is fine, but the rate you enter on a foreign-currency
+  entry is your own choice. Source: ECB statistics.
+- **`nse`** reads the National Stock Exchange of India's daily bhavcopy (the
+  UDiFF file), with no key. The symbol is the ISIN, for example
+  `INE009A01021`, and the close is the official one in INR, so bind it with
+  `--currency INR`. It starts at the latest weekday and steps back over
+  holidays, up to 10 weekdays, until a file exists. Only the `EQ` series is
+  read, so a stock moved to another series such as `BE` is `unpriced` with
+  that reason. A file with other columns than expected is an error, never a
+  guess. NSE's terms of use for the archive are unverified: using it is your
+  risk.
 
 <!-- docs: illustration -->
 ```sh

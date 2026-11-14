@@ -129,5 +129,27 @@ Units are what make an account hold more than money. Once `ACME` exists,
 [an entry can carry it](recording-entries.md#buying-and-selling-units), and
 the account that received it holds a quantity of `ACME` beside its euros.
 
+### Currencies
+
+A unit of kind `currency` other than EUR is held in lots, the way a security
+is: each remittance creates a lot of the currency at the euros actually sent,
+so its cost is exact and does not depend on any rate fetched later. No
+currency is built in; add the one you hold, for example an Indian rupee:
+
+```console
+$ kohle-cli add-unit INR "Indian rupee" --kind currency
+Added unit INR (currency) with id 1
+```
+
+[Sending money abroad](recording-entries.md#sending-money-abroad) shows how
+to put it into an account, and
+[Buying with a currency](recording-entries.md#buying-with-a-currency) how a
+purchase paid in it takes its cost from those lots. A currency moved between your own accounts keeps each lot's date and cost
+([Moving a currency between your own accounts](recording-entries.md#moving-a-currency-between-your-own-accounts)),
+and a currency cannot be held by a `People` account: an entry putting one there
+makes `positions`, `realised`, `balance` and `net-worth` fail, naming the
+entry. Until it has a price source, a currency holding is
+valued at its cost and says so in `balance`, like a security with no close.
+
 Every option of `add-account`, `add-unit` and the list commands is in the
 [command reference](reference.md).

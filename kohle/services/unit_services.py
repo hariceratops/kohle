@@ -1,3 +1,5 @@
+from collections.abc import Iterable
+
 from sqlalchemy.orm import Session
 
 from kohle.core.result import Result
@@ -46,5 +48,13 @@ def get_unit_by_identifier_service(ctx: DbTransactionContext, identifier: str) -
 def list_units_service(ctx: DbTransactionContext) -> Result[list[Unit], UnitError]:
     def op(session: Session) -> list[Unit]:
         return session.query(Unit).order_by(Unit.identifier).all()
+
+    return ctx.run(op).map_err(lambda err: UnitError(str(err)))
+
+
+@crud_retrieve
+def units_by_id_service(ctx: DbTransactionContext, unit_ids: Iterable[int]) -> Result[dict[int, Unit], UnitError]:
+    def op(session: Session) -> dict[int, Unit]:
+        return {unit.id: unit for unit in session.query(Unit).filter(Unit.id.in_(list(unit_ids))).all()}
 
     return ctx.run(op).map_err(lambda err: UnitError(str(err)))

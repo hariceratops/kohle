@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+
 from kohle.core.result import Result
 from kohle.domain.domain_errors import (
     AccountError,
@@ -11,10 +13,13 @@ from kohle.infrastructure.uow import UnitOfWork
 from kohle.services.account_services import (
     account_has_postings_service,
     add_account_service,
+    descendant_account_ids_service,
     get_account_by_name_service,
     list_accounts_service,
     list_child_accounts_service,
 )
+
+PEOPLE_ROOT = "People"
 
 
 class AddAccount(UnitOfWork[Account, AccountError]):
@@ -64,3 +69,35 @@ class ListChildAccounts(UnitOfWork[list[Account], AccountError]):
             )
 
         return self._run(use_case)
+
+
+@dataclass(frozen=True, slots=True)
+class BalanceSheetAccounts:
+    own: dict[int, str]
+    people: dict[int, str]
+
+
+def balance_sheet_accounts(ctx: DbTransactionContext) -> Result[BalanceSheetAccounts, AccountError]:
+    """The net-worth partition, account id to name: asset and liability
+    accounts outside the People subtree (`own`), and the People subtree of any
+    type (`people`). Shared so "own account" has one definition."""
+    people_res = get_account_by_name_service(ctx, PEOPLE_ROOT)
+    if people_res.is_err:
+        return Result.err(people_res.unwrap_err())
+
+    people_ids_res = descendant_account_ids_service(ctx, people_res.unwrap().id)
+    if people_ids_res.is_err:
+        return Result.err(people_ids_res.unwrap_err())
+    people_ids = set(people_ids_res.unwrap())
+
+    accounts_res = list_accounts_service(ctx)
+    if accounts_res.is_err:
+        return Result.err(accounts_res.unwrap_err())
+    accounts = accounts_res.unwrap()
+    return Result.ok(BalanceSheetAccounts(
+        own={
+            a.id: a.name for a in accounts
+            if a.type in (AccountType.asset, AccountType.liability) and a.id not in people_ids
+        },
+        people={a.id: a.name for a in accounts if a.id in people_ids},
+    ))

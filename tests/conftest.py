@@ -13,8 +13,7 @@ from kohle.app.cli.cli import cli
 from kohle.db.connection import base
 from kohle.domain.models import START, AccountType, SamplingRuleList, StateEntry
 from kohle.plugin.importer_plugin import CashRow
-from kohle.use_cases.accounts import AddAccount
-from kohle.use_cases.journal import PEOPLE_ROOT
+from kohle.use_cases.accounts import PEOPLE_ROOT, AddAccount
 
 
 @event.listens_for(SamplingRuleList.__table__, "after_create")

@@ -81,6 +81,54 @@ totals the `market value` column across both sections. The estimates line
 counts the holdings that are not euros and not zero, so `GLOBEX`, whose close is
 fifteen days old, is the one estimate above.
 
+### Holdings quoted in another currency
+
+A stock can be quoted in a currency other than euros, for example a share
+bound with a quote currency of `INR`. `balance`, `net-worth` and `positions`
+then value it as quantity times its latest close times the latest rate of that
+currency, and rupees you hold as cash are valued as quantity times the rate.
+The close and the rate are each the latest stored on or before the report's
+date, and their dates need not match.
+
+- `price` and `price date` show the close in its own currency.
+- `status` is the worse of the two: a stale close or a stale rate makes the row
+  stale, and the date shown is the older of the two.
+- If the close or the rate is missing, the holding is valued at its cost in
+  euros and reads `no price (at cost)`.
+
+The rate is an ordinary price of the currency unit, fetched like any other (see
+[Prices](prices.md)).
+
+When any close in a table is quoted in another currency, `balance`, `net-worth`
+and `positions` add a `quoted in` column after `price` that names the currency of
+each price. A currency's own price, such as the rate of the rupee, is shown to
+eight places. A table with only euro prices is unchanged.
+
+`positions` shows `price` in that quote currency, while `market value`, `FIFO
+cost` and `unrealised gain` are always in euros. Rupees you hold are a row of
+their own: their FIFO cost is the euros you sent, so their unrealised gain is
+the unrealised exchange-rate gain. A share quoted in rupees has the same gain
+folded in with its price gain, since both are measured in euros.
+
+### Subtotals per currency
+
+When some holding is in a currency other than euros, `net-worth` and
+`positions` print a small table after their closing lines, with one row per
+currency: `market value` in that currency and `in EUR`.
+
+- A holding's currency is the unit itself for a currency unit such as `INR`,
+  its binding's quote currency for a security bound with one, and euros for a
+  security with no binding.
+- The `in EUR` figures add up to the euro total, which is unchanged.
+- `market value` shows `-` when any holding in that currency has no close in
+  it, for example while a rebound security still has only euro closes. A
+  security valued at cost has no close, so it counts as missing.
+- Euro cash is its own quantity, so the `EUR` row shows `-` only when a euro
+  security has no euro close.
+
+A ledger with only euro holdings prints no subtotal table. `balance` and
+`net-worth-history` print none either.
+
 ## Positions and profit
 
 `positions` lists each security still held, summed over all your own accounts,
@@ -160,6 +208,71 @@ same 3 `ACME`, so the two can disagree about what a lot cost. `positions` and
   the table.
 - The `People` branch is excluded from both reports. `positions` never fetches
   prices.
+
+### Exchange-rate gain
+
+Rupees are lots like shares. Buying shares or spending rupees realises nothing;
+the gain is realised when rupees are changed back into euros (see
+[Changing a currency back into euros](recording-entries.md#changing-a-currency-back-into-euros)).
+`realised` then lists a row with the unit `INR`: the proceeds are the euros
+received, the FIFO cost is the euros the rupees used up cost, and the gain is
+the difference. It counts under the same `Realised gain` total as share sales,
+and `--year` filters it the same way. A shortfall of rupees fails `realised`
+and `positions` as a whole.
+
+### Economic gain, not tax basis
+
+The euro gain kohle reports is the economic gain: what you ended up with in
+euros against what you actually sent. Cost is the euros actually sent, the
+`--total` of the remittance, carried through the rupee lots to the shares they
+bought. Proceeds use the rate recorded on the entry that received the rupees.
+No report reads a fetched rate for a gain, so a rate fetched later never
+changes it.
+
+This is not the basis German tax law converts on. As far as the author
+understands it (unverified), that basis uses the exchange rate on the purchase
+date and on the sale date, and treats the currency itself as a separate private
+sale. No German broker certificate exists for these holdings, so there is
+nothing to check kohle's figure against. Do not read it as a tax figure.
+
+Take a remittance of 90,000 rupees for 1,000 euros, a purchase of 50 shares at
+1,200 rupees paid from those rupees, and a sale of the 50 shares at 1,300 rupees
+with a recorded rate of 0.0104 euros per rupee:
+
+```console
+$ kohle-cli add-account Checking --type asset
+Added account Checking (asset) with id 2
+$ kohle-cli add-account IndianBank --type asset
+Added account IndianBank (asset) with id 3
+$ kohle-cli add-account Demat --type asset
+Added account Demat (asset) with id 4
+$ kohle-cli add-account DematCash --type asset
+Added account DematCash (asset) with id 5
+$ kohle-cli add-unit INR "Indian rupee" --kind currency
+Added unit INR (currency) with id 1
+$ kohle-cli add-unit INFY "Infosys" --kind security
+Added unit INFY (security) with id 2
+$ kohle-cli record 2026-03-05 "Remittance" 90000 --from Checking --to IndianBank --to-unit INR --total 1000
+Recorded 90000 INR for 1000 EUR: credited Checking, debited IndianBank
+$ kohle-cli record 2026-03-20 "Buy INFY" 50 --from IndianBank --to Demat --to-unit INFY --to-price 1200 --currency INR
+Recorded 50 INFY @ 1200 INR: credited IndianBank, debited Demat
+$ kohle-cli record 2026-05-10 "Sell INFY" 50 --from Demat --to DematCash --from-unit INFY --from-price 1300 --currency INR --rate 0.0104
+Recorded 50 INFY @ 1300 INR at 0.0104 EUR: credited Demat, debited DematCash
+$ kohle-cli realised
+date        account    unit      quantity    proceeds    FIFO cost    gain
+----------  ---------  ------  ----------  ----------  -----------  ------
+2026-05-10  Demat      INFY         50.00      676.00       666.67    9.33
+
+Realised gain: 9.33
+```
+
+The 60,000 rupees spent on the shares cost 1000 × 60000 / 90000 = 666.67 euros
+of the euros sent, so that is the shares' FIFO cost. The sale brought in 65,000
+rupees, which the entry values at 65000 × 0.0104 = 676.00 euros, so the gain is
+676.00 - 666.67 = 9.33. It folds the price gain and the exchange-rate gain
+together. A tax computation would instead convert the purchase at the rate on
+the purchase date, which kohle never looks up, and the sale at the rate on the
+sale date, which here is whatever you recorded.
 
 ### FIFO across your own depots
 
@@ -303,6 +416,12 @@ before that date. A non-euro holding is valued at its last stored close on or
 before that date, never a later one, and a date before any stored close values
 the holding at cost. Both count in the `estimated` column, which reads `K of M`
 like the last line of `net-worth`.
+
+A holding quoted in another currency is valued the same way at each date: its
+latest close on or before the date times the latest rate of that currency on or
+before the same date, and rupees held as cash at the rate alone. A date with no
+close or no rate for a holding values it at cost and counts it in `estimated`,
+as `net-worth` does. Closes and rates need not share a date.
 
 That is why the history is flat at cost while the market column moves: buying
 shares swaps cash for shares at the same value, and the market column only moves

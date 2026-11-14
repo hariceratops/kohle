@@ -68,6 +68,18 @@ class UnitError(Exception):
     pass
 
 
+class NotACurrencyUnit(UnitError):
+    """A price currency is a currency unit other than the base."""
+
+    def __init__(self, identifier: str, kind: str) -> None:
+        super().__init__()
+        self.identifier = identifier
+        self.kind = kind
+
+    def __str__(self) -> str:
+        return f"{self.identifier} ({self.kind}) cannot be a price currency: it must be a currency unit other than the base currency"
+
+
 class UnitNotFoundError(UnitError):
     def __init__(self, identifier: str) -> None:
         super().__init__()
@@ -126,13 +138,72 @@ class DuplicateJournalEntry(JournalError):
 
 
 class UnbalancedEntry(JournalError):
-    def __init__(self, debit_total, credit_total) -> None:
+    """`currency` names the price currency the entry fails to balance in; `None`
+    is the base currency, whose message is the one every entry has always had."""
+
+    def __init__(self, debit_total, credit_total, currency: str | None = None) -> None:
         super().__init__()
         self.debit_total = debit_total
         self.credit_total = credit_total
+        self.currency = currency
 
     def __str__(self) -> str:
-        return f"Entry does not balance: debits {self.debit_total} against credits {self.credit_total}"
+        where = "" if self.currency is None else f" in {self.currency}"
+        return f"Entry does not balance{where}: debits {self.debit_total} against credits {self.credit_total}"
+
+
+class NonPositiveQuantity(JournalError):
+    """A stated total or a price currency makes the quantity a divisor or a
+    weight, so it has to be above 0."""
+
+    def __init__(self, quantity: Decimal) -> None:
+        super().__init__()
+        self.quantity = quantity
+
+    def __str__(self) -> str:
+        return f"Quantity must be above 0 when a total or a price currency is given, got {self.quantity}"
+
+
+class CurrencyLineNotAtPar(JournalError):
+    """A line of the price currency itself carries rupees and no euro figure,
+    so it is priced at 1 with no stated total."""
+
+    def __init__(self, identifier: str) -> None:
+        super().__init__()
+        self.identifier = identifier
+
+    def __str__(self) -> str:
+        return f"A line of {self.identifier} priced in {self.identifier} must be at price 1 with no total"
+
+
+class ConversionBetweenCurrencies(JournalError):
+    def __init__(self, unit: str, currency: str) -> None:
+        super().__init__()
+        self.unit = unit
+        self.currency = currency
+
+    def __str__(self) -> str:
+        return (
+            f"{self.unit} cannot be priced in {self.currency}: "
+            "converting between two currencies other than the base is not supported"
+        )
+
+
+class CurrencyInflowWithoutRate(JournalError):
+    """A credit priced in a currency that is not a currency line on an own
+    account is currency arriving from outside, which has no euro value
+    without a rate."""
+
+    def __init__(self, account: str, currency: str) -> None:
+        super().__init__()
+        self.account = account
+        self.currency = currency
+
+    def __str__(self) -> str:
+        return (
+            f"'{self.account}' is credited in {self.currency} with no euro value; "
+            "currency arriving needs a rate (record --rate)"
+        )
 
 
 class PostingToNonLeafAccount(JournalError):
@@ -392,105 +463,6 @@ ApplyRulesError = RuleError | AccountError
 
 ClassifyRulesError = AccountError | JournalError | ClassificationError | RuleError
 
-BalanceError = AccountError | JournalError
-
-# AccountError survives an infrastructure failure resolving a bucket; the one
-# AccountError case the use case actually handles — AccountNotFoundError,
-# meaning nothing has ever been imported — is swallowed into an empty list
-# rather than reaching here (design §6.2).
-ListUnclassifiedError = AccountError | ClassificationError
-
-# JournalError surfaces PostingToNonLeafAccount from validate_lines inside
-# post_entry, unchanged and not re-implemented for the adjusting entry
-# (design §7.4). SplitError surfaces EntryAlreadySplit, the guard added so
-# reclassify refuses a split line rather than silently corrupting it
-# (design §5.4).
-ReclassifyError = AccountError | JournalError | ClassificationError | SplitError
-
-# JournalError surfaces PostingToNonLeafAccount from validate_lines inside
-# post_entry for the adjusting entry, and DuplicateLineInEntry for two
-# persons named twice in one invocation (design §4.3).
-SplitImportedEntryError = AccountError | JournalError | ClassificationError | SplitError
-
-
-class PriceError(Exception):
-    pass
-
-
-class UnknownPricePlugin(PriceError):
-    def __init__(self, name: str, available: list[str]) -> None:
-        super().__init__()
-        self.name = name
-        self.available = available
-
-    def __str__(self) -> str:
-        installed = ", ".join(self.available) if self.available else "none installed"
-        return f"Unknown price plugin {self.name!r}. Available: {installed}"
-
-
-class EmptyPriceSymbol(PriceError):
-    def __str__(self) -> str:
-        return "Price symbol cannot be empty"
-
-
-SetPriceSourceError = UnitError | PriceError
-
-
-class MissingCloseResult(Exception):
-    def __init__(self, symbol: str) -> None:
-        super().__init__()
-        self.symbol = symbol
-
-    def __str__(self) -> str:
-        return f"Plugin returned no result for symbol {self.symbol!r}"
-
-
-class NonPositivePrice(Exception):
-    def __init__(self, price: Decimal) -> None:
-        super().__init__()
-        self.price = price
-
-    def __str__(self) -> str:
-        return f"Close price {self.price} must be a positive finite number"
-
-
-class FutureCloseDate(Exception):
-    def __init__(self, price_date: date, today: date) -> None:
-        super().__init__()
-        self.price_date = price_date
-        self.today = today
-
-    def __str__(self) -> str:
-        return f"Close dated {self.price_date} is after today ({self.today})"
-
-
-class NonBaseCurrency(Exception):
-    def __init__(self, currency: str, base: str) -> None:
-        super().__init__()
-        self.currency = currency
-        self.base = base
-
-    def __str__(self) -> str:
-        return f"Close is in {self.currency!r}, but only {self.base} closes are accepted"
-
-
-class UnrequestedSymbol(Exception):
-    def __init__(self, plugin_name: str, symbol: str) -> None:
-        super().__init__()
-        self.plugin_name = plugin_name
-        self.symbol = symbol
-
-    def __str__(self) -> str:
-        return f"Plugin {self.plugin_name!r} returned a result for unrequested symbol {self.symbol!r}; ignored"
-
-
-PriceRejection = MissingCloseResult | NonPositivePrice | FutureCloseDate | NonBaseCurrency
-
-ListPriceTargetsError = BalanceError | PriceError
-
-ValuationError = BalanceError | PriceError
-
-
 class LotShortfall(Exception):
     def __init__(self, unit_identifier: str, account_name: str, entry_date: date, shortfall: Decimal) -> None:
         super().__init__()
@@ -545,7 +517,144 @@ class SecurityMoveWithPeople(Exception):
         )
 
 
-LotError = LotShortfall | UnbalancedOwnMove | SecurityMoveWithPeople
+class CurrencyWithPeople(Exception):
+    def __init__(self, entry_id: int, entry_date: date, unit_identifier: str, people_account: str) -> None:
+        super().__init__()
+        self.entry_id = entry_id
+        self.entry_date = entry_date
+        self.unit_identifier = unit_identifier
+        self.people_account = people_account
+
+    def __str__(self) -> str:
+        return (
+            f"Entry {self.entry_id} on {self.entry_date} puts {self.unit_identifier} on People account "
+            f"{self.people_account!r}; currencies other than EUR cannot be owed by people"
+        )
+
+
+LotError = LotShortfall | UnbalancedOwnMove | SecurityMoveWithPeople | CurrencyWithPeople
+
+
+BalanceError = AccountError | JournalError | LotError
+
+# AccountError survives an infrastructure failure resolving a bucket; the one
+# AccountError case the use case actually handles — AccountNotFoundError,
+# meaning nothing has ever been imported — is swallowed into an empty list
+# rather than reaching here (design §6.2).
+ListUnclassifiedError = AccountError | ClassificationError
+
+# JournalError surfaces PostingToNonLeafAccount from validate_lines inside
+# post_entry, unchanged and not re-implemented for the adjusting entry
+# (design §7.4). SplitError surfaces EntryAlreadySplit, the guard added so
+# reclassify refuses a split line rather than silently corrupting it
+# (design §5.4).
+ReclassifyError = AccountError | JournalError | ClassificationError | SplitError
+
+# JournalError surfaces PostingToNonLeafAccount from validate_lines inside
+# post_entry for the adjusting entry, and DuplicateLineInEntry for two
+# persons named twice in one invocation (design §4.3).
+SplitImportedEntryError = AccountError | JournalError | ClassificationError | SplitError
+
+
+class PriceError(Exception):
+    pass
+
+
+class NotAQuoteCurrency(PriceError):
+    def __init__(self, code: str) -> None:
+        super().__init__()
+        self.code = code
+
+    def __str__(self) -> str:
+        return f"{self.code!r} is not EUR or a currency unit, so it cannot be a quote currency"
+
+
+class RateNotQuotedInEur(PriceError):
+    def __init__(self, identifier: str, code: str) -> None:
+        super().__init__()
+        self.identifier = identifier
+        self.code = code
+
+    def __str__(self) -> str:
+        return f"The rate of {self.identifier!r} is a price in EUR, so it cannot be quoted in {self.code!r}"
+
+
+class UnknownPricePlugin(PriceError):
+    def __init__(self, name: str, available: list[str]) -> None:
+        super().__init__()
+        self.name = name
+        self.available = available
+
+    def __str__(self) -> str:
+        installed = ", ".join(self.available) if self.available else "none installed"
+        return f"Unknown price plugin {self.name!r}. Available: {installed}"
+
+
+class EmptyPriceSymbol(PriceError):
+    def __str__(self) -> str:
+        return "Price symbol cannot be empty"
+
+
+SetPriceSourceError = UnitError | PriceError
+
+
+class MissingCloseResult(Exception):
+    def __init__(self, symbol: str) -> None:
+        super().__init__()
+        self.symbol = symbol
+
+    def __str__(self) -> str:
+        return f"Plugin returned no result for symbol {self.symbol!r}"
+
+
+class NonPositivePrice(Exception):
+    def __init__(self, price: Decimal) -> None:
+        super().__init__()
+        self.price = price
+
+    def __str__(self) -> str:
+        return f"Close price {self.price} must be a positive finite number"
+
+
+class FutureCloseDate(Exception):
+    def __init__(self, price_date: date, today: date) -> None:
+        super().__init__()
+        self.price_date = price_date
+        self.today = today
+
+    def __str__(self) -> str:
+        return f"Close dated {self.price_date} is after today ({self.today})"
+
+
+class NonBaseCurrency(Exception):
+    """A close in `currency` for a binding that quotes in `base`."""
+
+    def __init__(self, currency: str, base: str) -> None:
+        super().__init__()
+        self.currency = currency
+        self.base = base
+
+    def __str__(self) -> str:
+        return f"Close is in {self.currency!r}, but its binding quotes in {self.base}"
+
+
+class UnrequestedSymbol(Exception):
+    def __init__(self, plugin_name: str, symbol: str) -> None:
+        super().__init__()
+        self.plugin_name = plugin_name
+        self.symbol = symbol
+
+    def __str__(self) -> str:
+        return f"Plugin {self.plugin_name!r} returned a result for unrequested symbol {self.symbol!r}; ignored"
+
+
+PriceRejection = MissingCloseResult | NonPositivePrice | FutureCloseDate | NonBaseCurrency
+
+ListPriceTargetsError = BalanceError | PriceError
+
+ValuationError = BalanceError | PriceError
+
+
 
 
 RealisedError = BalanceError | LotError
@@ -804,4 +913,4 @@ class NoCapInForce(CapError):
 
 
 CapWriteError = CapError | AccountError | InvalidRecurrence
-BudgetError = CapError | AccountError | JournalError | InvalidRecurrence | StateError
+BudgetError = CapError | AccountError | JournalError | InvalidRecurrence | StateError | LotError

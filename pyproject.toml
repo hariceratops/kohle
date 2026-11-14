@@ -63,6 +63,8 @@ kohle-deutsche-bank = "kohle.app.plugins.kohle_deutsche_bank_importer:DeustcheBa
 kohle-simple-broker = "kohle.app.plugins.kohle_simple_broker_importer:SimpleBrokerStatementImporter"
 file = "kohle.app.plugins.kohle_file_price_fetcher:FilePriceFetcher"
 alphavantage = "kohle.app.plugins.kohle_alphavantage_price_fetcher:AlphaVantagePriceFetcher"
+ecb = "kohle.app.plugins.kohle_ecb_price_fetcher:EcbPriceFetcher"
+nse = "kohle.app.plugins.kohle_nse_price_fetcher:NsePriceFetcher"
 
 # Set packages to include
 [tool.setuptools.packages.find]

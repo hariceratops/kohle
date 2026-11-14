@@ -1,6 +1,7 @@
 import os
 import tempfile
 import tomllib
+from collections.abc import Sequence
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -42,11 +43,13 @@ from kohle.use_cases.conditions import render_when_inline
 from kohle.use_cases.journal import (
     BASE_CURRENCY,
     CrossUnitLine,
+    CurrencySide,
     ImportStatement,
     LineInput,
     QueryJournalByPeriod,
     RecordSimpleEntry,
     RecordSplitEntry,
+    Total,
 )
 from kohle.use_cases.ledger import init_ledger, validate_init_file
 from kohle.use_cases.lots import QueryRealised, realised_gain
@@ -70,11 +73,13 @@ from kohle.use_cases.reporting import (
     NetWorthHistory,
     QueryPositions,
     QueryValuedBalance,
+    Subtotal,
     ValuedBalance,
     ValuedNetWorth,
     ValuedRow,
     at_market,
     fifo_cost,
+    row_kind,
     summarise,
     unrealised_gain,
 )
@@ -133,24 +138,35 @@ MAX_AGE_DAYS = click.option(
 
 def _parse_line(raw: str) -> LineInput:
     fields = raw.split(":")
-    if len(fields) != 5:
-        raise click.BadParameter(f"{raw!r} does not split into ACCOUNT:QUANTITY:UNIT:PRICE:SIDE")
-    account_name, quantity_str, unit_identifier, price_str, side = fields
+    if len(fields) not in (5, 6):
+        raise click.BadParameter(f"{raw!r} does not split into ACCOUNT:QUANTITY:UNIT:PRICE:SIDE[:CURRENCY]")
+    account_name, quantity_str, unit_identifier, price_str, side = fields[:5]
+    price_currency = fields[5] if len(fields) == 6 else None
 
     try:
         quantity = Decimal(quantity_str)
     except InvalidOperation:
         raise click.BadParameter(f"{raw!r}: {quantity_str!r} is not a valid decimal quantity") from None
 
+    is_total = price_str.startswith("=")
     try:
-        unit_price = Decimal(price_str)
+        unit_price = Decimal(price_str.removeprefix("="))
     except InvalidOperation:
         raise click.BadParameter(f"{raw!r}: {price_str!r} is not a valid decimal price") from None
+    if is_total and (quantity <= 0 or unit_price <= 0):
+        raise click.BadParameter(f"{raw!r}: a total needs a quantity and a total above 0")
 
     if side not in ("debit", "credit"):
         raise click.BadParameter(f"{raw!r}: {side!r} must be 'debit' or 'credit'")
 
-    return LineInput(account_name, quantity, unit_identifier, unit_price, is_debit=side == "debit")
+    return LineInput(
+        account_name,
+        quantity,
+        unit_identifier,
+        Total(unit_price) if is_total else unit_price,
+        is_debit=side == "debit",
+        price_currency=price_currency,
+    )
 
 
 def _parse_lines(ctx, param, values: tuple[str, ...]) -> list[LineInput]:
@@ -608,6 +624,18 @@ def import_statement(
 @click.option("--from-price", type=DECIMAL, default=None, help="Price of --from-unit")
 @click.option("--to-unit", default=None, help="Non-base unit carried by the debit side")
 @click.option("--to-price", type=DECIMAL, default=None, help="Price of --to-unit")
+@click.option(
+    "--total", type=DECIMAL, default=None,
+    help="What the --from-unit / --to-unit quantity cost or fetched, in euros or in --currency, instead of a price",
+)
+@click.option(
+    "--currency", default=None,
+    help="A currency other than EUR that pays for the entry; --to-unit's price or total is stated in it",
+)
+@click.option(
+    "--rate", type=DECIMAL, default=None,
+    help="Euros per unit of --currency, for the currency arriving; needed when it arrives from outside",
+)
 @click.pass_obj
 def record_cmd(
     make_session,
@@ -620,6 +648,9 @@ def record_cmd(
     from_price: Decimal | None,
     to_unit: str | None,
     to_price: Decimal | None,
+    total: Decimal | None,
+    currency: str | None,
+    rate: Decimal | None,
 ):
     """Record a two-line entry moving a quantity between accounts."""
     if from_unit and to_unit:
@@ -629,25 +660,64 @@ def record_cmd(
     if to_price is not None and to_unit is None:
         raise click.BadParameter("--to-price requires --to-unit")
 
+    if total is not None:
+        if from_unit is None and to_unit is None:
+            raise click.BadParameter("--total requires --from-unit or --to-unit")
+        if from_price is not None or to_price is not None:
+            raise click.BadParameter("--total cannot be combined with --from-price or --to-price")
+        if quantity <= 0 or total <= 0:
+            raise click.BadParameter("QUANTITY and --total must be above 0 with --total")
+
+    if rate is not None:
+        if currency is None:
+            raise click.BadParameter("--rate requires --currency")
+        if to_unit is not None:
+            raise click.BadParameter("--rate cannot be combined with --to-unit: a purchase is costed from the lots")
+        if rate <= 0:
+            raise click.BadParameter("--rate must be above 0")
+    if from_unit is not None and currency is not None and rate is None:
+        raise click.BadParameter("--currency with --from-unit is a sale for a currency and needs --rate")
+
+    currency_side = None
+    if currency is not None:
+        if currency == BASE_CURRENCY:
+            raise click.BadParameter(f"--currency {BASE_CURRENCY} is the default and needs no flag")
+        if currency == from_unit or currency == to_unit:
+            raise click.BadParameter("--currency must differ from the unit flag's unit")
+        if quantity <= 0:
+            raise click.BadParameter("QUANTITY must be above 0 with --currency")
+        currency_side = CurrencySide(currency, rate)
+
     cross = None
     if from_unit is not None:
-        if from_price is None:
+        price = Total(total) if total is not None else from_price
+        if price is None:
             raise click.BadParameter("--from-unit requires --from-price")
-        cross = CrossUnitLine(from_unit, from_price, is_debit=False)
+        cross = CrossUnitLine(from_unit, price, is_debit=False)
     elif to_unit is not None:
-        if to_price is None:
+        price = Total(total) if total is not None else to_price
+        if price is None:
             raise click.BadParameter("--to-unit requires --to-price")
-        cross = CrossUnitLine(to_unit, to_price, is_debit=True)
+        cross = CrossUnitLine(to_unit, price, is_debit=True)
 
     record = RecordSimpleEntry(make_session())
-    res = record.execute(entry_date.date(), description, quantity, from_account, to_account, cross)
+    res = record.execute(entry_date.date(), description, quantity, from_account, to_account, cross, currency_side)
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
+    at_rate = f" at {rate} {BASE_CURRENCY}" if rate is not None else ""
     if cross is None:
-        click.echo(f"Recorded {quantity} {BASE_CURRENCY}: credited {from_account}, debited {to_account}")
-    else:
         click.echo(
-            f"Recorded {quantity} {cross.identifier} @ {cross.price}: "
+            f"Recorded {quantity} {currency or BASE_CURRENCY}{at_rate}: credited {from_account}, debited {to_account}"
+        )
+    elif isinstance(cross.price, Total):
+        click.echo(
+            f"Recorded {quantity} {cross.identifier} for {cross.price.amount} {currency or BASE_CURRENCY}{at_rate}: "
+            f"credited {from_account}, debited {to_account}"
+        )
+    else:
+        in_currency = f" {currency}" if currency else ""
+        click.echo(
+            f"Recorded {quantity} {cross.identifier} @ {cross.price}{in_currency}{at_rate}: "
             f"credited {from_account}, debited {to_account}"
         )
 
@@ -660,7 +730,7 @@ def record_cmd(
     "lines",
     multiple=True,
     callback=_parse_lines,
-    help="ACCOUNT:QUANTITY:UNIT:PRICE:SIDE, repeatable, one per journal line; SIDE is debit or credit",
+    help="ACCOUNT:QUANTITY:UNIT:PRICE:SIDE[:CURRENCY], repeatable, one per journal line; SIDE is debit or credit, PRICE may be =TOTAL, CURRENCY is the price currency (default EUR)",
 )
 @click.pass_obj
 def record_split_cmd(make_session, entry_date, description: str, lines: list[LineInput]):
@@ -684,6 +754,8 @@ def entries_in_period(make_session, account_name, start, end):
     res = query.execute(account_name, start, end)
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
+    lines = res.unwrap()
+    priced = any(line.price_unit is not None for line in lines)
     rows = [
         {
             # First column, matching list-unclassified: it is split-line's
@@ -698,8 +770,9 @@ def entries_in_period(make_session, account_name, start, end):
             "quantity": line.quantity,
             "unit": line.unit.identifier,
             "value": line.value,
+            **({"priced in": line.price_unit.identifier if line.price_unit else BASE_CURRENCY} if priced else {}),
         }
-        for line in res.unwrap()
+        for line in lines
     ]
     click.echo(tabulate(rows, headers="keys", floatfmt=".2f"))
 
@@ -737,7 +810,7 @@ def balance_cmd(make_session, account_name: str, max_age_days: int):
     # column: a str in an otherwise-Decimal column makes tabulate treat
     # the whole column as non-numeric, silently disabling floatfmt for
     # every other row in it (not just the one with the missing value).
-    click.echo(tabulate(rows, headers="keys", floatfmt=".2f", missingval="-"))
+    click.echo(_market_table(rows, [*valued, *[None] * (len(rows) - len(valued))]))
     # Gated on `holdings`, not on "any non-base row": a sold-out security is a
     # non-base row but not a holding. The total sums `valued`, never `rows`,
     # so the restatement row cannot be counted.
@@ -1084,26 +1157,69 @@ def _print_who_owes_what_by_group(make_session):
 
 
 def _market_columns(row: ValuedRow) -> dict[str, object]:
-    price: Decimal | None
-    price_date: date | None
+    price: Decimal | None = None
+    price_date: date | None = None
     status: str | None
     match row.close:
-        case Fresh(c):
-            price, price_date, status = c.price, c.price_date, "fresh"
+        case Fresh(c) | Stale(c):
+            price, price_date = c.price, c.price_date
+    match row.status:
+        case Fresh():
+            status = "fresh"
         case Stale(c):
-            price, price_date, status = c.price, c.price_date, f"stale ({c.price_date.isoformat()})"
+            status = f"stale ({c.price_date.isoformat()})"
         case NoClose():
-            price, price_date, status = None, None, "no price (at cost)"
+            status = "no price (at cost)"
         case None:
-            price, price_date, status = None, None, None
+            status = None
         case _:
-            assert_never(row.close)
+            assert_never(row.status)
     return {
         "price": price,
         "price date": price_date,
         "market value": row.market_value,
         "status": status,
     }
+
+
+def _market_table(rows: list[dict], sources: Sequence[ValuedRow | None]) -> str:
+    """Tabulate rows whose `price` came from `sources` (None for rows that have
+    no valued source). When some close is quoted outside euros, a `quoted in`
+    column labels each price, and a currency's own price is shown to 8 places
+    because a rate such as 0.0104 would otherwise print as 0.01. Otherwise the
+    table is exactly the plain one."""
+    quotes: list[str | None] = [
+        s.close.close.currency if s is not None and isinstance(s.close, Fresh | Stale) else None
+        for s in sources
+    ]
+    if all(q in (None, BASE_CURRENCY) for q in quotes):
+        return tabulate(rows, headers="keys", floatfmt=".2f", missingval="-")
+    shown: list[dict] = []
+    for row, source, quote in zip(rows, sources, quotes, strict=True):
+        new: dict = {}
+        for key, value in row.items():
+            if key == "price" and value is not None:
+                places = 8 if source is not None and row_kind(source) is UnitKind.currency else 2
+                new[key] = f"{value:.{places}f}"
+                new["quoted in"] = quote
+            else:
+                new[key] = value
+                if key == "price":
+                    new["quoted in"] = None
+        shown.append(new)
+    width = max(len(r["price"]) for r in shown if r["price"] is not None)
+    for r in shown:
+        if r["price"] is not None:
+            r["price"] = r["price"].rjust(width)
+    price_column = list(shown[0]).index("price")
+    return tabulate(shown, headers="keys", floatfmt=".2f", missingval="-", disable_numparse=[price_column])
+
+
+def _echo_subtotals(subtotals: list[Subtotal]) -> None:
+    if not subtotals:
+        return
+    rows = [{"currency": s.currency, "market value": s.native, "in EUR": s.euro} for s in subtotals]
+    click.echo("\n" + tabulate(rows, headers="keys", floatfmt=".2f", missingval="-"))
 
 
 def _net_worth_rows(section: str, rows: list[ValuedBalance]) -> list[dict]:
@@ -1140,13 +1256,14 @@ def net_worth_cmd(make_session, max_age_days: int):
     rows = _net_worth_rows("Own accounts", report.own) + _net_worth_rows(
         "Receivables (People)", report.receivables
     )
-    click.echo(tabulate(rows, headers="keys", floatfmt=".2f", missingval="-"))
+    click.echo(_market_table(rows, [*report.own, *report.receivables]))
     # The total folds receivables in rather than reporting them separately
     # (design §2.4) — the breakdown above is what makes that checkable
     # rather than a bare number the user has to trust.
     click.echo(f"\nNet worth (at cost): {report.at_cost.net_worth_at_cost:.2f}")
     click.echo(f"Net worth (at market): {report.net_worth_at_market:.2f}")
     click.echo(_estimates_line(report.estimates))
+    _echo_subtotals(report.subtotals)
 
 
 @cli.command(writes=False)
@@ -1157,7 +1274,7 @@ def positions_cmd(make_session, max_age_days: int):
     res = QueryPositions(make_session()).execute(date.today(), max_age_days)  # noqa: DTZ011 - the user's local date, by design
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
-    positions = res.unwrap()
+    positions = res.unwrap().positions
     if not positions:
         click.echo("No positions")
     else:
@@ -1171,11 +1288,12 @@ def positions_cmd(make_session, max_age_days: int):
             }
             for p in positions
         ]
-        click.echo(tabulate(rows, headers="keys", floatfmt=".2f", missingval="-"))
+        click.echo(_market_table(rows, positions))
     click.echo(f"\nMarket value: {at_market(positions):.2f}")
     click.echo(f"FIFO cost: {fifo_cost(positions):.2f}")
     click.echo(f"Unrealised gain: {unrealised_gain(positions):.2f}")
     click.echo(_estimates_line(summarise(positions)))
+    _echo_subtotals(res.unwrap().subtotals)
 
 
 @cli.command(writes=False)
@@ -1254,14 +1372,24 @@ def settle_up_cmd(make_session, group_name: str | None):
 @click.argument("unit")
 @click.argument("plugin")
 @click.argument("symbol")
+@click.option(
+    "--currency", "quote_currency", default=BASE_CURRENCY, show_default=True,
+    help="Currency the symbol's closes are quoted in: EUR or an existing currency unit",
+)
 @click.pass_obj
-def set_price_source_cmd(make_session, unit: str, plugin: str, symbol: str):
-    """Choose the price plugin and symbol for a unit."""
-    res = SetPriceSource(make_session()).execute(unit, plugin, symbol, sorted(load_price_plugins()))
+def set_price_source_cmd(make_session, unit: str, plugin: str, symbol: str, quote_currency: str):
+    """Choose the price plugin, symbol and quote currency for a unit."""
+    res = SetPriceSource(make_session()).execute(
+        unit, plugin, symbol, sorted(load_price_plugins()), quote_currency
+    )
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
     binding = res.unwrap()
     click.echo(f"Price source for {unit}: {binding.plugin_name} {binding.symbol}")
+
+
+def _currency_suffix(currency: str) -> str:
+    return "" if currency == BASE_CURRENCY else f" {currency}"
 
 
 def _fetch_row(outcome: FetchOutcome) -> dict[str, str]:
@@ -1270,13 +1398,17 @@ def _fetch_row(outcome: FetchOutcome) -> dict[str, str]:
             previous = outcome.previous
             # The stored price carries the column's padding (12.50000000);
             # the close above it comes from the plugin and does not.
-            detail = f"previous {previous.price.normalize():f} on {previous.price_date}" if previous else "previous none"
+            detail = (
+                f"previous {previous.price.normalize():f}{_currency_suffix(previous.currency)} on {previous.price_date}"
+                if previous
+                else "previous none"
+            )
             return {
                 "unit": outcome.unit.identifier,
                 "source": f"{outcome.plugin_name}:{outcome.symbol}",
                 "outcome": "priced",
                 "date": str(outcome.close.price_date),
-                "close": str(outcome.close.price),
+                "close": f"{outcome.close.price}{_currency_suffix(outcome.close.currency)}",
                 "detail": detail,
             }
         case AlreadyStored():
