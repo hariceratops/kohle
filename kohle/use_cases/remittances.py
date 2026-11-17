@@ -9,6 +9,7 @@ from kohle.domain.domain_errors import (
     NotARemittance,
     RemittanceCompleted,
     RemittanceError,
+    RemittanceNotCompleted,
 )
 from kohle.domain.models import Classification, ClassificationKind, JournalEntry
 from kohle.infrastructure.transaction_context import DbTransactionContext
@@ -18,6 +19,7 @@ from kohle.services.classification_services import (
     pending_remittances_service,
     set_completion_service,
 )
+from kohle.services.journal_services import entry_by_id_service
 from kohle.use_cases.conditions import Direction
 from kohle.use_cases.lots import line_costs
 from kohle.use_cases.posting import (
@@ -25,6 +27,7 @@ from kohle.use_cases.posting import (
     _cross_unit_lines,
     counterpart_line,
     post_entry,
+    post_reversal,
     statement_amount,
     statement_line,
 )
@@ -143,5 +146,50 @@ class CompleteRemittance(UnitOfWork[CompletedRemittance, RemittanceError]):
                     euros=abs(statement_amount(classification)),
                 )
             )
+
+        return self._run(use_case)
+
+
+def uncomplete_remittance(ctx: DbTransactionContext, classification: Classification) -> Result[JournalEntry, RemittanceError]:
+    """Reverses the completion by an entry the lot replay pairs with it, so the
+    lots come back exactly and no gain stays booked. Mirroring the lines as an
+    ordinary entry would instead book a new lot (incoming) or take the oldest
+    lot (outgoing)."""
+    entry_id = classification.journal_entry_id
+    if classification.kind != ClassificationKind.remittance:
+        return Result.err(NotARemittance(entry_id))
+    if classification.completion_entry_id is None:
+        return Result.err(RemittanceNotCompleted(entry_id))
+
+    completion_res = entry_by_id_service(ctx, classification.completion_entry_id)
+    if completion_res.is_err:
+        return Result.err(completion_res.unwrap_err())
+    completion = completion_res.unwrap()
+
+    reversal_res = post_reversal(ctx, completion, f"Uncomplete: {classification.entry.description}")
+    if reversal_res.is_err:
+        return Result.err(reversal_res.unwrap_err())
+    reversal = reversal_res.unwrap()
+
+    set_res = set_completion_service(ctx, classification.id, None)
+    if set_res.is_err:
+        return Result.err(set_res.unwrap_err())
+
+    if statement_amount(classification) < 0:
+        # Removing the lot an outgoing completion made can starve a later
+        # spend; the shortfall is otherwise only found when a report is read.
+        costs_res = line_costs(ctx, reversal.lines)
+        if costs_res.is_err:
+            return Result.err(costs_res.unwrap_err())
+    return Result.ok(reversal)
+
+
+class UncompleteRemittance(UnitOfWork[JournalEntry, RemittanceError]):
+    def execute(self, entry_id: int) -> Result[JournalEntry, RemittanceError]:
+        def use_case(ctx: DbTransactionContext) -> Result[JournalEntry, RemittanceError]:
+            classification_res = classification_by_entry_service(ctx, entry_id)
+            if classification_res.is_err:
+                return Result.err(classification_res.unwrap_err())
+            return uncomplete_remittance(ctx, classification_res.unwrap())
 
         return self._run(use_case)

@@ -271,7 +271,17 @@ def replay(
     for line in lines:
         entries.setdefault(line.entry.id, []).append(line)
 
-    for entry_lines in entries.values():
+    # An entry and its reversal are skipped as a pair, so the lots are exactly as
+    # if neither had been recorded and no gain is booked for either. Their lines
+    # keep a cost, their own face value, so the cost fold nets them to zero.
+    reversed_ids = {entry_lines[0].entry.reverses_entry_id for entry_lines in entries.values()} - {None}
+
+    for entry_id, entry_lines in entries.items():
+        if entry_id in reversed_ids or entry_lines[0].entry.reverses_entry_id is not None:
+            for line in entry_lines:
+                if _lot_valued(line):
+                    book.costs[line.id] = Fraction(line.value)
+            continue
         refusal = _currency_with_people(book, entry_lines)
         if refusal is not None:
             return Result.err(refusal)

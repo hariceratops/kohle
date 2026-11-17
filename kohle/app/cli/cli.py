@@ -80,7 +80,11 @@ from kohle.use_cases.prices import (
     Unpriced,
     call_price_plugins,
 )
-from kohle.use_cases.remittances import CompleteRemittance, ListPendingRemittances
+from kohle.use_cases.remittances import (
+    CompleteRemittance,
+    ListPendingRemittances,
+    UncompleteRemittance,
+)
 from kohle.use_cases.reporting import (
     EstimateSummary,
     NetWorthHistory,
@@ -1115,6 +1119,17 @@ def complete_remittance_cmd(make_session, entry_id: int, amount: Decimal):
         raise click.ClickException(str(res.unwrap_err()))
     completed = res.unwrap()
     click.echo(f"Completed remittance {entry_id}: {completed.quantity} {completed.unit_identifier} for {completed.euros:.2f} EUR")
+
+
+@cli.command(writes=True)
+@click.argument("entry_id", type=int)
+@click.pass_obj
+def uncomplete_remittance_cmd(make_session, entry_id: int):
+    """Reverse a remittance's completion, returning it to pending so it can be completed again."""
+    res = UncompleteRemittance(make_session()).execute(entry_id)
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    click.echo(f"Remittance {entry_id} is pending again")
 
 
 def _move_kind_text(move: RerunMove) -> str:

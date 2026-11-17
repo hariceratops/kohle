@@ -14,6 +14,7 @@ from kohle.domain.domain_errors import (
     NotARemittance,
     NotSplittable,
     RemittanceCompleted,
+    RemittanceNotCompleted,
 )
 from kohle.domain.models import (
     Account,
@@ -39,7 +40,11 @@ from kohle.use_cases.conditions import Direction
 from kohle.use_cases import remittances as remittances_module
 from kohle.use_cases.journal import ImportStatement
 from kohle.use_cases.lots import QueryRealised
-from kohle.use_cases.remittances import CompleteRemittance, ListPendingRemittances
+from kohle.use_cases.remittances import (
+    CompleteRemittance,
+    ListPendingRemittances,
+    UncompleteRemittance,
+)
 from kohle.use_cases.rules import (
     ApplyRuleFile,
     PlanRuleFile,
@@ -588,7 +593,181 @@ def test_an_incoming_completion_without_any_lot_fails_and_writes_nothing(session
     assert session.query(JournalEntry).count() == entries
 
 
-@pytest.mark.skip(reason="scaffold")
-def test_uncomplete_remittance() -> None:
-    # TODO (135): uncomplete-remittance both directions, reversal and lot restoration, migration c
-    ...
+# Correcting a wrong Y
+
+
+def _record(session: Session, *args: str) -> None:
+    assert CliRunner().invoke(cli, ["record", *args], obj=lambda: session).exit_code == 0
+
+
+def _only_sale(session: Session):
+    (sale,) = QueryRealised(session).execute(None).unwrap()
+    return sale
+
+
+def test_an_outgoing_completion_is_reversed_and_redone_with_the_right_amount(
+    session: Session, cash_rows, statement_row
+) -> None:
+    entry_id = _pending_out(session, cash_rows, statement_row)
+    AddAccount(session).execute("People", AccountType.asset)  # the reversal replays the lots
+    completion_id = CompleteRemittance(session).execute(entry_id, Decimal(9000)).unwrap().completion_entry_id
+    entries, groups = session.query(JournalEntry).count(), session.query(OperationGroup).count()
+
+    reversal = UncompleteRemittance(session).execute(entry_id).unwrap()
+
+    assert session.query(JournalEntry).count() == entries + 1
+    assert session.query(OperationGroup).count() == groups + 1
+    stored = session.get(JournalEntry, reversal.id)
+    assert stored.reverses_entry_id == completion_id and stored.description == "Uncomplete: Fernweh payment"
+    assert stored.entry_date == OUT[0]
+    assert _balance(session, PENDING_REMITTANCES) == Decimal(1012)
+    record = session.query(Classification).one()
+    assert record.kind is ClassificationKind.remittance and record.completion_entry_id is None
+    assert record.corrected is False
+    assert [p.description for p in ListPendingRemittances(session).execute().unwrap()] == ["Fernweh payment"]
+
+    CompleteRemittance(session).execute(entry_id, Decimal(90000)).unwrap()
+
+    # The reversal neither booked a gain nor took a lot: one lot of 90000 for 1012 is what stands.
+    _record(session, "2026-06-25", "Back", "90000", "--from", "IndianBank", "--to", "Checking", "--from-unit", "INR", "--total", "1100")
+    sale = _only_sale(session)
+    assert (sale.quantity, sale.fifo_cost, sale.gain) == (Decimal(90000), Decimal("1012.00"), Decimal("88.00"))
+    assert session.query(Classification).one().completion_entry_id is not None
+
+
+def test_an_incoming_reversal_restores_the_consumed_lots_and_unrealises_the_gain(
+    session: Session, cash_rows, statement_row
+) -> None:
+    entry_id = _pending_in(session, cash_rows, statement_row)
+    CompleteRemittance(session).execute(entry_id, Decimal(90000)).unwrap()
+    assert _only_sale(session).gain == Decimal("88.00")
+
+    UncompleteRemittance(session).execute(entry_id).unwrap()
+
+    assert QueryRealised(session).execute(None).unwrap() == []
+    assert _balance(session, PENDING_REMITTANCES) == Decimal(-1100)
+    assert [p.description for p in ListPendingRemittances(session).execute().unwrap()] == ["Fernweh refund"]
+
+    CompleteRemittance(session).execute(entry_id, Decimal(45000)).unwrap()
+
+    sale = _only_sale(session)
+    assert (sale.quantity, sale.proceeds, sale.fifo_cost) == (Decimal(45000), Decimal("1100.00"), Decimal("506.00"))
+
+
+def test_reversing_an_outgoing_completion_that_a_later_spend_needs_refuses_and_writes_nothing(
+    session: Session, cash_rows, statement_row
+) -> None:
+    entry_id = _pending_out(session, cash_rows, statement_row)
+    CompleteRemittance(session).execute(entry_id, Decimal(90000)).unwrap()
+    AddAccount(session).execute("People", AccountType.asset)
+    _record(session, "2026-06-25", "Back", "50000", "--from", "IndianBank", "--to", "Checking", "--from-unit", "INR", "--total", "600")
+    entries, groups = session.query(JournalEntry).count(), session.query(OperationGroup).count()
+
+    refusal = UncompleteRemittance(session).execute(entry_id)
+
+    assert refusal.is_err
+    assert session.query(JournalEntry).count() == entries
+    assert session.query(OperationGroup).count() == groups
+    assert session.query(Classification).one().completion_entry_id is not None
+
+
+def test_a_reversal_refuses_on_a_ledger_whose_replay_already_fails(session: Session, cash_rows, statement_row) -> None:
+    entry_id = _pending_out(session, cash_rows, statement_row)
+    CompleteRemittance(session).execute(entry_id, Decimal(90000)).unwrap()
+    AddAccount(session).execute("People", AccountType.asset)
+    # Spent before any rupee was held: a shortfall no reversal could cause.
+    _record(session, "2026-06-01", "Early", "10", "--from", "IndianBank", "--to", "Checking", "--from-unit", "INR", "--total", "1")
+    entries = session.query(JournalEntry).count()
+
+    assert UncompleteRemittance(session).execute(entry_id).is_err
+    assert session.query(JournalEntry).count() == entries
+
+
+def test_uncompleting_a_pending_remittance_or_a_non_remittance_fails_and_writes_nothing(
+    session: Session, cash_rows, statement_row
+) -> None:
+    entry_id = _pending_out(session, cash_rows, statement_row)
+    _import(session, cash_rows, statement_row, (date(2026, 6, 1), -5, "Coffee"))
+    entries, groups = session.query(JournalEntry).count(), session.query(OperationGroup).count()
+
+    pending = UncompleteRemittance(session).execute(entry_id).unwrap_err()
+    coffee = UncompleteRemittance(session).execute(_entry_id(session, "Coffee")).unwrap_err()
+
+    assert isinstance(pending, RemittanceNotCompleted) and isinstance(coffee, NotARemittance)
+    assert session.query(JournalEntry).count() == entries
+    assert session.query(OperationGroup).count() == groups
+
+
+def test_a_reversal_is_all_or_nothing(session: Session, cash_rows, statement_row, monkeypatch: pytest.MonkeyPatch) -> None:
+    entry_id = _pending_out(session, cash_rows, statement_row)
+    completion_id = CompleteRemittance(session).execute(entry_id, Decimal(90000)).unwrap().completion_entry_id
+    entries, groups = session.query(JournalEntry).count(), session.query(OperationGroup).count()
+    monkeypatch.setattr(remittances_module, "set_completion_service", lambda *a, **k: Result.err(RuntimeError("boom")))
+
+    assert UncompleteRemittance(session).execute(entry_id).is_err
+
+    assert session.query(JournalEntry).count() == entries
+    assert session.query(OperationGroup).count() == groups
+    assert session.query(Classification).one().completion_entry_id == completion_id
+
+
+def test_an_entry_can_be_reversed_only_once(session: Session, cash_rows, statement_row) -> None:
+    entry_id = _pending_out(session, cash_rows, statement_row)
+    AddAccount(session).execute("People", AccountType.asset)  # the reversal replays the lots
+    completion_id = CompleteRemittance(session).execute(entry_id, Decimal(90000)).unwrap().completion_entry_id
+    UncompleteRemittance(session).execute(entry_id).unwrap()
+    session.query(Classification).one().completion_entry_id = completion_id
+
+    assert UncompleteRemittance(session).execute(entry_id).is_err
+
+
+def test_the_command_reports_that_the_remittance_is_pending_again(session: Session, cash_rows, statement_row) -> None:
+    entry_id = _pending_out(session, cash_rows, statement_row)
+    AddAccount(session).execute("People", AccountType.asset)  # the reversal replays the lots
+    CompleteRemittance(session).execute(entry_id, Decimal(90000)).unwrap()
+
+    result = CliRunner().invoke(cli, ["uncomplete-remittance", str(entry_id)], obj=lambda: session)
+
+    assert result.exit_code == 0, result.output
+    assert result.output.strip() == f"Remittance {entry_id} is pending again"
+
+
+def test_reclassify_turns_a_pending_remittance_into_a_transfer_when_the_target_is_an_own_account(
+    session: Session, cash_rows, statement_row
+) -> None:
+    entry_id = _pending_out(session, cash_rows, statement_row)
+
+    Reclassify(session).execute(entry_id, "Savings").unwrap()
+
+    assert _balance(session, PENDING_REMITTANCES) == Decimal(0)
+    assert _balance(session, "Savings") == Decimal(1012)
+    record = session.query(Classification).one()
+    assert record.kind is ClassificationKind.transfer and record.corrected is True
+    assert record.remittance_account_id is None and record.remittance_unit_id is None
+    assert ListPendingRemittances(session).execute().unwrap() == []
+
+
+def test_reclassify_refuses_a_completed_remittance_onto_an_own_account_too(
+    session: Session, cash_rows, statement_row
+) -> None:
+    entry_id = _pending_out(session, cash_rows, statement_row)
+    CompleteRemittance(session).execute(entry_id, Decimal(90000)).unwrap()
+    entries = session.query(JournalEntry).count()
+
+    refusal = Reclassify(session).execute(entry_id, "Savings").unwrap_err()
+
+    assert isinstance(refusal, RemittanceCompleted)
+    assert session.query(JournalEntry).count() == entries
+
+
+def test_a_reversed_remittance_can_be_reclassified(session: Session, cash_rows, statement_row) -> None:
+    entry_id = _pending_out(session, cash_rows, statement_row)
+    AddAccount(session).execute("People", AccountType.asset)
+    AddAccount(session).execute("Fees", AccountType.expense)
+    CompleteRemittance(session).execute(entry_id, Decimal(90000)).unwrap()
+    UncompleteRemittance(session).execute(entry_id).unwrap()
+
+    Reclassify(session).execute(entry_id, "Fees").unwrap()
+
+    assert _balance(session, "Fees") == Decimal(1012)
+    assert session.query(Classification).one().kind is ClassificationKind.category

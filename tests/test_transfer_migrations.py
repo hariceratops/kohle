@@ -11,6 +11,7 @@ from kohle.db.schema import HEAD_REVISION, alembic_config
 BEFORE_TRANSFER_RULES = "c7e2a9d4b185"
 TRANSFER_RULES = "e8b3c5a1d704"
 REMITTANCE_RULES = "f2a6d8c4e195"
+ENTRY_REVERSALS = "a9d3c7e1b406"
 
 
 def _columns(db: Path, table: str) -> set[str]:
@@ -52,7 +53,7 @@ def old_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, objec
 
 
 def test_head_is_pinned() -> None:
-    assert HEAD_REVISION == REMITTANCE_RULES
+    assert HEAD_REVISION == ENTRY_REVERSALS
 
 
 def test_existing_rows_come_out_as_categories_and_the_columns_round_trip(old_db) -> None:
@@ -198,7 +199,46 @@ def test_the_checks_reject_a_remittance_without_its_unit_and_a_stray_completion(
     conn.close()
 
 
-@pytest.mark.skip(reason="scaffold")
-def test_reversal_migration_round_trips_and_refuses_an_offending_row() -> None:
-    # TODO (135): §18.8 for migration c: a round trip when empty, a refusal with one reversal leaving the schema untouched
-    ...
+def test_the_reversal_column_round_trips_when_no_entry_reverses_another(transfer_db) -> None:
+    db, config = transfer_db
+
+    command.upgrade(config, ENTRY_REVERSALS)
+    assert "reverses_entry_id" in _columns(db, "journal_entries")
+    conn = sqlite3.connect(db)
+    assert conn.execute("SELECT reverses_entry_id FROM journal_entries").fetchall() == [(None,), (None,)]
+    conn.close()
+
+    command.downgrade(config, REMITTANCE_RULES)
+
+    assert "reverses_entry_id" not in _columns(db, "journal_entries")
+
+
+def test_downgrade_refuses_a_reversal_and_leaves_the_schema_untouched(transfer_db) -> None:
+    db, config = transfer_db
+    command.upgrade(config, ENTRY_REVERSALS)
+    conn = sqlite3.connect(db)
+    conn.execute("UPDATE journal_entries SET reverses_entry_id = 1 WHERE id = 2")
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(RuntimeError, match="Refusing to downgrade"):
+        command.downgrade(config, REMITTANCE_RULES)
+
+    assert "reverses_entry_id" in _columns(db, "journal_entries")
+
+
+def test_a_second_reversal_of_the_same_entry_is_rejected(transfer_db) -> None:
+    db, config = transfer_db
+    command.upgrade(config, ENTRY_REVERSALS)
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "INSERT INTO journal_entries (id, entry_date, reference, description, created_at, reverses_entry_id) "
+        "VALUES (3, '2026-04-04', 'r3', 'x', '2026-01-01', 1)"
+    )
+
+    with pytest.raises(sqlite3.IntegrityError, match="reverses_entry_id"):
+        conn.execute(
+            "INSERT INTO journal_entries (id, entry_date, reference, description, created_at, reverses_entry_id) "
+            "VALUES (4, '2026-04-04', 'r4', 'x', '2026-01-01', 1)"
+        )
+    conn.close()

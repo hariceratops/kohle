@@ -110,11 +110,26 @@ def post_entry(
     description: str,
     lines: list[LineSpec],
     counterparty: Counterparty | None = None,
+    reverses_entry_id: int | None = None,
 ) -> Result[JournalEntry, JournalError]:
     invalid = validate_lines(ctx, lines)
     if invalid:
         return Result.err(invalid)
-    return add_journal_entry_service(ctx, entry_date, reference, description, lines, counterparty)
+    return add_journal_entry_service(ctx, entry_date, reference, description, lines, counterparty, reverses_entry_id)
+
+
+def post_reversal(ctx: DbTransactionContext, entry: JournalEntry, description: str) -> Result[JournalEntry, JournalError]:
+    """Every line of `entry` with its side flipped, dated as `entry` and linked to
+    it. Quantity, price and cost are carried over unchanged: the lot replay
+    ignores the pair, so nothing is acquired or disposed of by it."""
+    lines = [
+        LineSpec(
+            line.account_id, line.unit_id, line.quantity, line.unit_price,
+            is_debit=not line.is_debit, cost=line.cost, price_unit_id=line.price_unit_id,
+        )
+        for line in entry.lines
+    ]
+    return post_entry(ctx, entry.entry_date, uuid4().hex, description, lines, reverses_entry_id=entry.id)
 
 
 @dataclass(frozen=True, slots=True)

@@ -142,12 +142,16 @@ class JournalEntry(base, Archivable):
     # accident, and NULL cannot be.
     counterparty_name: Mapped[str | None] = mapped_column(String, nullable=True)
     counterparty_iban: Mapped[str | None] = mapped_column(String, nullable=True)
+    # The entry this one exactly reverses. The lot replay treats an entry and
+    # its reversal as if neither were recorded; everything else reads both.
+    reverses_entry_id: Mapped[int | None] = mapped_column(ForeignKey("journal_entries.id"), nullable=True)
     lines: Mapped[list["JournalLine"]] = relationship(
         "JournalLine", back_populates="entry", cascade="all, delete-orphan"
     )
 
     __table_args__ = (
         UniqueConstraint("reference", name="uq_journal_entry_reference"),
+        UniqueConstraint("reverses_entry_id", name="uq_journal_entry_reverses"),
     )
 
     def __eq__(self, other) -> bool:

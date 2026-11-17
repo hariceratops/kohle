@@ -36,6 +36,7 @@ _WRITE_ARGV: dict[str, list[str]] = {
     "join-transfer": ["join-transfer", "2", "1"],
     "unjoin-transfer": ["unjoin-transfer", "2"],
     "complete-remittance": ["complete-remittance", "1", "90000"],
+    "uncomplete-remittance": ["uncomplete-remittance", "1"],
     "set-price-source": ["set-price-source", "IE00B4L5Y983", "alphavantage", "IWDA"],
     "fetch-prices": ["fetch-prices"],
     "set-sampling-rules": ["set-sampling-rules", "salary: last day"],

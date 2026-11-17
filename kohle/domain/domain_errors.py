@@ -404,6 +404,15 @@ class RemittanceCompleted(ClassificationError):
         )
 
 
+class RemittanceNotCompleted(ClassificationError):
+    def __init__(self, entry_id: int) -> None:
+        super().__init__()
+        self.entry_id = entry_id
+
+    def __str__(self) -> str:
+        return f"Remittance {self.entry_id} is not completed"
+
+
 class SplitError(Exception):
     pass
 

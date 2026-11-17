@@ -126,6 +126,18 @@ received from the pending bucket, dated at the original line. The gain over the
 lots' cost shows in `realised` under the currency's unit. If the account holds
 fewer rupees than `AMOUNT`, the command fails and writes nothing.
 
+If the amount was mistyped, `uncomplete-remittance ENTRY_ID` reverses the
+completion and puts the remittance back in pending, and `complete-remittance`
+then redoes it with the right amount. It works in both directions. The reversal
+is a new entry dated like the completion and linked to it, so nothing is
+edited or deleted and the audit trail keeps every step. The lot replay treats
+the completion and its reversal as if neither had been recorded: for an
+incoming remittance the consumed lots come back with their dates and costs and
+the gain disappears from `realised`, and for an outgoing one the lot is gone
+without any gain or loss being booked. Reversing an outgoing completion fails
+and writes nothing if a later spend of the currency would then be short, and a
+remittance that is not completed cannot be reversed.
+
 ## Opening balances
 
 Holdings you already have when you start enter as an opening entry, not as a

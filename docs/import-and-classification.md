@@ -470,6 +470,14 @@ of 88.00 euros under the unit `INR`, and nothing remains pending. If
 `IndianBank` does not hold that many rupees, the command fails and writes
 nothing.
 
+A completion with a mistyped amount is corrected with
+`uncomplete-remittance ENTRY_ID`, which reverses it by a new entry, puts the
+remittance back in pending (it is listed by `list-pending-remittances` again)
+and lets `complete-remittance` redo it with the right amount. The record stays
+a remittance and is not marked as a human correction, since no category was
+changed. [Recording entries](recording-entries.md) explains what the reversal
+does to the lots and to `realised`.
+
 ## Conditions
 
 A rule's `when` table holds one or more of these keys, and **all** of them must
