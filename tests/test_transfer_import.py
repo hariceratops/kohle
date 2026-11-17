@@ -1,6 +1,6 @@
 """Layer 2 — import-statement end to end for transfers (issues 126-128). Design §18.2-18.3."""
 
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 from sqlalchemy import func, select
@@ -8,16 +8,20 @@ from sqlalchemy.orm import Session
 
 from kohle.core.result import Result
 from kohle.domain.models import (
+    Account,
     AccountType,
     Classification,
     ClassificationKind,
     JournalEntry,
+    JournalLine,
     OperationGroup,
     Rule,
     RuleKind,
 )
 from kohle.use_cases import journal as journal_module
+from kohle.use_cases import transfers as transfers_module
 from kohle.use_cases.accounts import AddAccount
+from kohle.use_cases.classification import ListUnclassified
 from kohle.use_cases.journal import ImportStatement
 from kohle.use_cases.rules import ApplyRuleFile, PlanRuleFile, ShowRules
 
@@ -238,3 +242,212 @@ def test_a_ledger_without_transfer_rules_imports_as_before(session: Session, cas
 
     assert _balances(session) == {"Checking": -500, "Unclassified Expense": 500}
     assert session.query(Classification).one().kind is ClassificationKind.category
+
+
+CHECKING_IBAN = "DE02120300000000202051"
+MOVE_RULES = _transfer_rule("Savings", SAVINGS_IBAN) + "\n" + _transfer_rule("Checking", CHECKING_IBAN)
+
+
+def _out(statement_row, day: date = date(2026, 4, 3), amount: float = -500, **kwargs) -> dict:
+    return statement_row(day, amount, "Move to savings", "Erika Beispiel", kwargs.pop("iban", SAVINGS_IBAN), **kwargs)
+
+
+def _in(statement_row, day: date = date(2026, 4, 4), amount: float = 500, **kwargs) -> dict:
+    return statement_row(day, amount, "Move from checking", "Erika Beispiel", kwargs.pop("iban", CHECKING_IBAN), **kwargs)
+
+
+def _unclassified(session: Session) -> list:
+    return ListUnclassified(session).execute().unwrap()
+
+
+def _by_kind(session: Session, kind: ClassificationKind) -> list[Classification]:
+    return session.query(Classification).filter(Classification.kind == kind).order_by(Classification.id).all()
+
+
+@pytest.mark.parametrize(("checking_first", "move_day"), [(True, date(2026, 4, 3)), (False, date(2026, 4, 4))])
+def test_the_transfer_counts_once_whichever_statement_arrives_first(
+    session: Session, cash_rows, statement_row, checking_first: bool, move_day: date
+) -> None:
+    _ledger(session)
+    _apply(session, MOVE_RULES).unwrap()
+    checking = cash_rows([_out(statement_row)])
+    savings = cash_rows([_in(statement_row)])
+
+    order = [("Checking", checking), ("Savings", savings)]
+    for account, rows in order if checking_first else reversed(order):
+        assert ImportStatement(session).execute(account, rows).unwrap() == 1
+
+    balances = _balances(session)
+    assert (balances["Checking"], balances["Savings"]) == (-500, 500)
+    assert all(total == 0 for name, total in balances.items() if name not in ("Checking", "Savings"))
+    assert _unclassified(session) == []
+    transfer = _by_kind(session, ClassificationKind.transfer)
+    assert len(transfer) == 1 and transfer[0].entry.entry_date == move_day
+    assert transfer[0].final_account.name == ("Savings" if checking_first else "Checking")
+    assert len(_by_kind(session, ClassificationKind.mirror)) == 1
+
+
+def test_re_importing_either_statement_writes_nothing(session: Session, cash_rows, statement_row) -> None:
+    _ledger(session)
+    _apply(session, MOVE_RULES).unwrap()
+    checking, savings = cash_rows([_out(statement_row)]), cash_rows([_in(statement_row)])
+    ImportStatement(session).execute("Checking", checking).unwrap()
+    ImportStatement(session).execute("Savings", savings).unwrap()
+    entries, groups = session.query(JournalEntry).count(), session.query(OperationGroup).count()
+
+    assert ImportStatement(session).execute("Savings", savings).unwrap() == 0
+    assert ImportStatement(session).execute("Checking", checking).unwrap() == 0
+
+    assert session.query(JournalEntry).count() == entries
+    assert session.query(OperationGroup).count() == groups
+
+
+def test_the_absorbed_row_has_its_own_record_naming_the_move_it_joined(
+    session: Session, cash_rows, statement_row
+) -> None:
+    _ledger(session)
+    _apply(session, MOVE_RULES).unwrap()
+    ImportStatement(session).execute("Checking", cash_rows([_out(statement_row)])).unwrap()
+    ImportStatement(session).execute("Savings", cash_rows([_in(statement_row)])).unwrap()
+
+    transfer = _by_kind(session, ClassificationKind.transfer)[0]
+    mirror = _by_kind(session, ClassificationKind.mirror)[0]
+
+    assert mirror.mirror_of_entry_id == transfer.journal_entry_id
+    assert mirror.journal_entry_id != transfer.journal_entry_id
+    assert mirror.proposed_account_id == session.query(Account).filter_by(name="Unclassified Income").one().id
+    assert mirror.final_account.name == "Savings"
+    assert mirror.matched_rule_id is None
+    assert not mirror.corrected
+
+
+def test_the_absorbed_row_leaves_a_net_zero_pair_beside_the_move(session: Session, cash_rows, statement_row) -> None:
+    _ledger(session)
+    _apply(session, MOVE_RULES).unwrap()
+    ImportStatement(session).execute("Checking", cash_rows([_out(statement_row)])).unwrap()
+    ImportStatement(session).execute("Savings", cash_rows([_in(statement_row)])).unwrap()
+
+    mirror = _by_kind(session, ClassificationKind.mirror)[0]
+    savings = session.query(Account).filter_by(name="Savings").one()
+    lines = session.query(JournalLine).filter(JournalLine.account_id == savings.id).all()
+    own = [line for line in lines if line.entry_id != _by_kind(session, ClassificationKind.transfer)[0].journal_entry_id]
+
+    assert len(own) == 2
+    assert sorted(line.is_debit for line in own) == [False, True]
+    assert {line.value for line in own} == {500}
+    assert mirror.entry.entry_date == date(2026, 4, 4)
+    assert session.query(JournalEntry).count() == 3
+
+
+def test_a_rule_cannot_classify_a_mirror(session: Session, cash_rows, statement_row) -> None:
+    _ledger(session)
+    _apply(session, _transfer_rule("Savings") + '\n[[rule]]\naccount = "Groceries"\n[rule.when]\ndescription = "Move"\n').unwrap()
+    ImportStatement(session).execute("Checking", cash_rows([_out(statement_row)])).unwrap()
+    ImportStatement(session).execute("Savings", cash_rows([_in(statement_row)])).unwrap()
+
+    mirror = _by_kind(session, ClassificationKind.mirror)[0]
+
+    assert mirror.matched_rule_id is None
+    assert "Groceries" not in _balances(session)
+
+
+def test_a_fall_through_that_was_imported_first_is_cancelled_when_the_move_posts(
+    session: Session, cash_rows, statement_row
+) -> None:
+    _ledger(session)
+    _apply(session, _transfer_rule("Savings", SAVINGS_IBAN)).unwrap()
+    ImportStatement(session).execute("Savings", cash_rows([_in(statement_row)])).unwrap()
+    assert len(_unclassified(session)) == 1
+    groups = session.query(OperationGroup).count()
+
+    ImportStatement(session).execute("Checking", cash_rows([_out(statement_row)])).unwrap()
+
+    assert session.query(OperationGroup).count() == groups + 1
+    assert _unclassified(session) == []
+    balances = _balances(session)
+    assert (balances["Checking"], balances["Savings"]) == (-500, 500)
+    assert balances["Unclassified Income"] == 0
+    transfer = _by_kind(session, ClassificationKind.transfer)[0]
+    mirror = _by_kind(session, ClassificationKind.mirror)[0]
+    assert transfer.entry.entry_date == date(2026, 4, 3)
+    assert mirror.mirror_of_entry_id == transfer.journal_entry_id
+    assert not mirror.corrected
+
+
+@pytest.mark.parametrize(("days", "absorbed"), [(3, True), (4, False)])
+def test_the_window_is_three_days_after_the_transfer(
+    session: Session, cash_rows, statement_row, days: int, absorbed: bool
+) -> None:
+    _ledger(session)
+    _apply(session, _transfer_rule("Savings")).unwrap()
+    ImportStatement(session).execute("Checking", cash_rows([_out(statement_row)])).unwrap()
+
+    late = _in(statement_row, day=date(2026, 4, 3) + timedelta(days=days))
+    ImportStatement(session).execute("Savings", cash_rows([late])).unwrap()
+
+    assert (len(_by_kind(session, ClassificationKind.mirror)) == 1) is absorbed
+    assert (len(_unclassified(session)) == 0) is absorbed
+    assert _balances(session)["Savings"] == (500 if absorbed else 1000)
+
+
+def test_a_known_source_iban_must_match_the_rows_counterparty(session: Session, cash_rows, statement_row) -> None:
+    AddAccount(session).execute("Checking", AccountType.asset, CHECKING_IBAN)
+    AddAccount(session).execute("Savings", AccountType.asset)
+    _apply(session, _transfer_rule("Savings")).unwrap()
+    ImportStatement(session).execute("Checking", cash_rows([_out(statement_row)])).unwrap()
+
+    stranger = _in(statement_row, iban="DE89370400440532013000", reference="other")
+    ImportStatement(session).execute("Savings", cash_rows([stranger])).unwrap()
+    assert _by_kind(session, ClassificationKind.mirror) == []
+    assert len(_unclassified(session)) == 1
+
+    spaced = _in(statement_row, iban="de02 1203 0000 0000 2020 51", reference="mine", amount=500)
+    ImportStatement(session).execute("Savings", cash_rows([spaced])).unwrap()
+    assert len(_by_kind(session, ClassificationKind.mirror)) == 1
+
+
+def test_rows_pair_with_the_nearest_transfer_and_a_transfer_pairs_only_once(
+    session: Session, cash_rows, statement_row
+) -> None:
+    _ledger(session)
+    _apply(session, _transfer_rule("Savings")).unwrap()
+    ImportStatement(session).execute(
+        "Checking",
+        cash_rows([_out(statement_row, day=date(2026, 4, 1)), _out(statement_row, day=date(2026, 4, 4))]),
+    ).unwrap()
+    early, late = _by_kind(session, ClassificationKind.transfer)
+
+    rows = [_in(statement_row, day=date(2026, 4, 3)), _in(statement_row, day=date(2026, 4, 3)), _in(statement_row, day=date(2026, 4, 3))]
+    ImportStatement(session).execute("Savings", cash_rows(rows)).unwrap()
+
+    mirrors = _by_kind(session, ClassificationKind.mirror)
+    assert [m.mirror_of_entry_id for m in mirrors] == [late.journal_entry_id, early.journal_entry_id]
+    assert len(_unclassified(session)) == 1
+
+
+def test_a_counterpart_that_was_never_imported_leaves_one_move(session: Session, cash_rows, statement_row) -> None:
+    AddAccount(session).execute("Checking", AccountType.asset)
+    AddAccount(session).execute("Cash", AccountType.asset)
+    _apply(session, _transfer_rule("Cash", SAVINGS_IBAN)).unwrap()
+
+    ImportStatement(session).execute("Checking", cash_rows([_out(statement_row)])).unwrap()
+
+    assert _balances(session) == {"Checking": -500, "Cash": 500}
+    assert _unclassified(session) == []
+
+
+def test_a_fault_while_absorbing_leaves_nothing_written_and_no_group(
+    session: Session, cash_rows, statement_row, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _ledger(session)
+    _apply(session, MOVE_RULES).unwrap()
+    ImportStatement(session).execute("Checking", cash_rows([_out(statement_row)])).unwrap()
+    entries, groups = session.query(JournalEntry).count(), session.query(OperationGroup).count()
+    classifications = session.query(Classification).count()
+    monkeypatch.setattr(transfers_module, "set_mirror_service", lambda *args, **kwargs: Result.err(RuntimeError("boom")))
+
+    assert ImportStatement(session).execute("Savings", cash_rows([_in(statement_row)])).is_err
+
+    assert session.query(JournalEntry).count() == entries
+    assert session.query(OperationGroup).count() == groups
+    assert session.query(Classification).count() == classifications

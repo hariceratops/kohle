@@ -1,6 +1,7 @@
 """Layer 1 — pure mirror matching, rule file and replay (issues 126-127, 135). Design §18.1."""
 
 import hashlib
+from datetime import date, timedelta
 from decimal import Decimal
 
 import pytest
@@ -19,6 +20,13 @@ from kohle.use_cases.rules import (
     plan_rule_changes,
     render_rule_file,
     rule_set_base,
+)
+from kohle.use_cases.transfers import (
+    RowSide,
+    TransferSide,
+    is_mirror,
+    nearest_row,
+    nearest_transfer,
 )
 
 NOBODY = Counterparty(None, None)
@@ -135,7 +143,82 @@ def test_changing_the_kind_retires_the_rule_and_adds_a_new_one() -> None:
     assert len(plan.added) == 1 and plan.added[0].rule.kind is RuleKind.transfer
 
 
+SOURCE_IBAN = "DE44500105175407324931"
+
+
+def _transfer(day: date, amount: str = "-500.00", entry_id: int = 1, iban: str | None = None) -> TransferSide:
+    return TransferSide(entry_id, day, Decimal(amount), 9, iban)
+
+
+def _row(day: date, amount: str = "500.00", iban: str | None = None) -> RowSide:
+    return RowSide(day, Decimal(amount), iban)
+
+
+APRIL_3 = date(2026, 4, 3)
+
+
+@pytest.mark.parametrize(
+    ("days", "expected"), [(-4, False), (-3, True), (0, True), (3, True), (4, False)]
+)
+def test_the_window_is_three_calendar_days_either_way_inclusive(days: int, expected: bool) -> None:
+    assert is_mirror(_transfer(APRIL_3), _row(APRIL_3 + timedelta(days=days))) is expected
+
+
+@pytest.mark.parametrize(("amount", "expected"), [("500.00000000", True), ("500", True), ("500.01", False)])
+def test_the_amount_must_be_exactly_equal(amount: str, expected: bool) -> None:
+    assert is_mirror(_transfer(APRIL_3, "-500.00"), _row(APRIL_3, amount)) is expected
+
+
+def test_a_row_going_the_same_way_is_not_a_mirror() -> None:
+    assert not is_mirror(_transfer(APRIL_3, "-500.00"), _row(APRIL_3, "-500.00"))
+
+
+def test_an_inbound_transfer_is_mirrored_by_an_outgoing_row() -> None:
+    assert is_mirror(_transfer(APRIL_3, "500.00"), _row(APRIL_3, "-500.00"))
+
+
+@pytest.mark.parametrize(
+    ("source", "row", "expected"),
+    [
+        (SOURCE_IBAN, "de44 5001 0517 5407 3249 31", True),
+        (SOURCE_IBAN, "DE02120300000000202051", False),
+        (None, "DE02120300000000202051", True),
+        (SOURCE_IBAN, None, True),
+    ],
+)
+def test_the_ibans_must_agree_when_both_are_known(source: str | None, row: str | None, expected: bool) -> None:
+    assert is_mirror(_transfer(APRIL_3, iban=source), _row(APRIL_3, iban=row)) is expected
+
+
+def test_the_nearest_transfer_wins() -> None:
+    near, far = _transfer(date(2026, 4, 4), entry_id=2), _transfer(date(2026, 4, 1), entry_id=1)
+
+    assert nearest_transfer(_row(date(2026, 4, 3)), [far, near]) is near
+
+
+def test_equal_distance_goes_to_the_earlier_date_then_the_lower_entry_id() -> None:
+    before, after = _transfer(date(2026, 4, 2), entry_id=5), _transfer(date(2026, 4, 4), entry_id=1)
+    same_day_low, same_day_high = _transfer(date(2026, 4, 2), entry_id=3), _transfer(date(2026, 4, 2), entry_id=7)
+
+    assert nearest_transfer(_row(date(2026, 4, 3)), [after, before]) is before
+    assert nearest_transfer(_row(date(2026, 4, 3)), [same_day_high, same_day_low]) is same_day_low
+
+
+def test_nothing_within_the_window_gives_none() -> None:
+    assert nearest_transfer(_row(date(2026, 4, 20)), [_transfer(APRIL_3)]) is None
+    assert nearest_row(_transfer(APRIL_3), [(1, _row(date(2026, 4, 20)))]) is None
+
+
+def test_the_nearest_row_wins_and_ties_go_to_the_earlier_date_then_the_lower_id() -> None:
+    transfer = _transfer(APRIL_3)
+    rows = [(4, _row(date(2026, 4, 5))), (3, _row(date(2026, 4, 4))), (2, _row(date(2026, 4, 2))), (1, _row(date(2026, 4, 2)))]
+
+    assert nearest_row(transfer, rows) == 1
+    assert nearest_row(transfer, rows[:3]) == 2
+    assert nearest_row(transfer, rows[:2]) == 3
+
+
 @pytest.mark.skip(reason="scaffold")
-def test_is_mirror_window_amount_direction_and_iban() -> None:
-    # TODO: §18.1: is_mirror table (days -4..+4, exact amount, same sign, IBAN cases), nearest-candidate tie-breaks, match_rule self-counterpart skip, rule-file rejections and round trip, lots.replay with a reversal pair
+def test_lots_replay_nets_a_completion_and_its_reversal_to_nothing() -> None:
+    # TODO: §18.1 (issue 135): lots.replay with a reversal pair
     ...

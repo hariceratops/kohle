@@ -68,6 +68,14 @@ from kohle.use_cases.posting import (
     validate_lines,  # noqa: F401  (re-exported: old import path)
 )
 from kohle.use_cases.rules import compile_rules, match_rule, stored_rules
+from kohle.use_cases.transfers import (
+    RowSide,
+    absorb,
+    absorb_counterpart_fall_through,
+    account_ibans,
+    nearest_transfer,
+    open_transfers_into,
+)
 from kohle.use_cases.units import get_or_create_unit
 
 
@@ -445,6 +453,15 @@ class ImportStatement(UnitOfWork[int, ImportStatementError]):
                 return Result.err(rules_res.unwrap_err())
             compiled = compile_rules(rules_res.unwrap())
 
+            ibans_res = account_ibans(ctx)
+            if ibans_res.is_err:
+                return Result.err(ibans_res.unwrap_err())
+            ibans = ibans_res.unwrap()
+            open_transfers_res = open_transfers_into(ctx, account.id, ibans)
+            if open_transfers_res.is_err:
+                return Result.err(open_transfers_res.unwrap_err())
+            open_transfers = open_transfers_res.unwrap()
+
             imported = 0
             for row, reference in new_rows:
                 match row:
@@ -455,8 +472,15 @@ class ImportStatement(UnitOfWork[int, ImportStatementError]):
                             _optional_str(row.counterparty_name),
                             _optional_str(row.counterparty_iban),
                         )
-                        matched = match_rule(
-                            compiled, row.description, counterparty, amount, statement_account_id=account.id
+                        side = RowSide(row.entry_date, amount, counterparty.iban)
+                        # Before the rules, so no rule can also classify a mirror.
+                        mirror_of = nearest_transfer(side, open_transfers)
+                        matched = (
+                            None
+                            if mirror_of is not None
+                            else match_rule(
+                                compiled, row.description, counterparty, amount, statement_account_id=account.id
+                            )
                         )
                         # A matched rule whose account has since gained a child fails
                         # the import loudly through validate_lines, rather than falling
@@ -503,6 +527,19 @@ class ImportStatement(UnitOfWork[int, ImportStatementError]):
                         )
                         if classification_res.is_err:
                             return Result.err(classification_res.unwrap_err())
+                        classification = classification_res.unwrap()
+
+                        if mirror_of is not None:
+                            absorbed = absorb(ctx, classification, mirror_of.entry_id, by_human=False)
+                            if absorbed.is_err:
+                                return Result.err(absorbed.unwrap_err())
+                            open_transfers.remove(mirror_of)
+                        elif classification.kind is ClassificationKind.transfer:
+                            joined = absorb_counterpart_fall_through(
+                                ctx, classification, (expense_id, income_id), ibans
+                            )
+                            if joined.is_err:
+                                return Result.err(joined.unwrap_err())
                     case SecurityRow():
                         # Both accounts are named on the command line, so there
                         # is nothing for a rule to decide and no classification.

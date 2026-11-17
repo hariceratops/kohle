@@ -1,11 +1,17 @@
 from collections.abc import Iterable
 
-from sqlalchemy import exists
+from sqlalchemy import and_, exists, select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from kohle.core.result import Result
 from kohle.domain.domain_errors import ClassificationError, NoClassificationForEntry
-from kohle.domain.models import Classification, ClassificationKind, JournalEntry, Split
+from kohle.domain.models import (
+    Classification,
+    ClassificationKind,
+    JournalEntry,
+    JournalLine,
+    Split,
+)
 from kohle.infrastructure.crud import crud_create, crud_retrieve, crud_update
 from kohle.infrastructure.transaction_context import DbTransactionContext
 
@@ -161,15 +167,18 @@ def set_rerun_outcome_service(
 
 @crud_retrieve
 def rerun_candidates_service(
-    ctx: DbTransactionContext, bucket_account_ids: Iterable[int]
+    ctx: DbTransactionContext, bucket_account_ids: Iterable[int], statement_account_id: int | None = None
 ) -> Result[list[Classification], ClassificationError]:
     """The untouched fall-throughs: still on a bucket, and neither a rule nor
     a human nor an earlier classify-rules run has decided them. Split lines
     are left out because reclassify refuses them (the bucket no longer holds
-    the full amount)."""
+    the full amount).
+
+    With `statement_account_id`, only those imported into that account: the
+    entry has a line there that is not the counterpart line."""
 
     def op(session: Session) -> list[Classification]:
-        return (
+        query = (
             session.query(Classification)
             .join(JournalEntry, Classification.journal_entry_id == JournalEntry.id)
             .options(
@@ -182,6 +191,72 @@ def rerun_candidates_service(
                 Classification.rerun_rule_id.is_(None),
                 Classification.corrected.is_(False),
                 ~exists().where(Split.journal_entry_id == Classification.journal_entry_id),
+            )
+        )
+        if statement_account_id is not None:
+            query = query.filter(
+                exists().where(
+                    and_(
+                        JournalLine.entry_id == Classification.journal_entry_id,
+                        JournalLine.account_id == statement_account_id,
+                        JournalLine.account_id != Classification.proposed_account_id,
+                    )
+                )
+            )
+        return query.order_by(JournalEntry.entry_date.asc(), Classification.journal_entry_id.asc()).all()
+
+    return ctx.run(op).map_err(lambda err: ClassificationError(str(err)))
+
+
+@crud_update
+def set_mirror_service(
+    ctx: DbTransactionContext,
+    classification_id: int,
+    final_account_id: int,
+    mirror_of_entry_id: int,
+    by_human: bool,
+) -> Result[Classification, ClassificationError]:
+    """The line is the other side of a transfer: its own posting is cancelled
+    onto `final_account_id`, and the transfer is named by the entry id of its
+    statement line. `corrected` is set only when a human made the call."""
+
+    def op(session: Session) -> Classification | None:
+        classification = session.get(Classification, classification_id)
+        if classification is not None:
+            classification.kind = ClassificationKind.mirror
+            classification.final_account_id = final_account_id
+            classification.mirror_of_entry_id = mirror_of_entry_id
+            classification.corrected = classification.corrected or by_human
+        return classification
+
+    return (
+        ctx.run(op)
+        .map_err(lambda err: ClassificationError(str(err)))
+        .and_then(lambda classification:
+            Result.ok(classification)
+            if classification is not None
+            else Result.err(ClassificationError(f"Classification id {classification_id} not found"))
+        )
+    )
+
+
+@crud_retrieve
+def open_transfers_service(
+    ctx: DbTransactionContext, counterpart_id: int
+) -> Result[list[Classification], ClassificationError]:
+    """Transfers into `counterpart_id` that no row has been absorbed into yet,
+    in `(entry_date, entry id)` order, with the entry and its lines loaded."""
+
+    def op(session: Session) -> list[Classification]:
+        joined = select(Classification.mirror_of_entry_id).where(Classification.mirror_of_entry_id.is_not(None))
+        return (
+            session.query(Classification)
+            .join(JournalEntry, Classification.journal_entry_id == JournalEntry.id)
+            .options(selectinload(Classification.entry).selectinload(JournalEntry.lines))
+            .filter(
+                Classification.kind == ClassificationKind.transfer,
+                Classification.final_account_id == counterpart_id,
+                Classification.journal_entry_id.not_in(joined),
             )
             .order_by(JournalEntry.entry_date.asc(), Classification.journal_entry_id.asc())
             .all()

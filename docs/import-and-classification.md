@@ -212,6 +212,8 @@ $ kohle-cli apply-rules transfer-rules.toml --yes
 Applied: 2 added, 0 retired, 0 reordered, 0 note changed, 0 unchanged
 $ kohle-cli import-statement kohle-deutsche-bank Checking transfers.csv
 Import succeeded, 2 entries imported
+$ kohle-cli import-statement kohle-deutsche-bank Savings savings.csv
+Import succeeded, 1 entries imported
 $ kohle-cli list-unclassified
 No unclassified lines
 $ kohle-cli balance Savings
@@ -220,6 +222,19 @@ unit                     quantity  price    price date      market value  status
 EUR                        500.00  -        -                     500.00  -                   1.00
 Total (base currency)      500.00  -        -                     500.00  -                   -
 ```
+
+The second import is Savings' own statement, whose row for the same 500.00
+arrives a day later. Kohle recognises it as the other side of the move already
+posted and absorbs it: the transfer is counted once, nothing lands in an
+unclassified account, and the row needs no rule. A row is the other side of a
+transfer when it goes the opposite way for exactly the same amount and is dated
+within three calendar days of the move, inclusive. If both accounts have an
+IBAN, the row must also name the account the money came from. When several
+transfers could match, the nearest date wins. The check runs before the rules,
+so a rule never classifies such a row, and the two statements can be imported
+in either order: the move is dated by the statement that posted it. A row more
+than three days away is not recognised and falls through to its bucket like any
+other.
 
 Kohle never decides that a rule is a transfer from the type of its target: only
 the `transfer` key does. A rule written with `account = "Transfers"`, naming an

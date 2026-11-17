@@ -451,7 +451,7 @@ StatementError = MalformedStatementRow | DuplicateReferenceInStatement | Missing
 
 ImportStatementError = \
         StatementError | \
-        AccountNotFoundError | \
+        AccountError | \
         JournalError | \
         UnitError | \
         RuleError | \

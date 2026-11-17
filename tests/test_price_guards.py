@@ -45,6 +45,7 @@ PRICE_MODULES = ("kohle.plugin.price_plugin", "kohle.services.price_services", "
 RECORDING_MODULES = (
     "kohle.use_cases.journal",
     "kohle.use_cases.posting",
+    "kohle.use_cases.transfers",
     "kohle.use_cases.classification",
     "kohle.use_cases.splitting",
     # Not a recording module: listed because realised gain must come from recorded prices only.
@@ -83,6 +84,7 @@ def _guarded_sources() -> dict[str, str]:
         for path in (
             "kohle/use_cases/journal.py",
             "kohle/use_cases/posting.py",
+            "kohle/use_cases/transfers.py",
             "kohle/use_cases/budgeting.py",
             "kohle/use_cases/classification.py",
             "kohle/use_cases/splitting.py",

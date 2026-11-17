@@ -18,6 +18,7 @@ from kohle.domain.models import (
     AccountType,
     Classification,
     JournalEntry,
+    JournalLine,
     Unit,
     UnitKind,
 )
@@ -197,3 +198,15 @@ def statement_amount(classification: Classification) -> Decimal:
     debited exactly when the amount was negative."""
     line = next(line for line in classification.entry.lines if line.account_id == classification.proposed_account_id)
     return -line.value if line.is_debit else line.value
+
+
+def counterpart_line(classification: Classification) -> JournalLine:
+    """The line on proposed_account_id: where the import put the other side."""
+    return next(line for line in classification.entry.lines if line.account_id == classification.proposed_account_id)
+
+
+def statement_line(classification: Classification) -> JournalLine:
+    """The other line: the row's own account. For a category rule aimed at the
+    importing account both lines sit on one account, and it is that one."""
+    counterpart = counterpart_line(classification)
+    return next((line for line in classification.entry.lines if line is not counterpart), counterpart)
