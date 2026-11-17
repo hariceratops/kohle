@@ -123,6 +123,6 @@ def balance_sheet_accounts(ctx: DbTransactionContext) -> Result[BalanceSheetAcco
 
 def get_or_create_account(ctx: DbTransactionContext, name: str, account_type: AccountType):
     existing = get_account_by_name_service(ctx, name)
-    if existing.is_ok:
+    if existing.is_ok or not isinstance(existing.unwrap_err(), AccountNotFoundError):
         return existing
     return add_account_service(ctx, name, account_type)

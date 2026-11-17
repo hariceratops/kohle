@@ -66,7 +66,6 @@ from kohle.use_cases.posting import (
     Total,
     _cross_unit_lines,
     post_entry,
-    validate_lines,  # noqa: F401  (re-exported: old import path)
 )
 from kohle.use_cases.rules import compile_rules, match_rule, stored_rules
 from kohle.use_cases.transfers import (

@@ -62,9 +62,8 @@ from kohle.use_cases.transfers import (
     unabsorb,
 )
 
-# classification.py may import from journal.py (post_entry, the bucket names)
-# and reaches split_by_entry_service in the services layer directly, never
-# through splitting.py — splitting.py already imports this module's sibling
+# classification.py reaches split_by_entry_service in the services layer
+# directly, never through splitting.py — splitting.py already imports this module's sibling
 # services, and importing splitting.py here would close that cycle (design
 # §1). journal.py must never import from here — the import loop calls
 # add_classification_service directly in the services layer instead of
