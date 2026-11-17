@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from kohle.core.result import Result
 from kohle.domain.domain_errors import (
     AccountError,
+    AccountNotFoundError,
     EmptyAccountName,
     ParentAccountNotFound,
     ParentHasPostings,
@@ -71,6 +72,23 @@ class ListChildAccounts(UnitOfWork[list[Account], AccountError]):
         return self._run(use_case)
 
 
+def own_account(account: Account, people_ids: set[int]) -> bool:
+    """Asset or liability, outside the People subtree: the one definition of
+    "own account", shared by net worth and transfer rules."""
+    return account.type in (AccountType.asset, AccountType.liability) and account.id not in people_ids
+
+
+def people_account_ids(ctx: DbTransactionContext) -> Result[set[int], AccountError]:
+    """The People subtree's ids; empty when the root does not exist yet, so a
+    ledger that never used People is not an error for callers that only need to
+    exclude it."""
+    people_res = get_account_by_name_service(ctx, PEOPLE_ROOT)
+    if people_res.is_err:
+        err = people_res.unwrap_err()
+        return Result.ok(set()) if isinstance(err, AccountNotFoundError) else Result.err(err)
+    return descendant_account_ids_service(ctx, people_res.unwrap().id).map(set)
+
+
 @dataclass(frozen=True, slots=True)
 class BalanceSheetAccounts:
     own: dict[int, str]
@@ -95,9 +113,6 @@ def balance_sheet_accounts(ctx: DbTransactionContext) -> Result[BalanceSheetAcco
         return Result.err(accounts_res.unwrap_err())
     accounts = accounts_res.unwrap()
     return Result.ok(BalanceSheetAccounts(
-        own={
-            a.id: a.name for a in accounts
-            if a.type in (AccountType.asset, AccountType.liability) and a.id not in people_ids
-        },
+        own={a.id: a.name for a in accounts if own_account(a, people_ids)},
         people={a.id: a.name for a in accounts if a.id in people_ids},
     ))

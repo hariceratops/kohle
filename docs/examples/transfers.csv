@@ -1,0 +1,8 @@
+AktivKonto;123 456 78;DE89370400440532013000;EUR
+06/01/2026 - 06/30/2026
+Old balance;;;;1500.00;EUR
+Transactions pending are not included in this report.
+Booking date;Value date;Transaction Type;Beneficiary / Originator;Payment Details;IBAN / Account Number;BIC;Customer Reference;Mandate Reference;Creditor ID;Compensation amount;Original Amount;Ultimate creditor;Number of transactions;Number of cheques;Debit;Credit;Currency
+06/03/2026;06/03/2026;SEPA Transfer;Erika Beispiel;Move to savings;DE44500105175407324931;INGDDEFFXXX;;;;;;;;;-500.00;;EUR
+06/10/2026;06/10/2026;Debit Card Payment;FRISCHMARKT;Card 0001 FRISCHMARKT 09-06-2026T17:20:41 purchase;;;;;;;;;;;-41.30;;EUR
+Account balance;06/30/2026;;;958.70;EUR

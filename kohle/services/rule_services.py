@@ -4,17 +4,22 @@ from sqlalchemy.orm import Session, joinedload
 
 from kohle.core.result import Result
 from kohle.domain.domain_errors import RuleError, RuleNotFoundError
-from kohle.domain.models import Rule
+from kohle.domain.models import Rule, RuleKind
 from kohle.infrastructure.crud import crud_create, crud_delete, crud_retrieve, crud_update
 from kohle.infrastructure.transaction_context import DbTransactionContext
 
 
 @crud_create
 def add_rule_service(
-    ctx: DbTransactionContext, condition: str, account_id: int, priority: int, note: str | None = None
+    ctx: DbTransactionContext,
+    condition: str,
+    account_id: int,
+    priority: int,
+    note: str | None = None,
+    kind: RuleKind = RuleKind.category,
 ) -> Result[Rule, RuleError]:
     def op(session: Session) -> Rule:
-        rule = Rule(condition=condition, account_id=account_id, priority=priority, note=note)
+        rule = Rule(condition=condition, account_id=account_id, priority=priority, note=note, kind=kind)
         session.add(rule)
         return rule
 
@@ -25,7 +30,7 @@ def add_rule_service(
 def update_rule_service(
     ctx: DbTransactionContext, rule_id: int, priority: int, note: str | None
 ) -> Result[Rule, RuleError]:
-    """The only update path: condition and account_id are not arguments, so a
+    """The only update path: condition, account_id and kind are not arguments, so a
     rule's immutability is structural rather than a convention."""
 
     def op(session: Session) -> Rule | None:

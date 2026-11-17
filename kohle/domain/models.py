@@ -211,6 +211,19 @@ class JournalLine(base, Archivable):
         return f"<JournalLine(id={self.id}, entry_id={self.entry_id}, account_id={self.account_id}, {side} {self.quantity}@{self.unit_price})>"
 
 
+class RuleKind(Enum):
+    category = "category"  # the account is an expense, income or any other category
+    transfer = "transfer"  # the account is an own account: the line is a move
+    remittance = "remittance"  # reserved: stored values only, no rule is written with it yet
+
+
+class ClassificationKind(Enum):
+    category = "category"  # every row of a ledger without transfer rules
+    transfer = "transfer"  # the line is a move to final_account_id, an own account
+    mirror = "mirror"  # the line is the other side of a transfer
+    remittance = "remittance"  # reserved, as RuleKind.remittance
+
+
 class Rule(base, Archivable):
     """Sends an imported line to an account when its conditions hold."""
 
@@ -224,6 +237,14 @@ class Rule(base, Archivable):
     account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"), nullable=False)
     priority: Mapped[int] = mapped_column(Integer, nullable=False)
     note: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Immutable, like condition and account_id: a classification's rule must
+    # keep meaning what matched. Never inferred from the account's type, so an
+    # existing rule onto an asset clearing account stays a category rule. The
+    # Python default is for rows inserted directly, as the server default is
+    # for rows that predate the column.
+    kind: Mapped[RuleKind] = mapped_column(
+        SqlEnum(RuleKind), nullable=False, default=RuleKind.category, server_default="category"
+    )
 
     account: Mapped["Account"] = relationship("Account")
 
@@ -264,8 +285,19 @@ class Classification(base, Archivable):
     # Not derivable from proposed != final: correcting a line back onto the
     # account it started on leaves them equal on a row a human did touch.
     corrected: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # What the line currently is, so a rule-made transfer is never mistaken for
+    # a category classification or for a human correction (corrected).
+    kind: Mapped[ClassificationKind] = mapped_column(
+        SqlEnum(ClassificationKind),
+        nullable=False,
+        default=ClassificationKind.category,
+        server_default="category",
+    )
+    # The transfer this row was absorbed into, by the entry id of the
+    # transfer's statement line.
+    mirror_of_entry_id: Mapped[int | None] = mapped_column(ForeignKey("journal_entries.id"), nullable=True)
 
-    entry: Mapped["JournalEntry"] = relationship("JournalEntry")
+    entry: Mapped["JournalEntry"] = relationship("JournalEntry", foreign_keys=[journal_entry_id])
     matched_rule: Mapped["Rule | None"] = relationship("Rule", foreign_keys=[matched_rule_id])
     # Only the final account gets a relationship; the proposed one is never
     # displayed, and an unused relationship is a lazy load waiting to fire
@@ -281,6 +313,9 @@ class Classification(base, Archivable):
         # COALESCE(matched_rule_id, rerun_rule_id) is "the rule responsible",
         # which is only well defined if at most one is set.
         CheckConstraint("matched_rule_id IS NULL OR rerun_rule_id IS NULL", name="ck_classification_one_rule"),
+        # A transfer has at most one mirror, and a mirror always names it.
+        UniqueConstraint("mirror_of_entry_id", name="uq_classification_mirror_of"),
+        CheckConstraint("(kind = 'mirror') = (mirror_of_entry_id IS NOT NULL)", name="ck_classification_mirror"),
     )
 
     def __repr__(self) -> str:

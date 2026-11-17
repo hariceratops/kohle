@@ -174,6 +174,83 @@ If a rule's target has gained a child account since the rule was written, the
 import fails naming it, rather than quietly falling back to the bucket and
 leaving the rule disabled.
 
+## Transfers between your own accounts
+
+A rule that names an expense or income account describes spending or income. A
+payment between two of your own accounts is neither, so a rule can instead name
+the other own account with `transfer` in place of `account`. A line that
+matches becomes one move between the account it was imported into and that
+account, and leaves nothing in any expense, income or unclassified account:
+
+<!-- docs: file transfer-rules.toml -->
+```toml
+[[rule]]
+transfer = "Savings"
+note = "monthly savings"
+[rule.when]
+iban = "DE44500105175407324931"
+direction = "out"
+
+[[rule]]
+account = "Groceries"
+[rule.when]
+counterparty = "FRISCHMARKT"
+```
+
+<!-- docs: uses transfer-rules.toml -->
+```console
+$ kohle-cli add-account Checking --type asset
+Added account Checking (asset) with id 2
+$ kohle-cli add-account Savings --type asset
+Added account Savings (asset) with id 3
+$ kohle-cli add-account Groceries --type expense
+Added account Groceries (expense) with id 4
+$ kohle-cli apply-rules transfer-rules.toml --yes
+2 added, 0 retired, 0 reordered, 0 note changed, 0 unchanged
+  rule 1 (new) -> transfer Savings { iban = "DE44500105175407324931", direction = "out" }
+  rule 2 (new) -> Groceries { counterparty = "FRISCHMARKT" }
+Applied: 2 added, 0 retired, 0 reordered, 0 note changed, 0 unchanged
+$ kohle-cli import-statement kohle-deutsche-bank Checking transfers.csv
+Import succeeded, 2 entries imported
+$ kohle-cli list-unclassified
+No unclassified lines
+$ kohle-cli balance Savings
+unit                     quantity  price    price date      market value  status      average cost
+---------------------  ----------  -------  ------------  --------------  --------  --------------
+EUR                        500.00  -        -                     500.00  -                   1.00
+Total (base currency)      500.00  -        -                     500.00  -                   -
+```
+
+Kohle never decides that a rule is a transfer from the type of its target: only
+the `transfer` key does. A rule written with `account = "Transfers"`, naming an
+asset clearing account, keeps meaning what it always did, and a rule has exactly
+one of `account` and `transfer`. Changing a rule from one to the other, or to a
+different account, retires it and adds a new one, as any change to a rule does.
+
+A transfer's counterpart must be a leaf asset or liability account outside the
+`People` branch. Applying the file is refused, naming the rule, when it is an
+expense or income account (which includes the unclassified buckets) or a person:
+
+<!-- docs: file wrong-transfer.toml -->
+```toml
+[[rule]]
+transfer = "Groceries"
+[rule.when]
+iban = "DE44500105175407324931"
+```
+
+<!-- docs: uses wrong-transfer.toml -->
+```console
+$ kohle-cli add-account Groceries --type expense
+Added account Groceries (expense) with id 2
+$ kohle-cli apply-rules wrong-transfer.toml --yes
+Error: rule 1, transfer: 'Groceries' is an expense account; a transfer's counterpart must be an own asset or liability account
+```
+
+Rules are not tied to one account, so a transfer rule never matches a row
+imported into its own counterpart: that row skips the rule and the next one is
+tried. One rule file can therefore serve every statement.
+
 ## Conditions
 
 A rule's `when` table holds one or more of these keys, and **all** of them must

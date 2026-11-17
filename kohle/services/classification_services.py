@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session, joinedload, selectinload
 
 from kohle.core.result import Result
 from kohle.domain.domain_errors import ClassificationError, NoClassificationForEntry
-from kohle.domain.models import Classification, JournalEntry, Split
+from kohle.domain.models import Classification, ClassificationKind, JournalEntry, Split
 from kohle.infrastructure.crud import crud_create, crud_retrieve, crud_update
 from kohle.infrastructure.transaction_context import DbTransactionContext
 
@@ -17,6 +17,7 @@ def add_classification_service(
     proposed_account_id: int,
     matched_rule_id: int | None,
     final_account_id: int,
+    kind: ClassificationKind = ClassificationKind.category,
 ) -> Result[Classification, ClassificationError]:
     """Record one classification decision.
 
@@ -31,6 +32,7 @@ def add_classification_service(
             proposed_account_id=proposed_account_id,
             matched_rule_id=matched_rule_id,
             final_account_id=final_account_id,
+            kind=kind,
         )
         session.add(classification)
         return classification

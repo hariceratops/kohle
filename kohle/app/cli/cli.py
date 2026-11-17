@@ -21,7 +21,7 @@ from kohle.domain.domain_errors import (
     StateNotASetting,
     UnknownDeviceKey,
 )
-from kohle.domain.models import START, AccountType, UnitKind
+from kohle.domain.models import START, AccountType, RuleKind, UnitKind
 from kohle.infrastructure.device_config import (
     DEVICE_KEYS,
     DeviceConfig,
@@ -853,6 +853,12 @@ def show_rules_cmd(make_session):
     click.echo(res.unwrap(), nl=False)
 
 
+def _action_text(kind: RuleKind, account_name: str) -> str:
+    """The rule's action as the summaries show it: a category rule is just its
+    account, so a rule file without transfers prints as it always did."""
+    return f"transfer {account_name}" if kind is RuleKind.transfer else account_name
+
+
 def _plan_summary(plan: RulePlan) -> str:
     renoted = plan.renoted
     lines = [
@@ -860,15 +866,15 @@ def _plan_summary(plan: RulePlan) -> str:
         f"{len(renoted)} note changed, {plan.unchanged} unchanged"
     ]
     for item in plan.added:
-        lines.append(f"  rule {item.rule.position} (new) -> {item.rule.account} {render_when_inline(item.rule.when)}")
+        lines.append(f"  rule {item.rule.position} (new) -> {_action_text(item.rule.kind, item.rule.account)} {render_when_inline(item.rule.when)}")
     for rule in plan.retired:
-        lines.append(f"  id {rule.rule_id} -> {rule.account_name} {render_when_inline(rule.when)} (retired)")
+        lines.append(f"  id {rule.rule_id} -> {_action_text(rule.kind, rule.account_name)} {render_when_inline(rule.when)} (retired)")
     for item in plan.rules:
         if item.kept is not None and item.kept.rule_id in plan.reordered:
-            lines.append(f"  id {item.kept.rule_id} -> {item.kept.account_name}, now rule {item.rule.position}")
+            lines.append(f"  id {item.kept.rule_id} -> {_action_text(item.kept.kind, item.kept.account_name)}, now rule {item.rule.position}")
     for item in renoted:
         assert item.kept is not None
-        lines.append(f"  id {item.kept.rule_id} -> {item.kept.account_name}, note changed")
+        lines.append(f"  id {item.kept.rule_id} -> {_action_text(item.kept.kind, item.kept.account_name)}, note changed")
     return "\n".join(lines)
 
 

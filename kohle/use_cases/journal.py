@@ -34,8 +34,10 @@ from kohle.domain.domain_errors import (
 from kohle.domain.models import (
     BASE_CURRENCY,
     AccountType,
+    ClassificationKind,
     JournalEntry,
     JournalLine,
+    RuleKind,
     Unit,
     UnitKind,
 )
@@ -593,7 +595,9 @@ class ImportStatement(UnitOfWork[int, ImportStatementError]):
                             _optional_str(row.counterparty_name),
                             _optional_str(row.counterparty_iban),
                         )
-                        matched = match_rule(compiled, row.description, counterparty, amount)
+                        matched = match_rule(
+                            compiled, row.description, counterparty, amount, statement_account_id=account.id
+                        )
                         # A matched rule whose account has since gained a child fails
                         # the import loudly through validate_lines, rather than falling
                         # back to the bucket: a silent fallback would leave the user's
@@ -633,6 +637,9 @@ class ImportStatement(UnitOfWork[int, ImportStatementError]):
                             proposed_account_id=counterpart_id,
                             matched_rule_id=matched.rule_id if matched else None,
                             final_account_id=counterpart_id,
+                            kind=ClassificationKind.transfer
+                            if matched is not None and matched.kind is RuleKind.transfer
+                            else ClassificationKind.category,
                         )
                         if classification_res.is_err:
                             return Result.err(classification_res.unwrap_err())
