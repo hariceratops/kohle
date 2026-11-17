@@ -382,6 +382,28 @@ class InvalidTransferTarget(ClassificationError):
         return f"Account {self.account_name!r} cannot be a transfer's counterpart: {self.reason}"
 
 
+class NotARemittance(ClassificationError):
+    def __init__(self, entry_id: int) -> None:
+        super().__init__()
+        self.entry_id = entry_id
+
+    def __str__(self) -> str:
+        return f"Entry {self.entry_id} is not a remittance"
+
+
+class RemittanceCompleted(ClassificationError):
+    def __init__(self, entry_id: int, completion_entry_id: int) -> None:
+        super().__init__()
+        self.entry_id = entry_id
+        self.completion_entry_id = completion_entry_id
+
+    def __str__(self) -> str:
+        return (
+            f"Remittance {self.entry_id} is completed by entry {self.completion_entry_id}; "
+            f"uncomplete-remittance {self.entry_id} first"
+        )
+
+
 class SplitError(Exception):
     pass
 
@@ -630,6 +652,10 @@ ListUnclassifiedError = AccountError | ClassificationError
 ListUnmirroredError = AccountError | ClassificationError
 
 ListPendingRemittancesError = ClassificationError
+
+# BalanceError carries the LotShortfall an incoming completion would cause
+# (design §9.4) and the JournalError from posting.
+RemittanceError = ClassificationError | BalanceError
 
 # JournalError surfaces PostingToNonLeafAccount from validate_lines inside
 # post_entry, unchanged and not re-implemented for the adjusting entry

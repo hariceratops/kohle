@@ -10,6 +10,7 @@ from kohle.domain.domain_errors import (
     EntryAlreadySplit,
     InvalidTransferTarget,
     IsAMirror,
+    RemittanceCompleted,
     ListUnclassifiedError,
     NoSplitForEntry,
     PostingToNonLeafAccount,
@@ -172,6 +173,8 @@ class Reclassify(UnitOfWork[JournalEntry, ReclassifyError]):
             if classification.kind == ClassificationKind.mirror:
                 assert classification.mirror_of_entry_id is not None
                 return Result.err(IsAMirror(entry_id, classification.mirror_of_entry_id))
+            if classification.completion_entry_id is not None:
+                return Result.err(RemittanceCompleted(entry_id, classification.completion_entry_id))
 
             # The target's type decides the path (design §7.1): an own account
             # is a transfer, anything else is a category.

@@ -395,7 +395,23 @@ $ kohle-cli list-pending-remittances
   entry_id  date        description                                                    direction      amount  account    counterpart    unit
 ----------  ----------  -------------------------------------------------------------  -----------  --------  ---------  -------------  ------
          1  2026-06-11  Card 0001 Fernweh Transfer 11-06-2026T09:14:02 money transfer  out           1012.00  Checking   IndianBank     INR
+$ kohle-cli complete-remittance 1 90000
+Completed remittance 1: 90000 INR for 1012.00 EUR
+$ kohle-cli list-pending-remittances
+No pending remittances
 ```
+
+`complete-remittance ENTRY_ID AMOUNT` takes the entry id from that listing and
+the currency that arrived, here 90,000 INR. It takes the 1,012.00 euros out of
+`Pending Remittances` and puts the rupees into `IndianBank` as one lot costing
+exactly 1,012.00 euros; the rate is worked out from the two amounts and never
+typed. The completing entry is dated at the original line, so the lot counts
+from the day the euros left even when other entries were recorded in between or
+out of order. Completion is all or nothing and one step in the audit trail;
+completing a remittance that is already completed, or an entry that is not a
+remittance, fails and writes nothing. The classification record shows the
+remittance as completed, and `reclassify` and `split-line` refuse a completed
+remittance.
 
 `classify-rules` applies remittance rules to lines that fell through, as it does
 transfer rules, and shows the move as `Pending Remittances` with the counterpart

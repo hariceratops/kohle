@@ -80,7 +80,7 @@ from kohle.use_cases.prices import (
     Unpriced,
     call_price_plugins,
 )
-from kohle.use_cases.remittances import ListPendingRemittances
+from kohle.use_cases.remittances import CompleteRemittance, ListPendingRemittances
 from kohle.use_cases.reporting import (
     EstimateSummary,
     NetWorthHistory,
@@ -1100,6 +1100,21 @@ def unjoin_transfer_cmd(make_session, line_entry: int):
     if res.is_err:
         raise click.ClickException(str(res.unwrap_err()))
     click.echo(f"Unjoined entry {line_entry}")
+
+
+@cli.command(writes=True)
+@click.argument("entry_id", type=int)
+@click.argument("amount", type=DECIMAL)
+@click.pass_obj
+def complete_remittance_cmd(make_session, entry_id: int, amount: Decimal):
+    """Complete a pending remittance with the currency received (outgoing) or paid out (incoming)."""
+    if amount <= 0:
+        raise click.BadParameter("must be above 0", param_hint="AMOUNT")
+    res = CompleteRemittance(make_session()).execute(entry_id, amount)
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    completed = res.unwrap()
+    click.echo(f"Completed remittance {entry_id}: {completed.quantity} {completed.unit_identifier} for {completed.euros:.2f} EUR")
 
 
 def _move_kind_text(move: RerunMove) -> str:

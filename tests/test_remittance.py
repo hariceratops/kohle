@@ -4,10 +4,17 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
+from click.testing import CliRunner
 from sqlalchemy.orm import Session
 
+from kohle.app.cli.cli import cli
 from kohle.core.result import Result
-from kohle.domain.domain_errors import MalformedRuleFile, NotSplittable
+from kohle.domain.domain_errors import (
+    MalformedRuleFile,
+    NotARemittance,
+    NotSplittable,
+    RemittanceCompleted,
+)
 from kohle.domain.models import (
     Account,
     AccountType,
@@ -29,8 +36,10 @@ from kohle.use_cases.classification import (
     Reclassify,
 )
 from kohle.use_cases.conditions import Direction
+from kohle.use_cases import remittances as remittances_module
 from kohle.use_cases.journal import ImportStatement
-from kohle.use_cases.remittances import ListPendingRemittances
+from kohle.use_cases.lots import QueryRealised
+from kohle.use_cases.remittances import CompleteRemittance, ListPendingRemittances
 from kohle.use_cases.rules import (
     ApplyRuleFile,
     PlanRuleFile,
@@ -373,7 +382,120 @@ def test_mirror_recognition_does_not_absorb_into_or_from_a_pending_remittance(
     assert session.query(Classification).filter(Classification.mirror_of_entry_id.is_not(None)).count() == 0
 
 
+# Completion
+
+
+def _pending_out(session: Session, cash_rows, statement_row) -> int:
+    _ledger(session)
+    _apply(session, REMITTANCE_RULE).unwrap()
+    _import(session, cash_rows, statement_row, OUT)
+    return _entry_id(session, "Fernweh payment")
+
+
+def _currency_lines(session: Session) -> list[JournalLine]:
+    return session.query(JournalLine).filter(JournalLine.account_id == _account(session, "IndianBank").id).all()
+
+
+def test_completing_an_outgoing_remittance_gives_one_lot_of_exactly_x(session: Session, cash_rows, statement_row) -> None:
+    entry_id = _pending_out(session, cash_rows, statement_row)
+    groups = session.query(OperationGroup).count()
+
+    completed = CompleteRemittance(session).execute(entry_id, Decimal(90000)).unwrap()
+    entry = session.get(JournalEntry, completed.completion_entry_id)
+
+    (lot,) = _currency_lines(session)
+    assert lot.is_debit and lot.quantity == Decimal(90000) and lot.unit.identifier == "INR"
+    assert lot.cost == Decimal("1012.00")
+    assert entry.entry_date == OUT[0] and entry.description == "Complete: Fernweh payment"
+    assert _balance(session, PENDING_REMITTANCES) == Decimal(0)
+    assert ListPendingRemittances(session).execute().unwrap() == []
+    assert ListUnclassified(session).execute().unwrap() == []
+    record = session.query(Classification).one()
+    assert record.kind is ClassificationKind.remittance and record.completion_entry_id == entry.id
+    assert session.query(OperationGroup).count() == groups + 1
+
+
+def test_the_lot_is_dated_the_day_the_euros_left_whatever_the_recording_order(
+    session: Session, cash_rows, statement_row
+) -> None:
+    entry_id = _pending_out(session, cash_rows, statement_row)
+    AddAccount(session).execute("People", AccountType.asset)
+    runner = CliRunner()
+    for args in (
+        ["record", "2026-06-15", "Remittance", "100000", "--from", "Checking", "--to", "IndianBank", "--to-unit", "INR", "--total", "1100"],
+        ["record", "2026-06-20", "Back", "40000", "--from", "IndianBank", "--to", "Checking", "--from-unit", "INR", "--total", "500"],
+    ):
+        assert runner.invoke(cli, args, obj=lambda: session).exit_code == 0
+
+    CompleteRemittance(session).execute(entry_id, Decimal(90000)).unwrap()
+
+    (sale,) = QueryRealised(session).execute(None).unwrap()
+    assert abs(sale.fifo_cost - Decimal(1012) * 40000 / 90000) < Decimal("0.0001")
+
+
+@pytest.mark.parametrize("amount", ["0", "-5"])
+def test_complete_remittance_refuses_an_amount_not_above_zero(session: Session, cash_rows, statement_row, amount: str) -> None:
+    entry_id = _pending_out(session, cash_rows, statement_row)
+
+    result = CliRunner().invoke(cli, ["complete-remittance", str(entry_id), amount], obj=lambda: session)
+
+    assert result.exit_code == 2
+    assert _currency_lines(session) == []
+
+
+def test_the_command_reports_the_currency_and_the_euros(session: Session, cash_rows, statement_row) -> None:
+    entry_id = _pending_out(session, cash_rows, statement_row)
+
+    result = CliRunner().invoke(cli, ["complete-remittance", str(entry_id), "90000"], obj=lambda: session)
+
+    assert result.exit_code == 0, result.output
+    assert result.output.strip() == f"Completed remittance {entry_id}: 90000 INR for 1012.00 EUR"
+
+
+def test_completing_twice_or_a_non_remittance_fails_and_writes_nothing(session: Session, cash_rows, statement_row) -> None:
+    entry_id = _pending_out(session, cash_rows, statement_row)
+    _import(session, cash_rows, statement_row, (date(2026, 6, 1), -5, "Coffee"))
+    first = CompleteRemittance(session).execute(entry_id, Decimal(90000)).unwrap().completion_entry_id
+    entries, groups = session.query(JournalEntry).count(), session.query(OperationGroup).count()
+
+    again = CompleteRemittance(session).execute(entry_id, Decimal(80000)).unwrap_err()
+    coffee = CompleteRemittance(session).execute(_entry_id(session, "Coffee"), Decimal(1)).unwrap_err()
+
+    assert isinstance(again, RemittanceCompleted) and again.completion_entry_id == first
+    assert "uncomplete-remittance" in str(again)
+    assert isinstance(coffee, NotARemittance)
+    assert session.query(JournalEntry).count() == entries
+    assert session.query(OperationGroup).count() == groups
+
+
+def test_completion_is_all_or_nothing(session: Session, cash_rows, statement_row, monkeypatch: pytest.MonkeyPatch) -> None:
+    entry_id = _pending_out(session, cash_rows, statement_row)
+    entries, groups = session.query(JournalEntry).count(), session.query(OperationGroup).count()
+    monkeypatch.setattr(remittances_module, "set_completion_service", lambda *a, **k: Result.err(RuntimeError("boom")))
+
+    assert CompleteRemittance(session).execute(entry_id, Decimal(90000)).is_err
+
+    assert session.query(JournalEntry).count() == entries
+    assert session.query(OperationGroup).count() == groups
+    assert session.query(Classification).one().completion_entry_id is None
+
+
+def test_reclassify_and_split_line_refuse_a_completed_remittance(session: Session, cash_rows, statement_row) -> None:
+    entry_id = _pending_out(session, cash_rows, statement_row)
+    AddAccount(session).execute("Fees", AccountType.expense)
+    CompleteRemittance(session).execute(entry_id, Decimal(90000)).unwrap()
+    entries = session.query(JournalEntry).count()
+
+    reclassified = Reclassify(session).execute(entry_id, "Fees").unwrap_err()
+    split = SplitImportedEntry(session).execute(entry_id, Decimal(0), []).unwrap_err()
+
+    assert isinstance(reclassified, RemittanceCompleted)
+    assert str(reclassified).endswith(f"uncomplete-remittance {entry_id} first")
+    assert isinstance(split, NotSplittable) and "it is a remittance" in str(split)
+    assert session.query(JournalEntry).count() == entries
+
+
 @pytest.mark.skip(reason="scaffold")
-def test_outgoing_remittance_completes_to_a_lot_of_exactly_x() -> None:
-    # TODO (133-135): §18.5 completion: 1,012.00 EUR with Y=90,000 gives a lot costing exactly 1012.00, FIFO date, incoming realises 88.00 under INR, shortfall writes nothing, uncomplete-remittance both directions, refusals
+def test_incoming_completion_and_uncomplete_remittance() -> None:
+    # TODO (134-135): incoming realises 88.00 under INR, shortfall writes nothing, uncomplete-remittance both directions
     ...

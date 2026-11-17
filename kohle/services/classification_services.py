@@ -230,6 +230,29 @@ def rerun_candidates_service(
 
 
 @crud_update
+def set_completion_service(
+    ctx: DbTransactionContext, classification_id: int, completion_entry_id: int | None
+) -> Result[Classification, ClassificationError]:
+    """The entry that completes a remittance, or None while it is pending."""
+
+    def op(session: Session) -> Classification | None:
+        classification = session.get(Classification, classification_id)
+        if classification is not None:
+            classification.completion_entry_id = completion_entry_id
+        return classification
+
+    return (
+        ctx.run(op)
+        .map_err(lambda err: ClassificationError(str(err)))
+        .and_then(lambda classification:
+            Result.ok(classification)
+            if classification is not None
+            else Result.err(ClassificationError(f"Classification id {classification_id} not found"))
+        )
+    )
+
+
+@crud_update
 def set_mirror_service(
     ctx: DbTransactionContext,
     classification_id: int,

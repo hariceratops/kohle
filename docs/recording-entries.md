@@ -111,6 +111,12 @@ Recording reads no fetched rate: the cost comes from the entry alone, so a
 rate fetched later never changes it. The currency unit has to exist first, and
 is added like any other (see [Accounts and units](accounts-and-units.md#currencies)).
 
+When the euros left through an imported card payment and the rupees are only
+known later, a remittance rule parks the payment in a pending bucket and
+`complete-remittance ENTRY_ID AMOUNT` posts this same two-amount form once you
+have the amount received, dated at the original payment (see
+[Remittances](import-and-classification.md#remittances)).
+
 ## Opening balances
 
 Holdings you already have when you start enter as an opening entry, not as a
