@@ -229,6 +229,23 @@ def test_a_fault_while_joining_writes_nothing(
     assert _classification(session, "From checking").kind == ClassificationKind.category
 
 
+def test_a_fault_while_unjoining_writes_nothing(
+    session: Session, cash_rows, statement_row, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _late(session, cash_rows, statement_row)
+    line, transfer = _entry_id(session, "From checking"), _entry_id(session, "Move to savings")
+    JoinTransfer(session).execute(line, transfer).unwrap()
+    entries, groups = _state(session)
+    before = _balances(session)
+    monkeypatch.setattr(transfers_module, "clear_mirror_service", lambda *a, **k: Result.err(RuntimeError("boom")))
+
+    assert UnjoinTransfer(session).execute(line).is_err
+
+    assert _state(session) == (entries, groups)
+    assert _balances(session) == before
+    assert _classification(session, "From checking").kind == ClassificationKind.mirror
+
+
 def test_unjoining_puts_the_row_back_in_its_bucket_as_a_human_corrected_fall_through(
     session: Session, cash_rows, statement_row
 ) -> None:
