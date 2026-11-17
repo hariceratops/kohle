@@ -1,0 +1,7 @@
+AktivKonto;123 456 78;DE89370400440532013000;EUR
+06/01/2026 - 06/30/2026
+Old balance;;;;1500.00;EUR
+Transactions pending are not included in this report.
+Booking date;Value date;Transaction Type;Beneficiary / Originator;Payment Details;IBAN / Account Number;BIC;Customer Reference;Mandate Reference;Creditor ID;Compensation amount;Original Amount;Ultimate creditor;Number of transactions;Number of cheques;Debit;Credit;Currency
+06/12/2026;06/12/2026;Debit Card Payment;Fernweh Transfer;Card 0001 Fernweh Transfer 11-06-2026T09:14:02 money transfer;;;;;;;;;;;-1012.00;;EUR
+Account balance;06/30/2026;;;488.00;EUR

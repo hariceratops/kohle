@@ -36,7 +36,12 @@ from kohle.infrastructure.device_config import (
     load_device_config,
 )
 from kohle.plugin.plugin_manager import load_plugins, load_price_plugins
-from kohle.use_cases.accounts import AddAccount, ListAccount, ListChildAccounts
+from kohle.use_cases.accounts import (
+    PENDING_REMITTANCES,
+    AddAccount,
+    ListAccount,
+    ListChildAccounts,
+)
 from kohle.use_cases.budgeting import EndCap, ListCaps, QueryBudget, SetCap
 from kohle.use_cases.bundesland import ListStates, MoveState
 from kohle.use_cases.classification import (
@@ -44,6 +49,7 @@ from kohle.use_cases.classification import (
     ListUnclassified,
     PlanClassifyRules,
     Reclassify,
+    RerunMove,
 )
 from kohle.use_cases.conditions import render_when_inline
 from kohle.use_cases.journal import (
@@ -74,6 +80,7 @@ from kohle.use_cases.prices import (
     Unpriced,
     call_price_plugins,
 )
+from kohle.use_cases.remittances import ListPendingRemittances
 from kohle.use_cases.reporting import (
     EstimateSummary,
     NetWorthHistory,
@@ -864,10 +871,14 @@ def show_rules_cmd(make_session):
     click.echo(res.unwrap(), nl=False)
 
 
-def _action_text(kind: RuleKind, account_name: str) -> str:
+def _action_text(kind: RuleKind, account_name: str, unit_identifier: str | None = None) -> str:
     """The rule's action as the summaries show it: a category rule is just its
     account, so a rule file without transfers prints as it always did."""
-    return f"transfer {account_name}" if kind is RuleKind.transfer else account_name
+    if kind is RuleKind.transfer:
+        return f"transfer {account_name}"
+    if kind is RuleKind.remittance:
+        return f"remittance {account_name} {unit_identifier}"
+    return account_name
 
 
 def _plan_summary(plan: RulePlan) -> str:
@@ -877,15 +888,15 @@ def _plan_summary(plan: RulePlan) -> str:
         f"{len(renoted)} note changed, {plan.unchanged} unchanged"
     ]
     for item in plan.added:
-        lines.append(f"  rule {item.rule.position} (new) -> {_action_text(item.rule.kind, item.rule.account)} {render_when_inline(item.rule.when)}")
+        lines.append(f"  rule {item.rule.position} (new) -> {_action_text(item.rule.kind, item.rule.account, item.rule.unit)} {render_when_inline(item.rule.when)}")
     for rule in plan.retired:
-        lines.append(f"  id {rule.rule_id} -> {_action_text(rule.kind, rule.account_name)} {render_when_inline(rule.when)} (retired)")
+        lines.append(f"  id {rule.rule_id} -> {_action_text(rule.kind, rule.account_name, rule.unit_identifier)} {render_when_inline(rule.when)} (retired)")
     for item in plan.rules:
         if item.kept is not None and item.kept.rule_id in plan.reordered:
-            lines.append(f"  id {item.kept.rule_id} -> {_action_text(item.kept.kind, item.kept.account_name)}, now rule {item.rule.position}")
+            lines.append(f"  id {item.kept.rule_id} -> {_action_text(item.kept.kind, item.kept.account_name, item.kept.unit_identifier)}, now rule {item.rule.position}")
     for item in renoted:
         assert item.kept is not None
-        lines.append(f"  id {item.kept.rule_id} -> {_action_text(item.kept.kind, item.kept.account_name)}, note changed")
+        lines.append(f"  id {item.kept.rule_id} -> {_action_text(item.kept.kind, item.kept.account_name, item.kept.unit_identifier)}, note changed")
     return "\n".join(lines)
 
 
@@ -1041,6 +1052,33 @@ def list_unmirrored_transfers_cmd(make_session):
     click.echo(tabulate(rows, headers="keys", floatfmt=".2f"))
 
 
+@cli.command(writes=False)
+@click.pass_obj
+def list_pending_remittances_cmd(make_session):
+    """List the remittances still waiting for their other half."""
+    res = ListPendingRemittances(make_session()).execute()
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    remittances = res.unwrap()
+    if not remittances:
+        click.echo("No pending remittances")
+        return
+    rows = [
+        {
+            "entry_id": remittance.entry_id,
+            "date": remittance.entry_date,
+            "description": remittance.description,
+            "direction": remittance.direction.value,
+            "amount": remittance.amount,
+            "account": remittance.account_name,
+            "counterpart": remittance.counterpart_name,
+            "unit": remittance.unit_identifier,
+        }
+        for remittance in remittances
+    ]
+    click.echo(tabulate(rows, headers="keys", floatfmt=".2f"))
+
+
 @cli.command(writes=True)
 @click.argument("line_entry", type=int)
 @click.argument("transfer_entry", type=int)
@@ -1064,6 +1102,16 @@ def unjoin_transfer_cmd(make_session, line_entry: int):
     click.echo(f"Unjoined entry {line_entry}")
 
 
+def _move_kind_text(move: RerunMove) -> str:
+    match move.kind:
+        case ClassificationKind.mirror:
+            return f"mirror of {move.mirror_of}"
+        case ClassificationKind.remittance:
+            return f"remittance {move.account_name} {move.unit_identifier}"
+        case _:
+            return move.kind.value
+
+
 @cli.command(writes=True)
 @click.option("--yes", is_flag=True, help="Apply without asking.")
 @click.pass_obj
@@ -1083,7 +1131,7 @@ def classify_rules_cmd(make_session, yes: bool):
             "description": move.description,
             "amount": move.amount,
             "from": move.bucket_name,
-            "to": move.account_name,
+            "to": PENDING_REMITTANCES if move.kind is ClassificationKind.remittance else move.account_name,
             "rule": "-" if move.rule_id is None else move.rule_id,
         }
         for move in moves
@@ -1091,7 +1139,7 @@ def classify_rules_cmd(make_session, yes: bool):
     # Absent for category-only plans, so their output is as it always was.
     if any(move.kind is not ClassificationKind.category for move in moves):
         for row, move in zip(rows, moves, strict=True):
-            row["kind"] = f"mirror of {move.mirror_of}" if move.kind is ClassificationKind.mirror else move.kind.value
+            row["kind"] = _move_kind_text(move)
     click.echo(tabulate(rows, headers="keys", floatfmt=".2f"))
     if not yes:
         click.confirm(f"Move {len(moves)} line(s)?", abort=True)

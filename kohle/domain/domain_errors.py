@@ -543,7 +543,7 @@ ImportStatementError = \
 
 RecordEntryError = AccountError | UnitError | JournalError | BaseCurrencyAsCrossUnit
 
-ApplyRulesError = RuleError | AccountError
+ApplyRulesError = RuleError | AccountError | UnitError
 
 ClassifyRulesError = AccountError | JournalError | ClassificationError | RuleError
 
@@ -628,6 +628,8 @@ BalanceError = AccountError | JournalError | LotError
 ListUnclassifiedError = AccountError | ClassificationError
 
 ListUnmirroredError = AccountError | ClassificationError
+
+ListPendingRemittancesError = ClassificationError
 
 # JournalError surfaces PostingToNonLeafAccount from validate_lines inside
 # post_entry, unchanged and not re-implemented for the adjusting entry

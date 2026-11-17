@@ -25,6 +25,8 @@ def add_classification_service(
     matched_rule_id: int | None,
     final_account_id: int,
     kind: ClassificationKind = ClassificationKind.category,
+    remittance_account_id: int | None = None,
+    remittance_unit_id: int | None = None,
 ) -> Result[Classification, ClassificationError]:
     """Record one classification decision.
 
@@ -40,6 +42,8 @@ def add_classification_service(
             matched_rule_id=matched_rule_id,
             final_account_id=final_account_id,
             kind=kind,
+            remittance_account_id=remittance_account_id,
+            remittance_unit_id=remittance_unit_id,
         )
         session.add(classification)
         return classification
@@ -86,6 +90,7 @@ def set_classification_outcome_service(
     kind: ClassificationKind = ClassificationKind.category,
 ) -> Result[Classification, ClassificationError]:
     """Correct the record: final_account_id and kind move, corrected is set.
+    A line that is no longer a remittance loses its counterpart and unit.
 
     proposed_account_id and matched_rule_id are left untouched — they are the
     record of what the engine got wrong, which is the reason they exist
@@ -97,6 +102,8 @@ def set_classification_outcome_service(
         if classification is not None:
             classification.final_account_id = final_account_id
             classification.kind = kind
+            classification.remittance_account_id = None
+            classification.remittance_unit_id = None
             classification.corrected = True
         return classification
 
@@ -149,6 +156,8 @@ def set_rerun_outcome_service(
     final_account_id: int,
     rule_id: int,
     kind: ClassificationKind = ClassificationKind.category,
+    remittance_account_id: int | None = None,
+    remittance_unit_id: int | None = None,
 ) -> Result[Classification, ClassificationError]:
     """Record a classify-rules move: final_account_id, rerun_rule_id and kind
     are set, corrected stays false because no human made the call.
@@ -162,6 +171,8 @@ def set_rerun_outcome_service(
             classification.final_account_id = final_account_id
             classification.rerun_rule_id = rule_id
             classification.kind = kind
+            classification.remittance_account_id = remittance_account_id
+            classification.remittance_unit_id = remittance_unit_id
         return classification
 
     return (
@@ -344,6 +355,31 @@ def mirror_of_service(
             session.query(Classification)
             .filter(Classification.mirror_of_entry_id == transfer_entry_id)
             .one_or_none()
+        )
+
+    return ctx.run(op).map_err(lambda err: ClassificationError(str(err)))
+
+
+@crud_retrieve
+def pending_remittances_service(ctx: DbTransactionContext) -> Result[list[Classification], ClassificationError]:
+    """Remittances whose other half has not been recorded yet, in `(entry_date,
+    entry id)` order, with what the listing shows loaded."""
+
+    def op(session: Session) -> list[Classification]:
+        return (
+            session.query(Classification)
+            .join(JournalEntry, Classification.journal_entry_id == JournalEntry.id)
+            .options(
+                joinedload(Classification.remittance_account),
+                joinedload(Classification.remittance_unit),
+                selectinload(Classification.entry).selectinload(JournalEntry.lines).joinedload(JournalLine.account),
+            )
+            .filter(
+                Classification.kind == ClassificationKind.remittance,
+                Classification.completion_entry_id.is_(None),
+            )
+            .order_by(JournalEntry.entry_date.asc(), Classification.journal_entry_id.asc())
+            .all()
         )
 
     return ctx.run(op).map_err(lambda err: ClassificationError(str(err)))

@@ -16,6 +16,7 @@ from kohle.domain.domain_errors import (
     ReclassifyError,
 )
 from kohle.domain.models import (
+    AccountType,
     Classification,
     ClassificationKind,
     JournalEntry,
@@ -42,6 +43,7 @@ from kohle.use_cases.accounts import (
     PENDING_REMITTANCES,
     UNCLASSIFIED_EXPENSE,
     UNCLASSIFIED_INCOME,
+    get_or_create_account,
     own_account,
     people_account_ids,
 )
@@ -240,6 +242,8 @@ class RerunMove:
     account_name: str
     kind: ClassificationKind = ClassificationKind.category
     mirror_of: int | None = None
+    unit_id: int | None = None
+    unit_identifier: str | None = None
 
     @property
     def key(self) -> tuple[int, int | None, int, ClassificationKind, int | None]:
@@ -275,6 +279,7 @@ def _plan_moves(ctx: DbTransactionContext) -> Result[list[RerunMove], ClassifyRu
     if accounts_res.is_err:
         return Result.err(accounts_res.unwrap_err())
     account_names = {account.id: account.name for account in accounts_res.unwrap()}
+    unit_identifiers = {rule.unit_id: rule.unit_identifier for rule in rules_res.unwrap() if rule.unit_id is not None}
 
     by_entry = {c.journal_entry_id: c for c in candidates}
     matches = {}
@@ -295,11 +300,13 @@ def _plan_moves(ctx: DbTransactionContext) -> Result[list[RerunMove], ClassifyRu
         account_id: int,
         kind: ClassificationKind,
         mirror_of: int | None = None,
+        unit_id: int | None = None,
     ) -> RerunMove:
         entry = classification.entry
         return RerunMove(
             entry.id, entry.entry_date, entry.description, statement_amount(classification),
             classification.final_account.name, rule_id, account_id, account_names[account_id], kind, mirror_of,
+            unit_id, unit_identifiers[unit_id] if unit_id is not None else None,
         )
 
     moves: list[RerunMove] = []
@@ -358,12 +365,15 @@ def _plan_moves(ctx: DbTransactionContext) -> Result[list[RerunMove], ClassifyRu
             or matched.account_id == classification.final_account_id
         ):
             continue
-        moves.append(move(classification, matched.rule_id, matched.account_id, ClassificationKind.category))
+        kind = ClassificationKind(matched.kind.value)
+        moves.append(move(classification, matched.rule_id, matched.account_id, kind, unit_id=matched.unit_id))
 
     # Checked before any preview, so it never promises a move the apply would
     # refuse, and the failure matches the import's. A mirror goes to the
-    # account its statement was imported into, which is never a rule's target.
-    for account_id in sorted({m.account_id for m in moves if m.kind is not ClassificationKind.mirror}):
+    # account its statement was imported into, which is never a rule's target,
+    # and a remittance goes to the pending bucket, which kohle makes a leaf.
+    unchecked = (ClassificationKind.mirror, ClassificationKind.remittance)
+    for account_id in sorted({m.account_id for m in moves if m.kind not in unchecked}):
         has_children = account_has_children_service(ctx, account_id)
         if has_children.is_err:
             return Result.err(has_children.unwrap_err())
@@ -390,6 +400,7 @@ class ApplyClassifyRules(UnitOfWork[list[RerunMove], ClassifyRulesError]):
             if [move.key for move in moves] != [move.key for move in expected]:
                 return Result.err(ClassifyPlanChanged())
 
+            pending_id: int | None = None
             for move in moves:
                 classification_res = classification_by_entry_service(ctx, move.entry_id)
                 if classification_res.is_err:
@@ -402,11 +413,26 @@ class ApplyClassifyRules(UnitOfWork[list[RerunMove], ClassifyRulesError]):
                         return Result.err(absorbed.unwrap_err())
                     continue
                 assert move.rule_id is not None
-                posted = post_correction(ctx, classification, move.account_id, f"Classify: {move.description}")
+                target_id = move.account_id
+                if move.kind is ClassificationKind.remittance:
+                    if pending_id is None:
+                        pending_res = get_or_create_account(ctx, PENDING_REMITTANCES, AccountType.asset)
+                        if pending_res.is_err:
+                            return Result.err(pending_res.unwrap_err())
+                        pending_id = pending_res.unwrap().id
+                    target_id = pending_id
+                posted = post_correction(ctx, classification, target_id, f"Classify: {move.description}")
                 if posted.is_err:
                     return Result.err(posted.unwrap_err())
+                remitted = move.kind is ClassificationKind.remittance
                 outcome = set_rerun_outcome_service(
-                    ctx, classification.id, move.account_id, move.rule_id, kind=move.kind
+                    ctx,
+                    classification.id,
+                    target_id,
+                    move.rule_id,
+                    kind=move.kind,
+                    remittance_account_id=move.account_id if remitted else None,
+                    remittance_unit_id=move.unit_id,
                 )
                 if outcome.is_err:
                     return Result.err(outcome.unwrap_err())

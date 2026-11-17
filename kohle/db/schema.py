@@ -41,7 +41,7 @@ SCRIPT_LOCATION = "kohle.db:migrations"
 # The packaged head, so the check on every command can compare without
 # importing Alembic. tests/test_schema_check.py pins it to Alembic's head; a
 # stale value only sends the check down the slow path, it never misclassifies.
-HEAD_REVISION = "e8b3c5a1d704"
+HEAD_REVISION = "f2a6d8c4e195"
 
 
 def alembic_config() -> "Config":

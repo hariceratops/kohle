@@ -343,6 +343,68 @@ Rules are not tied to one account, so a transfer rule never matches a row
 imported into its own counterpart: that row skips the rule and the next one is
 tried. One rule file can therefore serve every statement.
 
+### Remittances
+
+A card payment to a money-transfer service sends euros abroad, but the other
+half, the rupees that arrive, is not known until the receiving bank's statement
+says so. A `remittance` rule names the account that will receive them and the
+currency, and until the amount is known the euros wait in a pending bucket:
+
+<!-- docs: file remittance-rules.toml -->
+```toml
+[[rule]]
+remittance = "IndianBank"
+unit = "INR"
+[rule.when]
+counterparty = "Fernweh Transfer"
+```
+
+`remittance` takes the place of `account` and `transfer`, and `unit` is required
+with it and refused with the other two. The unit must be a currency other than
+the base currency; kohle never assumes which. The counterpart follows the same
+rules as a transfer's: a leaf asset or liability account outside `People`, and
+never the pending bucket itself. A remittance rule never matches a row imported
+into its own counterpart, and the kind and the unit are part of the rule's
+identity, so changing either retires the rule and adds a new one.
+
+A matched line moves from the euro account into `Pending Remittances`, an asset
+account kohle creates when the first remittance is posted, so a ledger without
+remittance rules gains no account. Net worth counts the euros in transit at face
+value, because the pending bucket is an own account. A pending remittance is not
+an unclassified line: `list-unclassified` does not show it, and
+`list-pending-remittances` lists it instead, with its direction (from the sign
+of the line), counterpart and unit:
+
+<!-- docs: uses remittance-rules.toml -->
+```console
+$ kohle-cli add-account Checking --type asset
+Added account Checking (asset) with id 2
+$ kohle-cli add-account IndianBank --type asset
+Added account IndianBank (asset) with id 3
+$ kohle-cli add-unit INR "Indian rupee" --kind currency
+Added unit INR (currency) with id 1
+$ kohle-cli apply-rules remittance-rules.toml --yes
+1 added, 0 retired, 0 reordered, 0 note changed, 0 unchanged
+  rule 1 (new) -> remittance IndianBank INR { counterparty = "Fernweh Transfer" }
+Applied: 1 added, 0 retired, 0 reordered, 0 note changed, 0 unchanged
+$ kohle-cli import-statement kohle-deutsche-bank Checking remittance.csv
+Import succeeded, 1 entries imported
+$ kohle-cli list-unclassified
+No unclassified lines
+$ kohle-cli list-pending-remittances
+  entry_id  date        description                                                    direction      amount  account    counterpart    unit
+----------  ----------  -------------------------------------------------------------  -----------  --------  ---------  -------------  ------
+         1  2026-06-11  Card 0001 Fernweh Transfer 11-06-2026T09:14:02 money transfer  out           1012.00  Checking   IndianBank     INR
+```
+
+`classify-rules` applies remittance rules to lines that fell through, as it does
+transfer rules, and shows the move as `Pending Remittances` with the counterpart
+and unit in its `kind` column. `reclassify` of a pending remittance reverses it
+out of the pending bucket onto the account you name, and the line then reads as
+a plain correction. `split-line` is refused on a remittance, because the money
+is not yet spent. Mirror recognition never absorbs a row into a pending
+remittance or a pending remittance into a row.
+
 ## Conditions
 
 A rule's `when` table holds one or more of these keys, and **all** of them must

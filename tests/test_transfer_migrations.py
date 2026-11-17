@@ -10,6 +10,7 @@ from kohle.db.schema import HEAD_REVISION, alembic_config
 
 BEFORE_TRANSFER_RULES = "c7e2a9d4b185"
 TRANSFER_RULES = "e8b3c5a1d704"
+REMITTANCE_RULES = "f2a6d8c4e195"
 
 
 def _columns(db: Path, table: str) -> set[str]:
@@ -51,7 +52,7 @@ def old_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, objec
 
 
 def test_head_is_pinned() -> None:
-    assert HEAD_REVISION == TRANSFER_RULES
+    assert HEAD_REVISION == REMITTANCE_RULES
 
 
 def test_existing_rows_come_out_as_categories_and_the_columns_round_trip(old_db) -> None:
@@ -118,7 +119,86 @@ def test_the_checks_reject_a_mirror_without_its_transfer_and_a_second_mirror_of_
     conn.close()
 
 
+@pytest.fixture
+def transfer_db(old_db) -> tuple[Path, object]:
+    db, config = old_db
+    command.upgrade(config, TRANSFER_RULES)
+    conn = sqlite3.connect(db)
+    conn.execute("INSERT INTO accounts (id, name, type, created_at) VALUES (12, 'IndianBank', 'asset', '2026-01-01')")
+    conn.execute("INSERT INTO units (id, identifier, name, kind, created_at) VALUES (1, 'INR', 'Rupee', 'currency', '2026-01-01')")
+    conn.commit()
+    conn.close()
+    return db, config
+
+
+def test_the_remittance_columns_round_trip_when_unused(transfer_db) -> None:
+    db, config = transfer_db
+
+    command.upgrade(config, REMITTANCE_RULES)
+
+    assert "unit_id" in _columns(db, "rules")
+    assert {"remittance_account_id", "remittance_unit_id", "completion_entry_id"} <= _columns(db, "classifications")
+    conn = sqlite3.connect(db)
+    assert conn.execute("SELECT kind, unit_id FROM rules").fetchall() == [("category", None)]
+    conn.close()
+
+    command.downgrade(config, TRANSFER_RULES)
+
+    assert "unit_id" not in _columns(db, "rules")
+    assert not {"remittance_account_id", "remittance_unit_id", "completion_entry_id"} & _columns(db, "classifications")
+
+
+@pytest.mark.parametrize(
+    "offending",
+    [
+        "UPDATE rules SET kind = 'remittance', unit_id = 1, account_id = 12",
+        "UPDATE classifications SET kind = 'remittance', remittance_account_id = 12, remittance_unit_id = 1",
+        "UPDATE classifications SET kind = 'remittance', remittance_account_id = 12, remittance_unit_id = 1, "
+        "completion_entry_id = 2",
+    ],
+)
+def test_downgrade_refuses_a_remittance_and_leaves_the_schema_untouched(transfer_db, offending: str) -> None:
+    db, config = transfer_db
+    command.upgrade(config, REMITTANCE_RULES)
+    conn = sqlite3.connect(db)
+    conn.execute(offending)
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(RuntimeError, match="Refusing to downgrade"):
+        command.downgrade(config, TRANSFER_RULES)
+
+    assert "unit_id" in _columns(db, "rules")
+    assert "completion_entry_id" in _columns(db, "classifications")
+
+
+@pytest.mark.parametrize(
+    ("statement", "check"),
+    [
+        ("UPDATE rules SET kind = 'remittance'", "ck_rule_remittance_unit"),
+        ("UPDATE rules SET unit_id = 1", "ck_rule_remittance_unit"),
+        ("UPDATE classifications SET kind = 'remittance'", "ck_classification_remittance"),
+        ("UPDATE classifications SET remittance_account_id = 12", "ck_classification_remittance"),
+        (
+            "UPDATE classifications SET kind = 'remittance', remittance_account_id = 12",
+            "ck_classification_remittance",
+        ),
+        ("UPDATE classifications SET completion_entry_id = 2", "ck_classification_completion"),
+    ],
+)
+def test_the_checks_reject_a_remittance_without_its_unit_and_a_stray_completion(
+    transfer_db, statement: str, check: str
+) -> None:
+    db, config = transfer_db
+    command.upgrade(config, REMITTANCE_RULES)
+    conn = sqlite3.connect(db)
+
+    with pytest.raises(sqlite3.IntegrityError, match=check):
+        conn.execute(statement)
+    conn.close()
+
+
 @pytest.mark.skip(reason="scaffold")
-def test_remittance_and_reversal_migrations_round_trip_and_refuse_an_offending_row() -> None:
-    # TODO: §18.8 for migrations b (132) and c (135): a round trip when empty, a refusal with one offending row leaving the schema untouched, the remittance CHECKs
+def test_reversal_migration_round_trips_and_refuses_an_offending_row() -> None:
+    # TODO (135): §18.8 for migration c: a round trip when empty, a refusal with one reversal leaving the schema untouched
     ...

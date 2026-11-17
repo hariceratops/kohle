@@ -54,6 +54,7 @@ from kohle.services.unit_services import (
     get_unit_by_identifier_service,
 )
 from kohle.use_cases.accounts import (
+    PENDING_REMITTANCES,
     UNCLASSIFIED_EXPENSE,
     UNCLASSIFIED_INCOME,
     balance_sheet_accounts,
@@ -462,6 +463,10 @@ class ImportStatement(UnitOfWork[int, ImportStatementError]):
                 return Result.err(open_transfers_res.unwrap_err())
             open_transfers = open_transfers_res.unwrap()
 
+            # Created on the first remittance only, so a ledger without
+            # remittance rules gains no account.
+            pending_id: int | None = None
+
             imported = 0
             for row, reference in new_rows:
                 match row:
@@ -486,9 +491,18 @@ class ImportStatement(UnitOfWork[int, ImportStatementError]):
                         # the import loudly through validate_lines, rather than falling
                         # back to the bucket: a silent fallback would leave the user's
                         # rules quietly disabled with nothing saying why.
-                        counterpart_id = matched.account_id if matched else (
-                            expense_id if amount < 0 else income_id
-                        )
+                        remittance = matched if matched and matched.kind is RuleKind.remittance else None
+                        if remittance is not None:
+                            if pending_id is None:
+                                pending_res = get_or_create_account(ctx, PENDING_REMITTANCES, AccountType.asset)
+                                if pending_res.is_err:
+                                    return Result.err(pending_res.unwrap_err())
+                                pending_id = pending_res.unwrap().id
+                            counterpart_id = pending_id
+                        elif matched is not None:
+                            counterpart_id = matched.account_id
+                        else:
+                            counterpart_id = expense_id if amount < 0 else income_id
                         lines = [
                             LineSpec(
                                 account_id=account.id,
@@ -521,9 +535,9 @@ class ImportStatement(UnitOfWork[int, ImportStatementError]):
                             proposed_account_id=counterpart_id,
                             matched_rule_id=matched.rule_id if matched else None,
                             final_account_id=counterpart_id,
-                            kind=ClassificationKind.transfer
-                            if matched is not None and matched.kind is RuleKind.transfer
-                            else ClassificationKind.category,
+                            kind=ClassificationKind(matched.kind.value) if matched else ClassificationKind.category,
+                            remittance_account_id=remittance.account_id if remittance else None,
+                            remittance_unit_id=remittance.unit_id if remittance else None,
                         )
                         if classification_res.is_err:
                             return Result.err(classification_res.unwrap_err())

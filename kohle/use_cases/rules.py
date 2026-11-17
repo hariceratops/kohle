@@ -14,8 +14,16 @@ from kohle.domain.domain_errors import (
     MalformedRuleFile,
     RuleError,
     RulesChanged,
+    UnitNotFoundError,
 )
-from kohle.domain.models import Account, AccountType, Rule, RuleKind
+from kohle.domain.models import (
+    BASE_CURRENCY,
+    Account,
+    AccountType,
+    Rule,
+    RuleKind,
+    UnitKind,
+)
 from kohle.infrastructure.transaction_context import DbTransactionContext
 from kohle.infrastructure.uow import UnitOfWork
 from kohle.services.account_services import (
@@ -29,7 +37,12 @@ from kohle.services.rule_services import (
     remove_rule_service,
     update_rule_service,
 )
-from kohle.use_cases.accounts import own_account, people_account_ids
+from kohle.services.unit_services import get_unit_by_identifier_service
+from kohle.use_cases.accounts import (
+    PENDING_REMITTANCES,
+    own_account,
+    people_account_ids,
+)
 from kohle.use_cases.conditions import (
     Predicate,
     When,
@@ -56,6 +69,8 @@ class StoredRule:
     when: When
     note: str | None
     kind: RuleKind = RuleKind.category
+    unit_id: int | None = None
+    unit_identifier: str | None = None
 
 
 def stored_rules(ctx: DbTransactionContext) -> Result[list[StoredRule], RuleError]:
@@ -73,7 +88,15 @@ def stored_rules(ctx: DbTransactionContext) -> Result[list[StoredRule], RuleErro
                 return Result.err(RuleError(f"stored rule {rule.id}: {when.unwrap_err()}"))
             out.append(
                 StoredRule(
-                    rule.id, rule.priority, rule.account_id, rule.account.name, when.unwrap(), rule.note, rule.kind
+                    rule.id,
+                    rule.priority,
+                    rule.account_id,
+                    rule.account.name,
+                    when.unwrap(),
+                    rule.note,
+                    rule.kind,
+                    rule.unit_id,
+                    rule.unit.identifier if rule.unit is not None else None,
                 )
             )
         return Result.ok(out)
@@ -93,16 +116,22 @@ _RULE_FILE_HEADER = """\
 def action_key(kind: RuleKind) -> str:
     """The rule-file key that names the rule's account. `account` is a
     category, whatever the account's type: the kind is never inferred."""
-    return "transfer" if kind is RuleKind.transfer else "account"
+    return kind.value if kind is not RuleKind.category else "account"
 
 
-_ACTION_KEYS = {"account": RuleKind.category, "transfer": RuleKind.transfer}
+_ACTION_KEYS = {
+    "account": RuleKind.category,
+    "transfer": RuleKind.transfer,
+    "remittance": RuleKind.remittance,
+}
 
 
 def _render_rule_body(rules: Sequence[StoredRule]) -> str:
     entries = []
     for rule in rules:
         lines = ["[[rule]]", f"{action_key(rule.kind)} = {toml_string(rule.account_name)}"]
+        if rule.unit_identifier is not None:
+            lines.append(f"unit = {toml_string(rule.unit_identifier)}")
         if rule.note:
             lines.append(f"note = {toml_string(rule.note)}")
         lines.append("[rule.when]")
@@ -131,6 +160,7 @@ class FileRule:
     note: str | None
     when: When
     kind: RuleKind = RuleKind.category
+    unit: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,7 +171,7 @@ class RuleFile:
 
 def _parse_file_rule(position: int, raw: dict) -> Result[FileRule, MalformedRuleFile]:
     for key in raw:
-        if key not in (*_ACTION_KEYS, "note", "when"):
+        if key not in (*_ACTION_KEYS, "unit", "note", "when"):
             return Result.err(MalformedRuleFile(position, key, "is not a known key"))
     actions = [key for key in raw if key in _ACTION_KEYS]
     if not actions:
@@ -152,6 +182,14 @@ def _parse_file_rule(position: int, raw: dict) -> Result[FileRule, MalformedRule
     account = raw[action]
     if not isinstance(account, str) or not account.strip():
         return Result.err(MalformedRuleFile(position, action, "must be a non-empty string"))
+    unit = raw.get("unit")
+    if _ACTION_KEYS[action] is RuleKind.remittance:
+        if unit is None:
+            return Result.err(MalformedRuleFile(position, "unit", "is required with remittance"))
+        if not isinstance(unit, str) or not unit.strip():
+            return Result.err(MalformedRuleFile(position, "unit", "must be a non-empty string"))
+    elif unit is not None:
+        return Result.err(MalformedRuleFile(position, "unit", "is only allowed with remittance"))
     note = raw.get("note")
     if note is not None and not isinstance(note, str):
         return Result.err(MalformedRuleFile(position, "note", "must be a string"))
@@ -162,7 +200,7 @@ def _parse_file_rule(position: int, raw: dict) -> Result[FileRule, MalformedRule
         .map_err(lambda err: err.at(position))
         # Patterns and notes are taken verbatim: a quoted TOML string's spaces
         # are deliberate. An empty note means no note.
-        .map(lambda when: FileRule(position, account, note or None, when, _ACTION_KEYS[action]))
+        .map(lambda when: FileRule(position, account, note or None, when, _ACTION_KEYS[action], unit))
     )
 
 
@@ -184,13 +222,13 @@ def parse_rule_file(text: str) -> Result[RuleFile, MalformedRuleFile]:
 
     rules: list[FileRule] = []
     # Account names are globally unique, so the name stands in for the id here.
-    seen: dict[tuple[When, RuleKind, str], int] = {}
+    seen: dict[tuple[When, RuleKind, str, str | None], int] = {}
     for position, raw in enumerate(raw_rules, start=1):
         parsed = _parse_file_rule(position, raw)
         if parsed.is_err:
             return Result.err(parsed.unwrap_err())
         rule = parsed.unwrap()
-        earlier = seen.setdefault((rule.when, rule.kind, rule.account), position)
+        earlier = seen.setdefault((rule.when, rule.kind, rule.account, rule.unit), position)
         if earlier != position:
             return Result.err(
                 MalformedRuleFile(position, None, f"has the same account and conditions as rule {earlier}")
@@ -205,6 +243,7 @@ class PlannedRule:
     account_id: int
     kept: StoredRule | None  # None: added
     priority: int  # priority after the apply
+    unit_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -306,17 +345,26 @@ def _assign_priorities(matches: Sequence[StoredRule | None]) -> list[int]:
 
 
 def plan_rule_changes(
-    stored: Sequence[StoredRule], file: RuleFile, account_ids: Mapping[str, int], base: str
+    stored: Sequence[StoredRule],
+    file: RuleFile,
+    account_ids: Mapping[str, int],
+    base: str,
+    unit_ids: Mapping[str, int] | None = None,
 ) -> RulePlan:
-    """Pure. A file rule keeps a live rule's id when `(when, kind, account)` match;
+    """Pure. A file rule keeps a live rule's id when `(when, kind, account, unit)` match;
     the first unmatched live rule wins, which only matters for legacy
     duplicates."""
-    pool: dict[tuple[When, RuleKind, int], deque[StoredRule]] = {}
+    unit_ids = unit_ids or {}
+
+    def file_unit_id(file_rule: FileRule) -> int | None:
+        return unit_ids[file_rule.unit] if file_rule.unit is not None else None
+
+    pool: dict[tuple[When, RuleKind, int, int | None], deque[StoredRule]] = {}
     for rule in stored:
-        pool.setdefault((rule.when, rule.kind, rule.account_id), deque()).append(rule)
+        pool.setdefault((rule.when, rule.kind, rule.account_id, rule.unit_id), deque()).append(rule)
     matches: list[StoredRule | None] = []
     for file_rule in file.rules:
-        queue = pool.get((file_rule.when, file_rule.kind, account_ids[file_rule.account]))
+        queue = pool.get((file_rule.when, file_rule.kind, account_ids[file_rule.account], file_unit_id(file_rule)))
         matches.append(queue.popleft() if queue else None)
 
     kept_ids = {m.rule_id for m in matches if m is not None}
@@ -329,7 +377,7 @@ def plan_rule_changes(
 
     priorities = _assign_priorities(matches)
     planned = tuple(
-        PlannedRule(file_rule, account_ids[file_rule.account], kept, priority)
+        PlannedRule(file_rule, account_ids[file_rule.account], kept, priority, file_unit_id(file_rule))
         for file_rule, kept, priority in zip(file.rules, matches, priorities, strict=True)
     )
     return RulePlan(base, planned, retired, reordered)
@@ -350,6 +398,7 @@ def _plan(
             return Result.err(RulesChanged(claimed, current))
 
     account_ids: dict[str, int] = {}
+    unit_ids: dict[str, int] = {}
     people_ids: set[int] | None = None
     for file_rule in rule_file.rules:
         key = action_key(file_rule.kind)
@@ -375,7 +424,7 @@ def _plan(
                     )
                 )
             account_ids[file_rule.account] = account.id
-        if file_rule.kind is RuleKind.transfer:
+        if file_rule.kind is not RuleKind.category:
             if people_ids is None:
                 people_res = people_account_ids(ctx)
                 if people_res.is_err:
@@ -384,10 +433,29 @@ def _plan(
             refusal = _transfer_counterpart_problem(account, people_ids)
             if refusal is not None:
                 return Result.err(MalformedRuleFile(file_rule.position, key, refusal))
-    return Result.ok(plan_rule_changes(live, rule_file, account_ids, current))
+        if file_rule.unit is not None and file_rule.unit not in unit_ids:
+            unit_res = get_unit_by_identifier_service(ctx, file_rule.unit)
+            if unit_res.is_err:
+                err = unit_res.unwrap_err()
+                if isinstance(err, UnitNotFoundError):
+                    return Result.err(
+                        MalformedRuleFile(file_rule.position, "unit", f"no unit named '{file_rule.unit}'")
+                    )
+                return Result.err(err)
+            unit = unit_res.unwrap()
+            if unit.kind is not UnitKind.currency or unit.identifier == BASE_CURRENCY:
+                return Result.err(
+                    MalformedRuleFile(
+                        file_rule.position, "unit", f"'{unit.identifier}' is not a currency other than {BASE_CURRENCY}"
+                    )
+                )
+            unit_ids[file_rule.unit] = unit.id
+    return Result.ok(plan_rule_changes(live, rule_file, account_ids, current, unit_ids))
 
 
 def _transfer_counterpart_problem(account: Account, people_ids: set[int]) -> str | None:
+    if account.name == PENDING_REMITTANCES:
+        return f"'{account.name}' is kohle's pending bucket"
     if account.id in people_ids:
         return f"'{account.name}' is a People account; money to or from a person stays with split-line"
     if not own_account(account, people_ids):
@@ -440,6 +508,7 @@ class ApplyRuleFile(UnitOfWork[RulePlan, ApplyRulesError]):
                     item.priority,
                     item.rule.note,
                     item.rule.kind,
+                    item.unit_id,
                 )
                 if added.is_err:
                     return Result.err(added.unwrap_err())
@@ -458,6 +527,7 @@ class CompiledRule:
     account_id: int
     holds: Predicate
     kind: RuleKind = RuleKind.category
+    unit_id: int | None = None
 
 
 def compile_rules(rules: Iterable[StoredRule]) -> list[CompiledRule]:
@@ -470,7 +540,10 @@ def compile_rules(rules: Iterable[StoredRule]) -> list[CompiledRule]:
     Returns a plain list rather than a Result: `stored_rules` has already
     validated every pattern, so compilation cannot fail.
     """
-    return [CompiledRule(rule.rule_id, rule.account_id, compile_when(rule.when), rule.kind) for rule in rules]
+    return [
+        CompiledRule(rule.rule_id, rule.account_id, compile_when(rule.when), rule.kind, rule.unit_id)
+        for rule in rules
+    ]
 
 
 def match_rule(
@@ -482,15 +555,16 @@ def match_rule(
 ) -> CompiledRule | None:
     """The first rule whose conditions hold.
 
-    A transfer rule whose counterpart is `statement_account_id` is skipped: a
-    move from an account to itself means nothing, and the same rule file has to
-    serve every statement, so it cannot be refused when the file is applied.
+    A transfer or remittance rule whose counterpart is `statement_account_id`
+    is skipped: a move from an account to itself means nothing, and the same
+    rule file has to serve every statement, so it cannot be refused when the
+    file is applied.
 
     Pure and session-free: making this a unit of work would open a second
     transaction inside the import loop (design §5.2).
     """
     for rule in compiled:
-        if rule.kind is RuleKind.transfer and rule.account_id == statement_account_id:
+        if rule.kind is not RuleKind.category and rule.account_id == statement_account_id:
             continue
         if rule.holds(description, counterparty, amount):
             return rule

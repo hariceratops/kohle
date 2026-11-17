@@ -106,6 +106,9 @@ class SplitImportedEntry(UnitOfWork[JournalEntry, SplitImportedEntryError]):
                     NotSplittable(entry_id, f"it is the mirror of transfer {classification.mirror_of_entry_id}")
                 )
 
+            if classification.kind == ClassificationKind.remittance:
+                return Result.err(NotSplittable(entry_id, "it is a remittance"))
+
             entry = classification.entry
             # Located by proposed_account_id: the entry always carries its
             # counterpart line on the account first proposed, even after a
