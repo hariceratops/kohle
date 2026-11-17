@@ -495,7 +495,100 @@ def test_reclassify_and_split_line_refuse_a_completed_remittance(session: Sessio
     assert session.query(JournalEntry).count() == entries
 
 
+def _lot_of_90000_for_1012(session: Session, cash_rows, statement_row) -> None:
+    out_id = _pending_out(session, cash_rows, statement_row)
+    CompleteRemittance(session).execute(out_id, Decimal(90000)).unwrap()
+
+
+def _pending_in(session: Session, cash_rows, statement_row) -> int:
+    _lot_of_90000_for_1012(session, cash_rows, statement_row)
+    AddAccount(session).execute("People", AccountType.asset)  # realised reads the People subtree
+    _import(session, cash_rows, statement_row, IN)
+    return _entry_id(session, "Fernweh refund")
+
+
+def test_completing_an_incoming_remittance_consumes_the_lot_and_realises_the_gain(
+    session: Session, cash_rows, statement_row
+) -> None:
+    entry_id = _pending_in(session, cash_rows, statement_row)
+    groups = session.query(OperationGroup).count()
+
+    completed = CompleteRemittance(session).execute(entry_id, Decimal(90000)).unwrap()
+    entry = session.get(JournalEntry, completed.completion_entry_id)
+
+    credit, debit = sorted(entry.lines, key=lambda line: line.is_debit)
+    assert credit.account.name == "IndianBank" and credit.unit.identifier == "INR"
+    assert credit.quantity == Decimal(90000) and credit.cost == Decimal("1100.00")
+    assert debit.account.name == PENDING_REMITTANCES and debit.quantity == Decimal("1100.00")
+    assert entry.entry_date == IN[0] and entry.description == "Complete: Fernweh refund"
+    assert _balance(session, PENDING_REMITTANCES) == Decimal(0)
+    assert ListPendingRemittances(session).execute().unwrap() == []
+    record = session.query(Classification).filter(Classification.journal_entry_id == entry_id).one()
+    assert record.completion_entry_id == entry.id
+    assert session.query(OperationGroup).count() == groups + 1
+    (sale,) = QueryRealised(session).execute(None).unwrap()
+    assert (sale.account_name, sale.unit_identifier, sale.quantity) == ("IndianBank", "INR", Decimal(90000))
+    assert sale.proceeds == Decimal("1100.00") and sale.fifo_cost == Decimal("1012.00")
+    assert sale.gain == Decimal("88.00")
+
+
+def test_an_incoming_remittance_is_pending_with_the_unit_still_on_the_counterpart(
+    session: Session, cash_rows, statement_row
+) -> None:
+    _pending_in(session, cash_rows, statement_row)
+
+    (pending,) = ListPendingRemittances(session).execute().unwrap()
+
+    assert (pending.direction, pending.amount, pending.counterpart_name, pending.unit_identifier) == (
+        Direction.incoming,
+        Decimal(1100),
+        "IndianBank",
+        "INR",
+    )
+    assert _balance(session, "Checking") == Decimal(-1012) + Decimal(1100)
+    assert _balance(session, PENDING_REMITTANCES) == Decimal(-1100)
+    assert QueryRealised(session).execute(None).unwrap() == []
+
+
+def test_a_direction_condition_restricts_a_remittance_rule_to_inflows(session: Session, cash_rows, statement_row) -> None:
+    _ledger(session)
+    _apply(session, REMITTANCE_RULE.replace("counterparty", 'direction = "in"\ncounterparty')).unwrap()
+
+    _import(session, cash_rows, statement_row, OUT, IN)
+
+    kinds = {c.entry.description: c.kind for c in session.query(Classification)}
+    assert kinds == {"Fernweh payment": ClassificationKind.category, "Fernweh refund": ClassificationKind.remittance}
+
+
+def test_an_incoming_completion_larger_than_the_lots_fails_and_writes_nothing(
+    session: Session, cash_rows, statement_row
+) -> None:
+    entry_id = _pending_in(session, cash_rows, statement_row)
+    entries, groups = session.query(JournalEntry).count(), session.query(OperationGroup).count()
+    lines = session.query(JournalLine).count()
+
+    refusal = CompleteRemittance(session).execute(entry_id, Decimal(90001))
+
+    assert refusal.is_err
+    assert session.query(JournalEntry).count() == entries
+    assert session.query(JournalLine).count() == lines
+    assert session.query(OperationGroup).count() == groups
+    record = session.query(Classification).filter(Classification.journal_entry_id == entry_id).one()
+    assert record.completion_entry_id is None
+    assert [p.description for p in ListPendingRemittances(session).execute().unwrap()] == ["Fernweh refund"]
+
+
+def test_an_incoming_completion_without_any_lot_fails_and_writes_nothing(session: Session, cash_rows, statement_row) -> None:
+    _ledger(session)
+    _apply(session, REMITTANCE_RULE).unwrap()
+    _import(session, cash_rows, statement_row, IN)
+    entries = session.query(JournalEntry).count()
+
+    assert CompleteRemittance(session).execute(_entry_id(session, "Fernweh refund"), Decimal(5)).is_err
+    assert session.query(JournalEntry).count() == entries
+
+
 @pytest.mark.skip(reason="scaffold")
-def test_incoming_completion_and_uncomplete_remittance() -> None:
-    # TODO (134-135): incoming realises 88.00 under INR, shortfall writes nothing, uncomplete-remittance both directions
+def test_uncomplete_remittance() -> None:
+    # TODO (135): uncomplete-remittance both directions, reversal and lot restoration, migration c
     ...

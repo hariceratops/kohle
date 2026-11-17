@@ -421,6 +421,55 @@ a plain correction. `split-line` is refused on a remittance, because the money
 is not yet spent. Mirror recognition never absorbs a row into a pending
 remittance or a pending remittance into a row.
 
+Rupees changed back into euros work the same way in the other direction. The
+rule above has no `direction`, so it matches a euro inflow from the same service
+too; add `direction = "in"` or `direction = "out"` to the rule's `when` table to
+restrict it to one. An incoming remittance waits in `Pending Remittances` as a
+negative balance that offsets the euros received, so nothing is counted twice,
+and the rupees stay in `IndianBank` until you say how many were paid out. Here
+the 1,012.00 euros sent earlier have become one lot of 90,000 rupees, and
+1,100.00 euros come back for them:
+
+<!-- docs: uses remittance-rules.toml -->
+```console
+$ kohle-cli add-account Checking --type asset
+Added account Checking (asset) with id 2
+$ kohle-cli add-account IndianBank --type asset
+Added account IndianBank (asset) with id 3
+$ kohle-cli add-unit INR "Indian rupee" --kind currency
+Added unit INR (currency) with id 1
+$ kohle-cli apply-rules remittance-rules.toml --yes
+1 added, 0 retired, 0 reordered, 0 note changed, 0 unchanged
+  rule 1 (new) -> remittance IndianBank INR { counterparty = "Fernweh Transfer" }
+Applied: 1 added, 0 retired, 0 reordered, 0 note changed, 0 unchanged
+$ kohle-cli import-statement kohle-deutsche-bank Checking remittance.csv
+Import succeeded, 1 entries imported
+$ kohle-cli complete-remittance 1 90000
+Completed remittance 1: 90000 INR for 1012.00 EUR
+$ kohle-cli import-statement kohle-deutsche-bank Checking remittance-back.csv
+Import succeeded, 1 entries imported
+$ kohle-cli list-pending-remittances
+  entry_id  date        description                                       direction      amount  account    counterpart    unit
+----------  ----------  ------------------------------------------------  -----------  --------  ---------  -------------  ------
+         3  2026-06-20  Refund 0002 Fernweh Transfer rupees changed back  in            1100.00  Checking   IndianBank     INR
+$ kohle-cli complete-remittance 3 90000
+Completed remittance 3: 90000 INR for 1100.00 EUR
+$ kohle-cli realised
+date        account     unit      quantity    proceeds    FIFO cost    gain
+----------  ----------  ------  ----------  ----------  -----------  ------
+2026-06-20  IndianBank  INR       90000.00     1100.00      1012.00   88.00
+
+Realised gain: 88.00
+```
+
+`complete-remittance` takes the same entry id and amount, but now the amount is
+the rupees that left: 90,000 of them, taken out of `IndianBank` oldest lot
+first and dated at the original line, against the 1,100.00 euros cleared from
+`Pending Remittances`. The lot cost 1,012.00 euros, so `realised` shows a gain
+of 88.00 euros under the unit `INR`, and nothing remains pending. If
+`IndianBank` does not hold that many rupees, the command fails and writes
+nothing.
+
 ## Conditions
 
 A rule's `when` table holds one or more of these keys, and **all** of them must

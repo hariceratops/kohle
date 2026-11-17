@@ -117,6 +117,15 @@ known later, a remittance rule parks the payment in a pending bucket and
 have the amount received, dated at the original payment (see
 [Remittances](import-and-classification.md#remittances)).
 
+The same command completes a euro inflow from such a service, the rupees
+changed back. There `AMOUNT` is the rupees that left, and the completing entry
+is the reverse two-amount form described in
+[Changing a currency back into euros](#changing-a-currency-back-into-euros): it
+takes the rupees out of the account oldest lot first and clears the euros
+received from the pending bucket, dated at the original line. The gain over the
+lots' cost shows in `realised` under the currency's unit. If the account holds
+fewer rupees than `AMOUNT`, the command fails and writes nothing.
+
 ## Opening balances
 
 Holdings you already have when you start enter as an opening entry, not as a
