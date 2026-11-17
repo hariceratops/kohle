@@ -80,9 +80,12 @@ def classification_by_entry_service(
 
 @crud_update
 def set_classification_outcome_service(
-    ctx: DbTransactionContext, classification_id: int, final_account_id: int
+    ctx: DbTransactionContext,
+    classification_id: int,
+    final_account_id: int,
+    kind: ClassificationKind = ClassificationKind.category,
 ) -> Result[Classification, ClassificationError]:
-    """Correct the record: final_account_id moves, corrected is set.
+    """Correct the record: final_account_id and kind move, corrected is set.
 
     proposed_account_id and matched_rule_id are left untouched — they are the
     record of what the engine got wrong, which is the reason they exist
@@ -93,6 +96,7 @@ def set_classification_outcome_service(
         classification = session.get(Classification, classification_id)
         if classification is not None:
             classification.final_account_id = final_account_id
+            classification.kind = kind
             classification.corrected = True
         return classification
 

@@ -11,11 +11,17 @@ from kohle.domain.domain_errors import (
     LotError,
     NoSplitForEntry,
     NotAPersonAccount,
+    NotSplittable,
     SplitDoesNotSumToLine,
     SplitError,
     SplitImportedEntryError,
 )
-from kohle.domain.models import JournalEntry, JournalLine, SplitGroup
+from kohle.domain.models import (
+    ClassificationKind,
+    JournalEntry,
+    JournalLine,
+    SplitGroup,
+)
 from kohle.infrastructure.transaction_context import DbTransactionContext
 from kohle.infrastructure.uow import UnitOfWork
 from kohle.services.account_services import (
@@ -93,6 +99,12 @@ class SplitImportedEntry(UnitOfWork[JournalEntry, SplitImportedEntryError]):
             if classification_res.is_err:
                 return Result.err(classification_res.unwrap_err())
             classification = classification_res.unwrap()
+            if classification.kind == ClassificationKind.transfer:
+                return Result.err(NotSplittable(entry_id, "it is a transfer"))
+            if classification.kind == ClassificationKind.mirror:
+                return Result.err(
+                    NotSplittable(entry_id, f"it is the mirror of transfer {classification.mirror_of_entry_id}")
+                )
 
             entry = classification.entry
             # Located by proposed_account_id: the entry always carries its

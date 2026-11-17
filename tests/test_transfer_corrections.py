@@ -1,6 +1,7 @@
 """Layer 2 — join, unjoin, reclassify and split-line on transfers (issues 129-131). Design §18.4."""
 
 from datetime import date
+from decimal import Decimal
 
 import pytest
 from sqlalchemy import func, select
@@ -8,9 +9,12 @@ from sqlalchemy.orm import Session
 
 from kohle.core.result import Result
 from kohle.domain.domain_errors import (
+    InvalidTransferTarget,
+    IsAMirror,
     NotAFallThrough,
     NotAMirror,
     NotATransfer,
+    NotSplittable,
     NotTheMirror,
     TransferHasMirror,
 )
@@ -23,6 +27,7 @@ from kohle.domain.models import (
     JournalLine,
     OperationGroup,
 )
+from kohle.use_cases import classification as classification_module
 from kohle.use_cases import transfers as transfers_module
 from kohle.use_cases.accounts import AddAccount
 from kohle.use_cases.classification import (
@@ -32,6 +37,7 @@ from kohle.use_cases.classification import (
 )
 from kohle.use_cases.journal import ImportStatement
 from kohle.use_cases.rules import ApplyRuleFile, PlanRuleFile
+from kohle.use_cases.splitting import SplitImportedEntry
 from kohle.use_cases.transfers import (
     JoinTransfer,
     ListUnmirroredTransfers,
@@ -52,12 +58,6 @@ def _ledger(session: Session) -> None:
     text = _transfer_rule("Savings")
     plan = PlanRuleFile(session).execute(text).unwrap()
     ApplyRuleFile(session).execute(text, plan.base).unwrap()
-
-
-@pytest.mark.skip(reason="scaffold")
-def test_reclassify_transfer_line_to_category_unabsorbs_mirror() -> None:
-    # TODO: §18.4: reclassify one test per cell of §7.1, split-line refusals (issue 131)
-    ...
 
 
 def _entry_id(session: Session, description: str) -> int:
@@ -380,3 +380,193 @@ def test_listing_writes_no_operation_group(session: Session, cash_rows, statemen
     ListUnmirroredTransfers(session).execute().unwrap()
 
     assert session.query(OperationGroup).count() == before
+
+
+def _absorbed(session: Session, cash_rows, statement_row) -> tuple[int, int]:
+    """A transfer on 04-03 whose mirror arrives in time and is absorbed."""
+    _ledger(session)
+    AddAccount(session).execute("Gifts", AccountType.expense).unwrap()
+    AddAccount(session).execute("Brokerage", AccountType.asset).unwrap()
+    ImportStatement(session).execute(
+        "Checking",
+        cash_rows([statement_row(date(2026, 4, 3), -500, "Move to savings", "Erika", SAVINGS_IBAN)]),
+    ).unwrap()
+    ImportStatement(session).execute(
+        "Savings", cash_rows([statement_row(date(2026, 4, 4), 500, "From checking", "Erika")])
+    ).unwrap()
+    return _entry_id(session, "Move to savings"), _entry_id(session, "From checking")
+
+
+def test_reclassifying_a_fall_through_onto_an_own_account_is_a_transfer(
+    session: Session, cash_rows, statement_row
+) -> None:
+    _ledger(session)
+    ImportStatement(session).execute(
+        "Checking", cash_rows([statement_row(date(2026, 4, 3), -500, "Move", "Erika")])
+    ).unwrap()
+    line = _entry_id(session, "Move")
+    entries, groups = _state(session)
+
+    assert Reclassify(session).execute(line, "Savings").is_ok
+
+    assert _balances(session) == {"Checking": -500, "Savings": 500, "Unclassified Expense": 0}
+    assert _state(session) == (entries + 1, groups + 1)
+    row = _classification(session, "Move")
+    assert (row.kind, row.corrected, row.final_account.name) == (ClassificationKind.transfer, True, "Savings")
+
+
+def test_reclassifying_onto_an_own_account_absorbs_the_counterparts_fall_through(
+    session: Session, cash_rows, statement_row
+) -> None:
+    _ledger(session)
+    ImportStatement(session).execute(
+        "Checking", cash_rows([statement_row(date(2026, 4, 3), -500, "Move", "Erika")])
+    ).unwrap()
+    ImportStatement(session).execute(
+        "Savings", cash_rows([statement_row(date(2026, 4, 4), 500, "From checking", "Erika")])
+    ).unwrap()
+    transfer = _entry_id(session, "Move")
+
+    Reclassify(session).execute(transfer, "Savings").unwrap()
+
+    assert _balances(session) == {"Checking": -500, "Savings": 500, "Unclassified Expense": 0, "Unclassified Income": 0}
+    mirror = _classification(session, "From checking")
+    assert (mirror.kind, mirror.mirror_of_entry_id, mirror.corrected) == (ClassificationKind.mirror, transfer, False)
+    assert ListUnclassified(session).execute().unwrap() == []
+
+
+def test_reclassifying_a_people_account_stays_a_category(session: Session, cash_rows, statement_row) -> None:
+    _ledger(session)
+    AddAccount(session).execute("People", AccountType.asset).unwrap()
+    AddAccount(session).execute("Alice", AccountType.asset, None, "People").unwrap()
+    ImportStatement(session).execute(
+        "Checking", cash_rows([statement_row(date(2026, 4, 3), -500, "Lent", "Alice")])
+    ).unwrap()
+
+    Reclassify(session).execute(_entry_id(session, "Lent"), "Alice").unwrap()
+
+    assert _classification(session, "Lent").kind == ClassificationKind.category
+
+
+def test_reclassifying_a_transfer_to_a_category_unabsorbs_its_mirror_in_one_group(
+    session: Session, cash_rows, statement_row
+) -> None:
+    transfer, _ = _absorbed(session, cash_rows, statement_row)
+    entries, groups = _state(session)
+
+    assert Reclassify(session).execute(transfer, "Gifts").is_ok
+
+    assert _balances(session) == {
+        "Checking": -500, "Savings": 500, "Gifts": 500, "Unclassified Income": -500,
+    }
+    assert _state(session) == (entries + 2, groups + 1)
+    moved = _classification(session, "Move to savings")
+    assert (moved.kind, moved.corrected, moved.final_account.name) == (ClassificationKind.category, True, "Gifts")
+    mirror = _classification(session, "From checking")
+    assert (mirror.kind, mirror.mirror_of_entry_id, mirror.corrected) == (ClassificationKind.category, None, False)
+    assert mirror.final_account.name == "Unclassified Income"
+    assert [u.description for u in ListUnclassified(session).execute().unwrap()] == ["From checking"]
+
+
+def test_reclassifying_a_transfer_without_a_mirror_to_a_category(session: Session, cash_rows, statement_row) -> None:
+    _ledger(session)
+    AddAccount(session).execute("Gifts", AccountType.expense).unwrap()
+    ImportStatement(session).execute(
+        "Checking",
+        cash_rows([statement_row(date(2026, 4, 3), -500, "Move to savings", "Erika", SAVINGS_IBAN)]),
+    ).unwrap()
+    entries, groups = _state(session)
+
+    Reclassify(session).execute(_entry_id(session, "Move to savings"), "Gifts").unwrap()
+
+    assert _balances(session) == {"Checking": -500, "Savings": 0, "Gifts": 500}
+    assert _state(session) == (entries + 1, groups + 1)
+    assert _classification(session, "Move to savings").kind == ClassificationKind.category
+
+
+def test_reclassifying_a_transfer_to_another_own_account_unabsorbs_its_mirror(
+    session: Session, cash_rows, statement_row
+) -> None:
+    transfer, _ = _absorbed(session, cash_rows, statement_row)
+    entries, groups = _state(session)
+
+    Reclassify(session).execute(transfer, "Brokerage").unwrap()
+
+    assert _balances(session) == {
+        "Checking": -500, "Savings": 500, "Brokerage": 500, "Unclassified Income": -500,
+    }
+    assert _state(session) == (entries + 2, groups + 1)
+    moved = _classification(session, "Move to savings")
+    assert (moved.kind, moved.corrected, moved.final_account.name) == (ClassificationKind.transfer, True, "Brokerage")
+    assert _classification(session, "From checking").kind == ClassificationKind.category
+
+
+def test_reclassifying_a_mirror_is_refused(session: Session, cash_rows, statement_row) -> None:
+    _, mirror = _absorbed(session, cash_rows, statement_row)
+    entries, groups = _state(session)
+
+    for target in ("Gifts", "Brokerage"):
+        err = Reclassify(session).execute(mirror, target).unwrap_err()
+        assert isinstance(err, IsAMirror)
+        assert f"unjoin-transfer {mirror}" in str(err)
+    assert _state(session) == (entries, groups)
+
+
+def test_reclassifying_onto_the_pending_bucket_is_refused(session: Session, cash_rows, statement_row) -> None:
+    _ledger(session)
+    AddAccount(session).execute("Pending Remittances", AccountType.asset).unwrap()
+    ImportStatement(session).execute(
+        "Checking", cash_rows([statement_row(date(2026, 4, 3), -500, "Move", "Erika")])
+    ).unwrap()
+    entries, groups = _state(session)
+
+    res = Reclassify(session).execute(_entry_id(session, "Move"), "Pending Remittances")
+
+    assert isinstance(res.unwrap_err(), InvalidTransferTarget)
+    assert _state(session) == (entries, groups)
+
+
+def test_reclassifying_onto_the_lines_own_account_is_refused(session: Session, cash_rows, statement_row) -> None:
+    _ledger(session)
+    ImportStatement(session).execute(
+        "Checking", cash_rows([statement_row(date(2026, 4, 3), -500, "Move", "Erika")])
+    ).unwrap()
+    entries, groups = _state(session)
+
+    res = Reclassify(session).execute(_entry_id(session, "Move"), "Checking")
+
+    err = res.unwrap_err()
+    assert isinstance(err, InvalidTransferTarget)
+    assert "own account" in str(err)
+    assert _state(session) == (entries, groups)
+
+
+def test_a_fault_while_reclassifying_a_transfer_writes_nothing(
+    session: Session, cash_rows, statement_row, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    transfer, _ = _absorbed(session, cash_rows, statement_row)
+    entries, groups = _state(session)
+    before = _balances(session)
+    monkeypatch.setattr(
+        classification_module, "set_classification_outcome_service", lambda *a, **k: Result.err(RuntimeError("boom"))
+    )
+
+    assert Reclassify(session).execute(transfer, "Gifts").is_err
+
+    assert _state(session) == (entries, groups)
+    assert _balances(session) == before
+    assert _classification(session, "From checking").kind == ClassificationKind.mirror
+
+
+def test_split_line_is_refused_on_a_transfer_and_on_a_mirror(session: Session, cash_rows, statement_row) -> None:
+    transfer, mirror = _absorbed(session, cash_rows, statement_row)
+    entries, groups = _state(session)
+
+    on_transfer = SplitImportedEntry(session).execute(transfer, Decimal(0), []).unwrap_err()
+    on_mirror = SplitImportedEntry(session).execute(mirror, Decimal(0), []).unwrap_err()
+
+    assert isinstance(on_transfer, NotSplittable)
+    assert "it is a transfer" in str(on_transfer)
+    assert isinstance(on_mirror, NotSplittable)
+    assert f"it is the mirror of transfer {transfer}" in str(on_mirror)
+    assert _state(session) == (entries, groups)

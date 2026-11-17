@@ -23,6 +23,7 @@ from kohle.services.account_services import (
 PEOPLE_ROOT = "People"
 UNCLASSIFIED_EXPENSE = "Unclassified Expense"
 UNCLASSIFIED_INCOME = "Unclassified Income"
+PENDING_REMITTANCES = "Pending Remittances"
 
 
 class AddAccount(UnitOfWork[Account, AccountError]):

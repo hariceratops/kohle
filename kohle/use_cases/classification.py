@@ -8,6 +8,8 @@ from kohle.domain.domain_errors import (
     ClassifyPlanChanged,
     ClassifyRulesError,
     EntryAlreadySplit,
+    InvalidTransferTarget,
+    IsAMirror,
     ListUnclassifiedError,
     NoSplitForEntry,
     PostingToNonLeafAccount,
@@ -28,6 +30,7 @@ from kohle.services.account_services import (
 )
 from kohle.services.classification_services import (
     classification_by_entry_service,
+    mirror_of_service,
     rerun_candidates_service,
     set_classification_outcome_service,
     set_rerun_outcome_service,
@@ -35,17 +38,25 @@ from kohle.services.classification_services import (
 )
 from kohle.services.journal_services import Counterparty
 from kohle.services.split_services import split_by_entry_service
-from kohle.use_cases.accounts import UNCLASSIFIED_EXPENSE, UNCLASSIFIED_INCOME
+from kohle.use_cases.accounts import (
+    PENDING_REMITTANCES,
+    UNCLASSIFIED_EXPENSE,
+    UNCLASSIFIED_INCOME,
+    own_account,
+    people_account_ids,
+)
 from kohle.use_cases.posting import post_correction, statement_amount, statement_line
 from kohle.use_cases.rules import compile_rules, match_rule, stored_rules
 from kohle.use_cases.transfers import (
     TransferSide,
     absorb,
+    absorb_counterpart_fall_through,
     account_ibans,
     nearest_row,
     nearest_transfer,
     open_transfers_into,
     row_side,
+    unabsorb,
 )
 
 # classification.py may import from journal.py (post_entry, the bucket names)
@@ -156,6 +167,34 @@ class Reclassify(UnitOfWork[JournalEntry, ReclassifyError]):
                 return Result.err(account_res.unwrap_err())
             right_account = account_res.unwrap()
 
+            if classification.kind == ClassificationKind.mirror:
+                assert classification.mirror_of_entry_id is not None
+                return Result.err(IsAMirror(entry_id, classification.mirror_of_entry_id))
+
+            # The target's type decides the path (design §7.1): an own account
+            # is a transfer, anything else is a category.
+            people_res = people_account_ids(ctx)
+            if people_res.is_err:
+                return Result.err(people_res.unwrap_err())
+            to_own_account = own_account(right_account, people_res.unwrap())
+            if to_own_account:
+                if right_account.name == PENDING_REMITTANCES:
+                    return Result.err(InvalidTransferTarget(account_name, "it is kohle's pending bucket"))
+                if right_account.id == statement_line(classification).account_id:
+                    return Result.err(InvalidTransferTarget(account_name, "it is the line's own account"))
+
+            # A transfer taken off its counterpart leaves its mirror with
+            # nothing to mirror: the mirror goes back to its bucket first.
+            if classification.kind == ClassificationKind.transfer:
+                mirror_res = mirror_of_service(ctx, entry_id)
+                if mirror_res.is_err:
+                    return Result.err(mirror_res.unwrap_err())
+                mirror = mirror_res.unwrap()
+                if mirror is not None:
+                    unabsorbed_res = unabsorb(ctx, mirror, by_human=False)
+                    if unabsorbed_res.is_err:
+                        return Result.err(unabsorbed_res.unwrap_err())
+
             entry = classification.entry
             adjusting_entry_res = post_correction(
                 ctx, classification, right_account.id, f"Reclassify: {entry.description}"
@@ -163,9 +202,24 @@ class Reclassify(UnitOfWork[JournalEntry, ReclassifyError]):
             if adjusting_entry_res.is_err:
                 return Result.err(adjusting_entry_res.unwrap_err())
 
-            outcome_res = set_classification_outcome_service(ctx, classification.id, right_account.id)
+            kind = ClassificationKind.transfer if to_own_account else ClassificationKind.category
+            outcome_res = set_classification_outcome_service(ctx, classification.id, right_account.id, kind)
             if outcome_res.is_err:
                 return Result.err(outcome_res.unwrap_err())
+
+            if to_own_account:
+                bucket_ids = []
+                for bucket_name in (UNCLASSIFIED_EXPENSE, UNCLASSIFIED_INCOME):
+                    bucket_res = get_account_by_name_service(ctx, bucket_name)
+                    if bucket_res.is_err:
+                        return Result.err(bucket_res.unwrap_err())
+                    bucket_ids.append(bucket_res.unwrap().id)
+                ibans_res = account_ibans(ctx)
+                if ibans_res.is_err:
+                    return Result.err(ibans_res.unwrap_err())
+                absorbed_res = absorb_counterpart_fall_through(ctx, classification, bucket_ids, ibans_res.unwrap())
+                if absorbed_res.is_err:
+                    return Result.err(absorbed_res.unwrap_err())
 
             return Result.ok(adjusting_entry_res.unwrap())
 

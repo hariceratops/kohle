@@ -359,8 +359,44 @@ class NotAMirror(ClassificationError):
         return f"Entry {self.entry_id} is not the mirror of a transfer"
 
 
+class IsAMirror(ClassificationError):
+    def __init__(self, entry_id: int, transfer_id: int) -> None:
+        super().__init__()
+        self.entry_id = entry_id
+        self.transfer_id = transfer_id
+
+    def __str__(self) -> str:
+        return (
+            f"Entry {self.entry_id} is the mirror of transfer {self.transfer_id}; "
+            f"unjoin-transfer {self.entry_id} first"
+        )
+
+
+class InvalidTransferTarget(ClassificationError):
+    def __init__(self, account_name: str, reason: str) -> None:
+        super().__init__()
+        self.account_name = account_name
+        self.reason = reason
+
+    def __str__(self) -> str:
+        return f"Account {self.account_name!r} cannot be a transfer's counterpart: {self.reason}"
+
+
 class SplitError(Exception):
     pass
+
+
+class NotSplittable(SplitError):
+    """A transfer, or the absorbed mirror of one, is a move between own accounts:
+    splitting it would take shares out of a balance the move already settled."""
+
+    def __init__(self, entry_id: int, reason: str) -> None:
+        super().__init__()
+        self.entry_id = entry_id
+        self.reason = reason
+
+    def __str__(self) -> str:
+        return f"Entry {self.entry_id} cannot be split: {self.reason}"
 
 
 class NotAPersonAccount(SplitError):

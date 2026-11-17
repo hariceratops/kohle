@@ -611,6 +611,33 @@ rule that matched stay as they were, because they record what the engine got
 wrong. Reclassifying a corrected line again reverses out of its current account,
 not its original proposal.
 
+### Correcting a transfer
+
+`reclassify` knows about transfers, so a correction never double counts and
+never leaves half of a pair undone. The target account decides the path: an
+asset or liability account outside People is an own account, so the line becomes
+a transfer to it, exactly as a transfer rule would have made it, and the
+fall-through of that account that mirrors it is absorbed. Any other target is a
+category, as before.
+
+- Reclassifying a transfer to a category, or to a different own account, first
+  puts its mirror back in its bucket, then moves the transfer. The mirror goes
+  back as an ordinary fall-through, and a mirror that a human joined stays
+  marked corrected. All of it is adjusting entries dated at each line's own
+  date, all or nothing, in one audit-trail group.
+- The mirror row of a transfer cannot be reclassified. Run `unjoin-transfer`
+  on it first; the error says so.
+- A transfer cannot target the pending bucket, or the account the line itself
+  was imported into.
+- The classification record shows what happened. A line reclassified onto an own
+  account is a `transfer` marked corrected, which tells it apart from a
+  rule-made transfer, and from a category correction.
+
+`split-line` is refused on a transfer and on the mirror row of one, with an
+error naming which it is. A transfer is a move between your own accounts, so
+there is nothing to share out. Reclassify the line to a category first if it
+really was a shared bill.
+
 An unknown entry id, an unknown target account or a target with sub-accounts
 fails with an error rather than a traceback:
 
