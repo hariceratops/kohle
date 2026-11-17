@@ -139,10 +139,14 @@ def unclassified_classifications_service(
 
 @crud_update
 def set_rerun_outcome_service(
-    ctx: DbTransactionContext, classification_id: int, final_account_id: int, rule_id: int
+    ctx: DbTransactionContext,
+    classification_id: int,
+    final_account_id: int,
+    rule_id: int,
+    kind: ClassificationKind = ClassificationKind.category,
 ) -> Result[Classification, ClassificationError]:
-    """Record a classify-rules move: final_account_id and rerun_rule_id are
-    set, corrected stays false because no human made the call.
+    """Record a classify-rules move: final_account_id, rerun_rule_id and kind
+    are set, corrected stays false because no human made the call.
 
     proposed_account_id and matched_rule_id are untouched: reclassify and
     split-line locate the original line through proposed_account_id."""
@@ -152,6 +156,7 @@ def set_rerun_outcome_service(
         if classification is not None:
             classification.final_account_id = final_account_id
             classification.rerun_rule_id = rule_id
+            classification.kind = kind
         return classification
 
     return (
@@ -242,24 +247,25 @@ def set_mirror_service(
 
 @crud_retrieve
 def open_transfers_service(
-    ctx: DbTransactionContext, counterpart_id: int
+    ctx: DbTransactionContext, counterpart_id: int | None = None
 ) -> Result[list[Classification], ClassificationError]:
-    """Transfers into `counterpart_id` that no row has been absorbed into yet,
-    in `(entry_date, entry id)` order, with the entry and its lines loaded."""
+    """Transfers (into `counterpart_id`, when given) that no row has been
+    absorbed into yet, in `(entry_date, entry id)` order, with the entry and
+    its lines loaded."""
 
     def op(session: Session) -> list[Classification]:
         joined = select(Classification.mirror_of_entry_id).where(Classification.mirror_of_entry_id.is_not(None))
-        return (
+        query = (
             session.query(Classification)
             .join(JournalEntry, Classification.journal_entry_id == JournalEntry.id)
             .options(selectinload(Classification.entry).selectinload(JournalEntry.lines))
             .filter(
                 Classification.kind == ClassificationKind.transfer,
-                Classification.final_account_id == counterpart_id,
                 Classification.journal_entry_id.not_in(joined),
             )
-            .order_by(JournalEntry.entry_date.asc(), Classification.journal_entry_id.asc())
-            .all()
         )
+        if counterpart_id is not None:
+            query = query.filter(Classification.final_account_id == counterpart_id)
+        return query.order_by(JournalEntry.entry_date.asc(), Classification.journal_entry_id.asc()).all()
 
     return ctx.run(op).map_err(lambda err: ClassificationError(str(err)))

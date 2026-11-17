@@ -84,6 +84,11 @@ def account_ibans(ctx: DbTransactionContext) -> Result[dict[int, str | None], Ac
     )
 
 
+def row_side(classification: Classification) -> RowSide:
+    entry = classification.entry
+    return RowSide(entry.entry_date, statement_amount(classification), entry.counterparty_iban)
+
+
 def _transfer_side(transfer: Classification, ibans: dict[int, str | None]) -> TransferSide:
     entry = transfer.entry
     return TransferSide(
@@ -135,8 +140,7 @@ def absorb_counterpart_fall_through(
         return Result.err(candidates_res.unwrap_err())
     candidates = {candidate.journal_entry_id: candidate for candidate in candidates_res.unwrap()}
     rows = [
-        (entry_id, RowSide(c.entry.entry_date, statement_amount(c), c.entry.counterparty_iban))
-        for entry_id, c in candidates.items()
+        (entry_id, row_side(c)) for entry_id, c in candidates.items()
     ]
     picked = nearest_row(side, rows)
     if picked is None:

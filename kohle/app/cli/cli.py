@@ -21,7 +21,13 @@ from kohle.domain.domain_errors import (
     StateNotASetting,
     UnknownDeviceKey,
 )
-from kohle.domain.models import START, AccountType, RuleKind, UnitKind
+from kohle.domain.models import (
+    START,
+    AccountType,
+    ClassificationKind,
+    RuleKind,
+    UnitKind,
+)
 from kohle.infrastructure.device_config import (
     DEVICE_KEYS,
     DeviceConfig,
@@ -1025,10 +1031,14 @@ def classify_rules_cmd(make_session, yes: bool):
             "amount": move.amount,
             "from": move.bucket_name,
             "to": move.account_name,
-            "rule": move.rule_id,
+            "rule": "-" if move.rule_id is None else move.rule_id,
         }
         for move in moves
     ]
+    # Absent for category-only plans, so their output is as it always was.
+    if any(move.kind is not ClassificationKind.category for move in moves):
+        for row, move in zip(rows, moves, strict=True):
+            row["kind"] = f"mirror of {move.mirror_of}" if move.kind is ClassificationKind.mirror else move.kind.value
     click.echo(tabulate(rows, headers="keys", floatfmt=".2f"))
     if not yes:
         click.confirm(f"Move {len(moves)} line(s)?", abort=True)

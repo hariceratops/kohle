@@ -471,6 +471,28 @@ posts a reversing pair dated at the original entry, as `reclassify` does. The
 move is recorded against the rule that made it and does not count as a
 correction, so a rule's move is never mistaken for a human's.
 
+Transfer rules are ordinary entries in the same ordered list, so the first rule
+that matches a line wins, and `classify-rules` applies them to the lines left in
+the buckets as it does any other rule. A line that matches one becomes a move to
+the rule's account, and the same run absorbs the other side of that move: the
+untouched fall-through in the counterpart account that goes the opposite way for
+the same amount within three days. The preview lists both lines and gains a
+`kind` column, which is `transfer` for the move and `mirror of N` for the
+absorbed line, where N is the entry id of the move's statement line. A mirror
+shows `-` under `rule`, because no rule moved it. Plans made only of category
+moves have no `kind` column.
+
+Mirror recognition still runs before any rule: a fall-through that is the other
+side of a transfer already posted is absorbed even when a category rule would
+also match it, and with a transfer rule on each side the earlier line makes the
+move and absorbs the other. `Moved N line(s)` counts the mirrors as well.
+Lines a rule or a human has already classified are never touched, and the whole
+run is all or nothing and one audit-trail group.
+
+Retiring or editing a transfer rule never undoes a move already posted. Only
+`classify-rules` moves anything, so a changed rule file changes nothing until it
+is run.
+
 ## Correcting a line by hand
 
 `reclassify` moves a line onto a different account, whether a wrong rule put it

@@ -7,6 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from kohle.core.result import Result
+from kohle.domain.domain_errors import ClassifyPlanChanged
 from kohle.domain.models import (
     Account,
     AccountType,
@@ -21,7 +22,11 @@ from kohle.domain.models import (
 from kohle.use_cases import journal as journal_module
 from kohle.use_cases import transfers as transfers_module
 from kohle.use_cases.accounts import AddAccount
-from kohle.use_cases.classification import ListUnclassified
+from kohle.use_cases.classification import (
+    ApplyClassifyRules,
+    ListUnclassified,
+    PlanClassifyRules,
+)
 from kohle.use_cases.journal import ImportStatement
 from kohle.use_cases.rules import ApplyRuleFile, PlanRuleFile, ShowRules
 
@@ -451,3 +456,189 @@ def test_a_fault_while_absorbing_leaves_nothing_written_and_no_group(
     assert session.query(JournalEntry).count() == entries
     assert session.query(OperationGroup).count() == groups
     assert session.query(Classification).count() == classifications
+
+
+# classify-rules (issue 128, design §6, §18.3)
+
+
+def _import_unruled(session: Session, cash_rows, statement_row, *, out_rows=None, in_rows=None) -> None:
+    """Both statements imported before any rule exists, so every row is a fall-through."""
+    _ledger(session)
+    ImportStatement(session).execute("Checking", cash_rows(out_rows or [_out(statement_row)])).unwrap()
+    ImportStatement(session).execute("Savings", cash_rows(in_rows or [_in(statement_row)])).unwrap()
+
+
+def _classify(session: Session) -> list:
+    moves = PlanClassifyRules(session).execute().unwrap()
+    return ApplyClassifyRules(session).execute(moves).unwrap()
+
+
+def test_classify_rules_moves_a_transfer_and_absorbs_its_mirror_in_one_run(
+    session: Session, cash_rows, statement_row
+) -> None:
+    _import_unruled(session, cash_rows, statement_row)
+    _apply(session, _transfer_rule("Savings")).unwrap()
+    groups = session.query(OperationGroup).count()
+
+    moves = PlanClassifyRules(session).execute().unwrap()
+
+    assert [(m.kind, m.rule_id is None, m.account_name) for m in moves] == [
+        (ClassificationKind.transfer, False, "Savings"),
+        (ClassificationKind.mirror, True, "Savings"),
+    ]
+    assert moves[1].mirror_of == moves[0].entry_id
+    assert ApplyClassifyRules(session).execute(moves).unwrap() == moves
+
+    assert session.query(OperationGroup).count() == groups + 1
+    balances = _balances(session)
+    assert (balances["Checking"], balances["Savings"]) == (-500, 500)
+    assert balances["Unclassified Expense"] == 0 and balances["Unclassified Income"] == 0
+    assert _unclassified(session) == []
+    transfer = _by_kind(session, ClassificationKind.transfer)[0]
+    mirror = _by_kind(session, ClassificationKind.mirror)[0]
+    assert transfer.rerun_rule_id is not None and not transfer.corrected
+    assert transfer.matched_rule_id is None and transfer.final_account.name == "Savings"
+    assert mirror.mirror_of_entry_id == transfer.journal_entry_id
+    assert mirror.rerun_rule_id is None and not mirror.corrected
+
+
+def test_the_preview_shows_both_lines_with_a_kind_column(session: Session, cash_rows, statement_row) -> None:
+    from click.testing import CliRunner
+
+    from kohle.app.cli.cli import cli
+
+    _import_unruled(session, cash_rows, statement_row)
+    _apply(session, _transfer_rule("Savings")).unwrap()
+    out_id = _by_kind(session, ClassificationKind.category)[0].journal_entry_id
+
+    result = CliRunner().invoke(cli, ["classify-rules"], obj=lambda: session, input="n\n")
+
+    lines = result.output.splitlines()
+    assert lines[0].split() == ["entry_id", "date", "description", "amount", "from", "to", "rule", "kind"]
+    assert lines[2].split()[-1] == "transfer"
+    assert " ".join(lines[3].split()[-4:]) == f"- mirror of {out_id}"
+    assert "Move 2 line(s)?" in result.output
+
+
+def test_a_mirror_matched_by_a_category_rule_is_absorbed_not_moved(session: Session, cash_rows, statement_row) -> None:
+    _import_unruled(session, cash_rows, statement_row)
+    text = _transfer_rule("Savings") + '\n[[rule]]\naccount = "Groceries"\n[rule.when]\ndescription = "Move"\n'
+    _apply(session, text).unwrap()
+
+    moves = _classify(session)
+
+    assert [m.kind for m in moves] == [ClassificationKind.transfer, ClassificationKind.mirror]
+    assert "Groceries" not in _balances(session)
+
+
+def test_a_fall_through_that_mirrors_an_existing_transfer_is_absorbed_before_any_rule(
+    session: Session, cash_rows, statement_row
+) -> None:
+    _ledger(session)
+    _apply(session, _transfer_rule("Savings")).unwrap()
+    ImportStatement(session).execute("Checking", cash_rows([_out(statement_row)])).unwrap()
+    # Outside the window at import, so it fell through; brought inside it here
+    # to stand for a row the import's pairing missed.
+    ImportStatement(session).execute("Savings", cash_rows([_in(statement_row, day=date(2026, 4, 9))])).unwrap()
+    row = _by_kind(session, ClassificationKind.category)[0]
+    row.entry.entry_date = date(2026, 4, 4)
+    session.commit()
+    _apply(session, _transfer_rule("Savings") + '\n[[rule]]\naccount = "Groceries"\n[rule.when]\ndescription = "Move"\n').unwrap()
+
+    moves = _classify(session)
+
+    assert [m.kind for m in moves] == [ClassificationKind.mirror]
+    assert moves[0].rule_id is None
+    assert "Groceries" not in _balances(session)
+
+
+def test_symmetric_transfer_rules_let_the_earlier_line_make_the_move(
+    session: Session, cash_rows, statement_row
+) -> None:
+    _import_unruled(session, cash_rows, statement_row)
+    _apply(session, MOVE_RULES).unwrap()
+
+    moves = _classify(session)
+
+    assert [m.kind for m in moves] == [ClassificationKind.transfer, ClassificationKind.mirror]
+    transfer = _by_kind(session, ClassificationKind.transfer)[0]
+    assert transfer.entry.entry_date == date(2026, 4, 3) and transfer.final_account.name == "Savings"
+    assert _unclassified(session) == []
+
+
+def test_classify_rules_leaves_rule_classified_and_human_touched_lines_alone(
+    session: Session, cash_rows, statement_row
+) -> None:
+    _ledger(session)
+    ImportStatement(session).execute("Checking", cash_rows([_out(statement_row)])).unwrap()
+    ImportStatement(session).execute("Savings", cash_rows([_in(statement_row)])).unwrap()
+    savings_row = _by_kind(session, ClassificationKind.category)[1]
+    savings_row.corrected = True
+    savings_row_id = savings_row.id
+    session.commit()
+    _apply(session, _transfer_rule("Savings")).unwrap()
+
+    moves = PlanClassifyRules(session).execute().unwrap()
+
+    assert [m.kind for m in moves] == [ClassificationKind.transfer]
+    _classify(session)
+    assert session.get(Classification, savings_row_id).final_account.name == "Unclassified Income"
+    assert _by_kind(session, ClassificationKind.mirror) == []
+
+
+def test_a_transfer_with_no_mirror_candidate_is_a_single_move(session: Session, cash_rows, statement_row) -> None:
+    _ledger(session)
+    ImportStatement(session).execute("Checking", cash_rows([_out(statement_row)])).unwrap()
+    _apply(session, _transfer_rule("Savings")).unwrap()
+
+    moves = _classify(session)
+
+    assert [m.kind for m in moves] == [ClassificationKind.transfer]
+    assert _balances(session) == {"Checking": -500, "Savings": 500, "Unclassified Expense": 0}
+
+
+def test_retiring_a_transfer_rule_never_undoes_a_posted_move(session: Session, cash_rows, statement_row) -> None:
+    _import_unruled(session, cash_rows, statement_row)
+    _apply(session, _transfer_rule("Savings")).unwrap()
+    _classify(session)
+    entries = session.query(JournalEntry).count()
+
+    _apply(session, "").unwrap()
+
+    assert PlanClassifyRules(session).execute().unwrap() == []
+    assert session.query(JournalEntry).count() == entries
+    assert _by_kind(session, ClassificationKind.transfer)[0].final_account.name == "Savings"
+    assert len(_by_kind(session, ClassificationKind.mirror)) == 1
+
+
+def test_a_fault_on_the_mirror_rolls_the_whole_run_back(
+    session: Session, cash_rows, statement_row, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _import_unruled(session, cash_rows, statement_row)
+    _apply(session, _transfer_rule("Savings")).unwrap()
+    moves = PlanClassifyRules(session).execute().unwrap()
+    entries, groups = session.query(JournalEntry).count(), session.query(OperationGroup).count()
+    monkeypatch.setattr(transfers_module, "set_mirror_service", lambda *args, **kwargs: Result.err(RuntimeError("boom")))
+
+    assert ApplyClassifyRules(session).execute(moves).is_err
+
+    assert session.query(JournalEntry).count() == entries
+    assert session.query(OperationGroup).count() == groups
+    assert _by_kind(session, ClassificationKind.transfer) == []
+
+
+def test_an_import_between_preview_and_apply_gives_classify_plan_changed(
+    session: Session, cash_rows, statement_row
+) -> None:
+    _import_unruled(session, cash_rows, statement_row)
+    _apply(session, _transfer_rule("Savings")).unwrap()
+    moves = PlanClassifyRules(session).execute().unwrap()
+    ImportStatement(session).execute(
+        "Savings", cash_rows([_in(statement_row, day=date(2026, 4, 3), reference="late")])
+    ).unwrap()
+    entries = session.query(JournalEntry).count()
+
+    result = ApplyClassifyRules(session).execute(moves)
+
+    assert isinstance(result.unwrap_err(), ClassifyPlanChanged)
+    assert session.query(JournalEntry).count() == entries

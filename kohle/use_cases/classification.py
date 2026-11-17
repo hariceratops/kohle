@@ -13,12 +13,18 @@ from kohle.domain.domain_errors import (
     PostingToNonLeafAccount,
     ReclassifyError,
 )
-from kohle.domain.models import Classification, JournalEntry
+from kohle.domain.models import (
+    Classification,
+    ClassificationKind,
+    JournalEntry,
+    RuleKind,
+)
 from kohle.infrastructure.transaction_context import DbTransactionContext
 from kohle.infrastructure.uow import UnitOfWork
 from kohle.services.account_services import (
     account_has_children_service,
     get_account_by_name_service,
+    list_accounts_service,
 )
 from kohle.services.classification_services import (
     classification_by_entry_service,
@@ -30,8 +36,17 @@ from kohle.services.classification_services import (
 from kohle.services.journal_services import Counterparty
 from kohle.services.split_services import split_by_entry_service
 from kohle.use_cases.accounts import UNCLASSIFIED_EXPENSE, UNCLASSIFIED_INCOME
-from kohle.use_cases.posting import post_correction, statement_amount
+from kohle.use_cases.posting import post_correction, statement_amount, statement_line
 from kohle.use_cases.rules import compile_rules, match_rule, stored_rules
+from kohle.use_cases.transfers import (
+    TransferSide,
+    absorb,
+    account_ibans,
+    nearest_row,
+    nearest_transfer,
+    open_transfers_into,
+    row_side,
+)
 
 # classification.py may import from journal.py (post_entry, the bucket names)
 # and reaches split_by_entry_service in the services layer directly, never
@@ -166,13 +181,15 @@ class RerunMove:
     description: str
     amount: Decimal  # signed, as the rules saw it
     bucket_name: str
-    rule_id: int
-    account_id: int
+    rule_id: int | None  # None for a mirror: no rule moved it, a transfer absorbed it
+    account_id: int  # where the line goes; for a mirror, its own account
     account_name: str
+    kind: ClassificationKind = ClassificationKind.category
+    mirror_of: int | None = None
 
     @property
-    def key(self) -> tuple[int, int, int]:
-        return (self.entry_id, self.rule_id, self.account_id)
+    def key(self) -> tuple[int, int | None, int, ClassificationKind, int | None]:
+        return (self.entry_id, self.rule_id, self.account_id, self.kind, self.mirror_of)
 
 
 def _plan_moves(ctx: DbTransactionContext) -> Result[list[RerunMove], ClassifyRulesError]:
@@ -191,32 +208,108 @@ def _plan_moves(ctx: DbTransactionContext) -> Result[list[RerunMove], ClassifyRu
     candidates_res = rerun_candidates_service(ctx, bucket_ids)
     if candidates_res.is_err:
         return Result.err(candidates_res.unwrap_err())
+    candidates = candidates_res.unwrap()
     rules_res = stored_rules(ctx)
     if rules_res.is_err:
         return Result.err(rules_res.unwrap_err())
-    rules = rules_res.unwrap()
-    compiled = compile_rules(rules)
-    account_names = {rule.account_id: rule.account_name for rule in rules}
+    compiled = compile_rules(rules_res.unwrap())
+    ibans_res = account_ibans(ctx)
+    if ibans_res.is_err:
+        return Result.err(ibans_res.unwrap_err())
+    ibans = ibans_res.unwrap()
+    accounts_res = list_accounts_service(ctx)
+    if accounts_res.is_err:
+        return Result.err(accounts_res.unwrap_err())
+    account_names = {account.id: account.name for account in accounts_res.unwrap()}
 
-    moves = []
-    for classification in candidates_res.unwrap():
+    by_entry = {c.journal_entry_id: c for c in candidates}
+    matches = {}
+    for classification in candidates:
         entry = classification.entry
         counterparty = Counterparty(entry.counterparty_name, entry.counterparty_iban)
-        amount = statement_amount(classification)
-        matched = match_rule(compiled, entry.description, counterparty, amount)
-        # A rule aimed at the bucket the line is already in moves nothing.
-        if matched is None or matched.account_id == classification.final_account_id:
-            continue
-        moves.append(
-            RerunMove(
-                entry.id, entry.entry_date, entry.description, amount, classification.final_account.name,
-                matched.rule_id, matched.account_id, account_names[matched.account_id],
-            )
+        matches[entry.id] = match_rule(
+            compiled,
+            entry.description,
+            counterparty,
+            statement_amount(classification),
+            statement_account_id=statement_line(classification).account_id,
         )
 
+    def move(
+        classification: Classification,
+        rule_id: int | None,
+        account_id: int,
+        kind: ClassificationKind,
+        mirror_of: int | None = None,
+    ) -> RerunMove:
+        entry = classification.entry
+        return RerunMove(
+            entry.id, entry.entry_date, entry.description, statement_amount(classification),
+            classification.final_account.name, rule_id, account_id, account_names[account_id], kind, mirror_of,
+        )
+
+    moves: list[RerunMove] = []
+    claimed: set[int] = set()
+
+    # Mirror recognition runs before any rule, so a line that mirrors an
+    # existing transfer is absorbed even when a rule would also match it.
+    open_by_account: dict[int, list[TransferSide]] = {}
+    for classification in candidates:
+        account_id = statement_line(classification).account_id
+        if account_id not in open_by_account:
+            open_res = open_transfers_into(ctx, account_id, ibans)
+            if open_res.is_err:
+                return Result.err(open_res.unwrap_err())
+            open_by_account[account_id] = open_res.unwrap()
+        pool = open_by_account[account_id]
+        hit = nearest_transfer(row_side(classification), pool)
+        if hit is not None:
+            pool.remove(hit)
+            claimed.add(classification.journal_entry_id)
+            moves.append(move(classification, None, account_id, ClassificationKind.mirror, hit.entry_id))
+
+    # A transfer move takes its counterpart's nearest fall-through with it, so
+    # with symmetric rules the earlier line makes the move and absorbs the other.
+    for classification in candidates:
+        matched = matches[classification.journal_entry_id]
+        if classification.journal_entry_id in claimed or matched is None or matched.kind is not RuleKind.transfer:
+            continue
+        claimed.add(classification.journal_entry_id)
+        moves.append(move(classification, matched.rule_id, matched.account_id, ClassificationKind.transfer))
+        side = TransferSide(
+            classification.entry.id,
+            classification.entry.entry_date,
+            statement_amount(classification),
+            matched.account_id,
+            ibans[statement_line(classification).account_id],
+        )
+        rows = [
+            (other.journal_entry_id, row_side(other))
+            for other in candidates
+            if other.journal_entry_id not in claimed and statement_line(other).account_id == matched.account_id
+        ]
+        picked = nearest_row(side, rows)
+        if picked is not None:
+            claimed.add(picked)
+            moves.append(
+                move(by_entry[picked], None, matched.account_id, ClassificationKind.mirror, side.entry_id)
+            )
+
+    for classification in candidates:
+        matched = matches[classification.journal_entry_id]
+        # A rule aimed at the bucket the line is already in moves nothing.
+        if (
+            classification.journal_entry_id in claimed
+            or matched is None
+            or matched.account_id == classification.final_account_id
+        ):
+            continue
+        moves.append(move(classification, matched.rule_id, matched.account_id, ClassificationKind.category))
+
     # Checked before any preview, so it never promises a move the apply would
-    # refuse, and the failure matches the import's.
-    for account_id in sorted({move.account_id for move in moves}):
+    # refuse, and the failure matches the import's. A mirror goes to the
+    # account its statement was imported into, which is never a rule's target.
+    for account_id in sorted({m.account_id for m in moves if m.kind is not ClassificationKind.mirror}):
         has_children = account_has_children_service(ctx, account_id)
         if has_children.is_err:
             return Result.err(has_children.unwrap_err())
@@ -248,10 +341,19 @@ class ApplyClassifyRules(UnitOfWork[list[RerunMove], ClassifyRulesError]):
                 if classification_res.is_err:
                     return Result.err(classification_res.unwrap_err())
                 classification = classification_res.unwrap()
+                if move.kind is ClassificationKind.mirror:
+                    assert move.mirror_of is not None
+                    absorbed = absorb(ctx, classification, move.mirror_of, by_human=False)
+                    if absorbed.is_err:
+                        return Result.err(absorbed.unwrap_err())
+                    continue
+                assert move.rule_id is not None
                 posted = post_correction(ctx, classification, move.account_id, f"Classify: {move.description}")
                 if posted.is_err:
                     return Result.err(posted.unwrap_err())
-                outcome = set_rerun_outcome_service(ctx, classification.id, move.account_id, move.rule_id)
+                outcome = set_rerun_outcome_service(
+                    ctx, classification.id, move.account_id, move.rule_id, kind=move.kind
+                )
                 if outcome.is_err:
                     return Result.err(outcome.unwrap_err())
             return Result.ok(moves)
