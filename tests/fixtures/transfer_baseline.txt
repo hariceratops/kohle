@@ -1,0 +1,296 @@
+$ add-unit EUR Euro --kind currency
+[exit 0]
+Added unit EUR (currency) with id 1
+
+$ add-account Checking --type asset --iban DE89370400440532013000
+[exit 0]
+Added account Checking (asset) with id 1
+
+$ add-account Savings --type asset --iban DE44500105175407324931
+[exit 0]
+Added account Savings (asset) with id 2
+
+$ add-account Checking2 --type asset
+[exit 0]
+Added account Checking2 (asset) with id 3
+
+$ add-account Savings2 --type asset
+[exit 0]
+Added account Savings2 (asset) with id 4
+
+$ add-account People --type asset
+[exit 0]
+Added account People (asset) with id 5
+
+$ add-account Transfers --type asset
+[exit 0]
+Added account Transfers (asset) with id 6
+
+$ add-account Groceries --type expense
+[exit 0]
+Added account Groceries (expense) with id 7
+
+$ add-account Rent --type expense
+[exit 0]
+Added account Rent (expense) with id 8
+
+$ import-statement kohle-deutsche-bank Checking transfer_checking.csv
+[exit 0]
+Import succeeded, 3 entries imported
+
+$ import-statement kohle-deutsche-bank Savings transfer_savings.csv
+[exit 0]
+Import succeeded, 2 entries imported
+
+$ list-unclassified
+[exit 0]
+  entry_id  date        description                                       counterparty      amount  account
+----------  ----------  ------------------------------------------------  --------------  --------  --------------------
+         1  2026-04-03  Move to savings                                   Erika Beispiel    500.00  Unclassified Expense
+         4  2026-04-04  Move to savings                                   Erika Beispiel    500.00  Unclassified Income
+         2  2026-04-08  Card 0001 ALDI SUED 08-04-2026T18:45:12 purchase  ALDI SUED          31.20  Unclassified Expense
+         3  2026-04-20  Salary April                                      ACME GmbH        2500.00  Unclassified Income
+         5  2026-04-30  Interest April                                    Sparkasse           0.40  Unclassified Income
+
+$ apply-rules rules.toml --yes
+[exit 0]
+3 added, 0 retired, 0 reordered, 0 note changed, 0 unchanged
+  rule 1 (new) -> Transfers { iban = "DE44500105175407324931" }
+  rule 2 (new) -> Transfers { iban = "DE89370400440532013000" }
+  rule 3 (new) -> Groceries { description = "aldi" }
+Applied: 3 added, 0 retired, 0 reordered, 0 note changed, 0 unchanged
+
+$ classify-rules
+[exit 1]
+  entry_id  date        description                                         amount  from                  to           rule
+----------  ----------  ------------------------------------------------  --------  --------------------  ---------  ------
+         1  2026-04-03  Move to savings                                    -500.00  Unclassified Expense  Transfers       1
+         4  2026-04-04  Move to savings                                     500.00  Unclassified Income   Transfers       2
+         2  2026-04-08  Card 0001 ALDI SUED 08-04-2026T18:45:12 purchase    -31.20  Unclassified Expense  Groceries       3
+Move 3 line(s)? [y/N]:Aborted!
+ 
+$ classify-rules --yes
+[exit 0]
+  entry_id  date        description                                         amount  from                  to           rule
+----------  ----------  ------------------------------------------------  --------  --------------------  ---------  ------
+         1  2026-04-03  Move to savings                                    -500.00  Unclassified Expense  Transfers       1
+         4  2026-04-04  Move to savings                                     500.00  Unclassified Income   Transfers       2
+         2  2026-04-08  Card 0001 ALDI SUED 08-04-2026T18:45:12 purchase    -31.20  Unclassified Expense  Groceries       3
+Moved 3 line(s)
+
+$ list-unclassified
+[exit 0]
+  entry_id  date        description     counterparty      amount  account
+----------  ----------  --------------  --------------  --------  -------------------
+         3  2026-04-20  Salary April    ACME GmbH        2500.00  Unclassified Income
+         5  2026-04-30  Interest April  Sparkasse           0.40  Unclassified Income
+
+$ import-statement kohle-deutsche-bank Savings2 transfer_savings.csv
+[exit 0]
+Import succeeded, 2 entries imported
+
+$ import-statement kohle-deutsche-bank Checking2 transfer_checking.csv
+[exit 0]
+Import succeeded, 3 entries imported
+
+$ import-statement kohle-deutsche-bank Checking2 transfer_checking.csv
+[exit 0]
+Import succeeded, 0 entries imported
+
+$ list-unclassified
+[exit 0]
+  entry_id  date        description     counterparty      amount  account
+----------  ----------  --------------  --------------  --------  -------------------
+         3  2026-04-20  Salary April    ACME GmbH        2500.00  Unclassified Income
+        13  2026-04-20  Salary April    ACME GmbH        2500.00  Unclassified Income
+         5  2026-04-30  Interest April  Sparkasse           0.40  Unclassified Income
+        10  2026-04-30  Interest April  Sparkasse           0.40  Unclassified Income
+
+$ reclassify 11 Rent
+[exit 0]
+Reclassified entry 11 to Rent
+
+$ list-unclassified
+[exit 0]
+  entry_id  date        description     counterparty      amount  account
+----------  ----------  --------------  --------------  --------  -------------------
+         3  2026-04-20  Salary April    ACME GmbH        2500.00  Unclassified Income
+        13  2026-04-20  Salary April    ACME GmbH        2500.00  Unclassified Income
+         5  2026-04-30  Interest April  Sparkasse           0.40  Unclassified Income
+        10  2026-04-30  Interest April  Sparkasse           0.40  Unclassified Income
+
+$ show-rules
+[exit 0]
+# kohle classification rules, in priority order: the first rule that matches
+# a line wins. Keys under [rule.when] must all hold; any = [...] needs one of
+# its tables to hold; not = {...} must not hold.
+# Leave `base` as it is: apply-rules uses it to refuse if the stored rules
+# changed after this file was rendered.
+base = "933bd39e14c5e573"
+
+[[rule]]
+account = "Transfers"
+[rule.when]
+iban = "DE44500105175407324931"
+
+[[rule]]
+account = "Transfers"
+[rule.when]
+iban = "DE89370400440532013000"
+
+[[rule]]
+account = "Groceries"
+[rule.when]
+description = "aldi"
+
+$ list-accounts
+[exit 0]
+account               type     iban
+--------------------  -------  ----------------------
+Checking              asset    DE89370400440532013000
+Checking2             asset    -
+Groceries             expense  -
+People                asset    -
+Rent                  expense  -
+Savings               asset    DE44500105175407324931
+Savings2              asset    -
+Transfers             asset    -
+Unclassified Expense  expense  -
+Unclassified Income   income   -
+
+$ balance Checking
+[exit 0]
+unit                     quantity  price    price date      market value  status      average cost
+---------------------  ----------  -------  ------------  --------------  --------  --------------
+EUR                       1968.80  -        -                    1968.80  -                   1.00
+Total (base currency)     1968.80  -        -                    1968.80  -                   -
+
+$ balance Savings
+[exit 0]
+unit                     quantity  price    price date      market value  status      average cost
+---------------------  ----------  -------  ------------  --------------  --------  --------------
+EUR                        500.40  -        -                     500.40  -                   1.00
+Total (base currency)      500.40  -        -                     500.40  -                   -
+
+$ balance Checking2
+[exit 0]
+unit                     quantity  price    price date      market value  status      average cost
+---------------------  ----------  -------  ------------  --------------  --------  --------------
+EUR                       1968.80  -        -                    1968.80  -                   1.00
+Total (base currency)     1968.80  -        -                    1968.80  -                   -
+
+$ balance Savings2
+[exit 0]
+unit                     quantity  price    price date      market value  status      average cost
+---------------------  ----------  -------  ------------  --------------  --------  --------------
+EUR                        500.40  -        -                     500.40  -                   1.00
+Total (base currency)      500.40  -        -                     500.40  -                   -
+
+$ balance Transfers
+[exit 0]
+unit                     quantity  price    price date      market value  status      average cost
+---------------------  ----------  -------  ------------  --------------  --------  --------------
+EUR                       -500.00  -        -                    -500.00  -                   1.00
+Total (base currency)     -500.00  -        -                    -500.00  -                   -
+
+$ balance Groceries
+[exit 0]
+unit                     quantity  price    price date      market value  status      average cost
+---------------------  ----------  -------  ------------  --------------  --------  --------------
+EUR                         62.40  -        -                      62.40  -                   1.00
+Total (base currency)       62.40  -        -                      62.40  -                   -
+
+$ balance Rent
+[exit 0]
+unit                     quantity  price    price date      market value  status      average cost
+---------------------  ----------  -------  ------------  --------------  --------  --------------
+EUR                        500.00  -        -                     500.00  -                   1.00
+Total (base currency)      500.00  -        -                     500.00  -                   -
+
+$ balance Unclassified Expense
+[exit 0]
+unit                     quantity  price    price date      market value  status    average cost
+---------------------  ----------  -------  ------------  --------------  --------  --------------
+EUR                          0.00  -        -                       0.00  -         -
+Total (base currency)        0.00  -        -                       0.00  -         -
+
+$ balance Unclassified Income
+[exit 0]
+unit                     quantity  price    price date      market value  status      average cost
+---------------------  ----------  -------  ------------  --------------  --------  --------------
+EUR                      -5000.80  -        -                   -5000.80  -                   1.00
+Total (base currency)    -5000.80  -        -                   -5000.80  -                   -
+
+$ entries-in-period Transfers 2026-01-01 2026-12-31
+[exit 0]
+  entry_id  date        description                  counterparty    side      quantity  unit      value
+----------  ----------  ---------------------------  --------------  ------  ----------  ------  -------
+         6  2026-04-03  Classify: Move to savings    -               dr          500.00  EUR      500.00
+        11  2026-04-03  Move to savings              Erika Beispiel  dr          500.00  EUR      500.00
+        14  2026-04-03  Reclassify: Move to savings  -               cr          500.00  EUR      500.00
+         7  2026-04-04  Classify: Move to savings    -               cr          500.00  EUR      500.00
+         9  2026-04-04  Move to savings              Erika Beispiel  cr          500.00  EUR      500.00
+
+$ net-worth
+[exit 0]
+section       unit      quantity  price    price date      market value  status      at cost
+------------  ------  ----------  -------  ------------  --------------  --------  ---------
+Own accounts  EUR        4438.40  -        -                    4438.40  -           4438.40
+
+Net worth (at cost): 4438.40
+Net worth (at market): 4438.40
+0 of 0 holdings estimated
+
+$ budget --from 2026-01-01
+[exit 0]
+account               from        to          cap      spent  over/under    note
+--------------------  ----------  ----------  -----  -------  ------------  ------
+Unclassified Expense  2026-01-01  2026-06-15  -         0.00  -             -
+(uncapped)            2026-01-01  2026-06-15  -       562.40  -             -
+
+$ list-operations
+[exit 0]
+  group  entity_type        entity_id  action
+-------  ---------------  -----------  --------
+     16  journal_entries           14  create
+     16  classifications            8  update
+     15  journal_entries           11  create
+     15  classifications            8  create
+     15  journal_entries           12  create
+     15  classifications            9  create
+     15  journal_entries           13  create
+     15  classifications           10  create
+     14  journal_entries            9  create
+     14  classifications            6  create
+     14  journal_entries           10  create
+     14  classifications            7  create
+     13  journal_entries            6  create
+     13  classifications            1  update
+     13  journal_entries            7  create
+     13  classifications            4  update
+     13  journal_entries            8  create
+     13  classifications            2  update
+     12  rules                      1  create
+     12  rules                      2  create
+     12  rules                      3  create
+     11  journal_entries            4  create
+     11  classifications            4  create
+     11  journal_entries            5  create
+     11  classifications            5  create
+     10  accounts                   9  create
+     10  accounts                  10  create
+     10  journal_entries            1  create
+     10  classifications            1  create
+     10  journal_entries            2  create
+     10  classifications            2  create
+     10  journal_entries            3  create
+     10  classifications            3  create
+      9  accounts                   8  create
+      8  accounts                   7  create
+      7  accounts                   6  create
+      6  accounts                   5  create
+      5  accounts                   4  create
+      4  accounts                   3  create
+      3  accounts                   2  create
+      2  accounts                   1  create
+      1  units                      1  create
