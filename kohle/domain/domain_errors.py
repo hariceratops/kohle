@@ -311,6 +311,54 @@ class NoClassificationForEntry(ClassificationError):
         )
 
 
+class NotAFallThrough(ClassificationError):
+    def __init__(self, entry_id: int) -> None:
+        super().__init__()
+        self.entry_id = entry_id
+
+    def __str__(self) -> str:
+        return f"Entry {self.entry_id} is not in an unclassified bucket; only a fall-through line can be joined"
+
+
+class NotATransfer(ClassificationError):
+    def __init__(self, entry_id: int) -> None:
+        super().__init__()
+        self.entry_id = entry_id
+
+    def __str__(self) -> str:
+        return f"Entry {self.entry_id} is not a transfer"
+
+
+class TransferHasMirror(ClassificationError):
+    def __init__(self, entry_id: int, mirror_id: int) -> None:
+        super().__init__()
+        self.entry_id = entry_id
+        self.mirror_id = mirror_id
+
+    def __str__(self) -> str:
+        return f"Transfer {self.entry_id} already has a mirror, entry {self.mirror_id}; unjoin-transfer {self.mirror_id} first"
+
+
+class NotTheMirror(ClassificationError):
+    def __init__(self, line_id: int, transfer_id: int, reason: str) -> None:
+        super().__init__()
+        self.line_id = line_id
+        self.transfer_id = transfer_id
+        self.reason = reason
+
+    def __str__(self) -> str:
+        return f"Entry {self.line_id} cannot be the mirror of transfer {self.transfer_id}: {self.reason}"
+
+
+class NotAMirror(ClassificationError):
+    def __init__(self, entry_id: int) -> None:
+        super().__init__()
+        self.entry_id = entry_id
+
+    def __str__(self) -> str:
+        return f"Entry {self.entry_id} is not the mirror of a transfer"
+
+
 class SplitError(Exception):
     pass
 
@@ -556,6 +604,8 @@ ReclassifyError = AccountError | JournalError | ClassificationError | SplitError
 # post_entry for the adjusting entry, and DuplicateLineInEntry for two
 # persons named twice in one invocation (design §4.3).
 SplitImportedEntryError = AccountError | JournalError | ClassificationError | SplitError
+
+JoinTransferError = AccountError | JournalError | ClassificationError | SplitError
 
 
 class PriceError(Exception):

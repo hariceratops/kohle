@@ -7,19 +7,35 @@ from kohle.core.result import Result
 from kohle.domain.domain_errors import (
     AccountError,
     ClassificationError,
+    EntryAlreadySplit,
+    JoinTransferError,
     JournalError,
     ListUnmirroredError,
+    NoSplitForEntry,
+    NotAFallThrough,
+    NotAMirror,
+    NotATransfer,
+    NotTheMirror,
+    TransferHasMirror,
 )
-from kohle.domain.models import Classification, JournalEntry
+from kohle.domain.models import Classification, ClassificationKind, JournalEntry
 from kohle.infrastructure.transaction_context import DbTransactionContext
 from kohle.infrastructure.uow import UnitOfWork
-from kohle.services.account_services import list_accounts_service
+from kohle.services.account_services import (
+    get_account_by_name_service,
+    list_accounts_service,
+)
 from kohle.services.classification_services import (
+    classification_by_entry_service,
+    clear_mirror_service,
     first_statement_dates_service,
+    mirror_of_service,
     open_transfers_service,
     rerun_candidates_service,
     set_mirror_service,
 )
+from kohle.services.split_services import split_by_entry_service
+from kohle.use_cases.accounts import UNCLASSIFIED_EXPENSE, UNCLASSIFIED_INCOME
 from kohle.use_cases.conditions import normalise_iban
 from kohle.use_cases.posting import post_correction, statement_amount, statement_line
 
@@ -132,6 +148,27 @@ def absorb(
     return posted
 
 
+def unabsorb(
+    ctx: DbTransactionContext, mirror: Classification, *, by_human: bool
+) -> Result[JournalEntry, TransferError]:
+    """Put an absorbed row's own posting back in the bucket of its direction,
+    the import's own rule. Not `proposed_account_id`: a join may take a line
+    that a rule first sent elsewhere and a human moved into the bucket, and
+    unjoining must return it there."""
+    bucket_name = UNCLASSIFIED_EXPENSE if statement_amount(mirror) < 0 else UNCLASSIFIED_INCOME
+    bucket_res = get_account_by_name_service(ctx, bucket_name)
+    if bucket_res.is_err:
+        return Result.err(bucket_res.unwrap_err())
+    bucket_id = bucket_res.unwrap().id
+    posted = post_correction(ctx, mirror, bucket_id, f"Unmirror: {mirror.entry.description}")
+    if posted.is_err:
+        return posted
+    outcome = clear_mirror_service(ctx, mirror.id, bucket_id, by_human)
+    if outcome.is_err:
+        return Result.err(outcome.unwrap_err())
+    return posted
+
+
 def absorb_counterpart_fall_through(
     ctx: DbTransactionContext,
     transfer: Classification,
@@ -205,5 +242,90 @@ class ListUnmirroredTransfers(UnitOfWork[list[UnmirroredTransfer], ListUnmirrore
                     and transfer.entry.entry_date >= firsts[transfer.final_account_id] - window
                 ]
             )
+
+        return self._run(use_case)
+
+
+def _not_the_mirror_reason(line: Classification, transfer: Classification, names: dict[int, str]) -> str | None:
+    imported_into = statement_line(line).account_id
+    if imported_into != transfer.final_account_id:
+        return (
+            f"it was imported into {names[imported_into]}, not {names[transfer.final_account_id]}"
+        )
+    line_amount, transfer_amount = statement_amount(line), statement_amount(transfer)
+    if line_amount == -transfer_amount:
+        return None
+    if line_amount.copy_abs() == transfer_amount.copy_abs():
+        return f"it goes the same way as the transfer ({transfer_amount:.2f})"
+    return f"its amount is {line_amount:.2f}, the transfer's is {transfer_amount:.2f}"
+
+
+class JoinTransfer(UnitOfWork[JournalEntry, JoinTransferError]):
+    """Joins a fall-through line, however late, to a named transfer as its
+    mirror. The window and the IBAN are not checked: overriding them is the
+    point. It corrects one line; nothing is suggested."""
+
+    def execute(self, line_entry_id: int, transfer_entry_id: int) -> Result[JournalEntry, JoinTransferError]:
+        def use_case(ctx: DbTransactionContext) -> Result[JournalEntry, JoinTransferError]:
+            line_res = classification_by_entry_service(ctx, line_entry_id)
+            if line_res.is_err:
+                return Result.err(line_res.unwrap_err())
+            line = line_res.unwrap()
+
+            bucket_ids = []
+            for bucket_name in (UNCLASSIFIED_EXPENSE, UNCLASSIFIED_INCOME):
+                bucket_res = get_account_by_name_service(ctx, bucket_name)
+                if bucket_res.is_err:
+                    return Result.err(bucket_res.unwrap_err())
+                bucket_ids.append(bucket_res.unwrap().id)
+            split_res = split_by_entry_service(ctx, line_entry_id)
+            if split_res.is_ok:
+                if split_res.unwrap().adjusting_entry_id is not None:
+                    return Result.err(EntryAlreadySplit(line_entry_id))
+            elif not isinstance(split_res.unwrap_err(), NoSplitForEntry):
+                return Result.err(split_res.unwrap_err())
+            if line.kind != ClassificationKind.category or line.final_account_id not in bucket_ids:
+                return Result.err(NotAFallThrough(line_entry_id))
+
+            transfer_res = classification_by_entry_service(ctx, transfer_entry_id)
+            if transfer_res.is_err:
+                return Result.err(transfer_res.unwrap_err())
+            transfer = transfer_res.unwrap()
+            if transfer.kind != ClassificationKind.transfer:
+                return Result.err(NotATransfer(transfer_entry_id))
+
+            mirror_res = mirror_of_service(ctx, transfer_entry_id)
+            if mirror_res.is_err:
+                return Result.err(mirror_res.unwrap_err())
+            existing = mirror_res.unwrap()
+            if existing is not None:
+                return Result.err(TransferHasMirror(transfer_entry_id, existing.journal_entry_id))
+
+            accounts_res = list_accounts_service(ctx)
+            if accounts_res.is_err:
+                return Result.err(accounts_res.unwrap_err())
+            names = {account.id: account.name for account in accounts_res.unwrap()}
+            reason = _not_the_mirror_reason(line, transfer, names)
+            if reason is not None:
+                return Result.err(NotTheMirror(line_entry_id, transfer_entry_id, reason))
+
+            return absorb(ctx, line, transfer_entry_id, by_human=True)
+
+        return self._run(use_case)
+
+
+class UnjoinTransfer(UnitOfWork[JournalEntry, JoinTransferError]):
+    """Undoes an absorption: the row's own posting goes back to its bucket and
+    the row is marked corrected, so no rule or later run absorbs it again."""
+
+    def execute(self, line_entry_id: int) -> Result[JournalEntry, JoinTransferError]:
+        def use_case(ctx: DbTransactionContext) -> Result[JournalEntry, JoinTransferError]:
+            line_res = classification_by_entry_service(ctx, line_entry_id)
+            if line_res.is_err:
+                return Result.err(line_res.unwrap_err())
+            line = line_res.unwrap()
+            if line.kind != ClassificationKind.mirror:
+                return Result.err(NotAMirror(line_entry_id))
+            return unabsorb(ctx, line, by_human=True)
 
         return self._run(use_case)

@@ -248,6 +248,71 @@ arrive. A transfer to an account that has never been imported is not listed,
 and neither is one whose mirror was absorbed. The command only reads: it writes
 nothing and records no operation group.
 
+### Joining a late mirror
+
+A row more than three days from its move is not recognised, and falls through
+to an unclassified bucket. `join-transfer LINE_ENTRY TRANSFER_ENTRY` corrects
+that one line by hand: it names the fall-through line and the transfer, and the
+line becomes the transfer's mirror. Here Savings' row arrives six days after
+the move:
+
+<!-- docs: uses transfer-rules.toml -->
+```console
+$ kohle-cli add-account Checking --type asset
+Added account Checking (asset) with id 2
+$ kohle-cli add-account Savings --type asset
+Added account Savings (asset) with id 3
+$ kohle-cli add-account Groceries --type expense
+Added account Groceries (expense) with id 4
+$ kohle-cli apply-rules transfer-rules.toml --yes
+2 added, 0 retired, 0 reordered, 0 note changed, 0 unchanged
+  rule 1 (new) -> transfer Savings { iban = "DE44500105175407324931", direction = "out" }
+  rule 2 (new) -> Groceries { counterparty = "FRISCHMARKT" }
+Applied: 2 added, 0 retired, 0 reordered, 0 note changed, 0 unchanged
+$ kohle-cli import-statement kohle-deutsche-bank Checking transfers.csv
+Import succeeded, 2 entries imported
+$ kohle-cli import-statement kohle-deutsche-bank Savings savings-late.csv
+Import succeeded, 1 entries imported
+$ kohle-cli list-unclassified
+  entry_id  date        description    counterparty      amount  account
+----------  ----------  -------------  --------------  --------  -------------------
+         3  2026-06-09  From checking  Erika Beispiel    500.00  Unclassified Income
+$ kohle-cli join-transfer 3 1
+Joined entry 3 to transfer 1
+$ kohle-cli list-unclassified
+No unclassified lines
+$ kohle-cli balance Savings
+unit                     quantity  price    price date      market value  status      average cost
+---------------------  ----------  -------  ------------  --------------  --------  --------------
+EUR                        500.00  -        -                     500.00  -                   1.00
+Total (base currency)      500.00  -        -                     500.00  -                   -
+$ kohle-cli unjoin-transfer 3
+Unjoined entry 3
+$ kohle-cli list-unclassified
+  entry_id  date        description    counterparty      amount  account
+----------  ----------  -------------  --------------  --------  -------------------
+         3  2026-06-09  From checking  Erika Beispiel    500.00  Unclassified Income
+```
+
+Joining refuses a line that is not a fall-through (one a rule or a correction
+has already placed), a transfer that already has a mirror, a line imported into
+an account other than the transfer's counterpart, a line for a different
+amount, and a line that goes the same way as the transfer. The window and the
+IBAN are not checked, since overriding them is the point. The line's own
+posting in the bucket is cancelled by an adjusting entry dated at the line, and
+the classification becomes a mirror of that transfer, marked as corrected by
+hand, which tells it apart from a mirror absorbed on import and from a
+category correction. The whole join is one operation group, and nothing is
+edited or deleted.
+
+`unjoin-transfer LINE_ENTRY` reverses it. It takes the line only: another
+adjusting entry puts the row's own posting back in the bucket of its direction,
+and the row is a fall-through again. Because a human made the call, it stays
+marked as corrected, so no later import or `classify-rules` run absorbs it
+again; `join-transfer` can join it afresh. A line that a rule first sent to
+another account and that was moved into the bucket by hand goes back to the
+bucket, not to that account.
+
 Kohle never decides that a rule is a transfer from the type of its target: only
 the `transfer` key does. A rule written with `account = "Transfers"`, naming an
 asset clearing account, keeps meaning what it always did, and a rule has exactly

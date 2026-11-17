@@ -299,3 +299,47 @@ def first_statement_dates_service(
         return {account_id: first for account_id, first in rows}
 
     return ctx.run(op).map_err(lambda err: ClassificationError(str(err)))
+
+
+@crud_update
+def clear_mirror_service(
+    ctx: DbTransactionContext, classification_id: int, final_account_id: int, by_human: bool
+) -> Result[Classification, ClassificationError]:
+    """The line is no longer the other side of a transfer: its own posting is
+    back on `final_account_id`. `corrected` is set only when a human made the
+    call."""
+
+    def op(session: Session) -> Classification | None:
+        classification = session.get(Classification, classification_id)
+        if classification is not None:
+            classification.kind = ClassificationKind.category
+            classification.final_account_id = final_account_id
+            classification.mirror_of_entry_id = None
+            classification.corrected = classification.corrected or by_human
+        return classification
+
+    return (
+        ctx.run(op)
+        .map_err(lambda err: ClassificationError(str(err)))
+        .and_then(lambda classification:
+            Result.ok(classification)
+            if classification is not None
+            else Result.err(ClassificationError(f"Classification id {classification_id} not found"))
+        )
+    )
+
+
+@crud_retrieve
+def mirror_of_service(
+    ctx: DbTransactionContext, transfer_entry_id: int
+) -> Result[Classification | None, ClassificationError]:
+    """The classification of the row absorbed into the transfer, or None."""
+
+    def op(session: Session) -> Classification | None:
+        return (
+            session.query(Classification)
+            .filter(Classification.mirror_of_entry_id == transfer_entry_id)
+            .one_or_none()
+        )
+
+    return ctx.run(op).map_err(lambda err: ClassificationError(str(err)))

@@ -33,6 +33,8 @@ _WRITE_ARGV: dict[str, list[str]] = {
     "add-group": ["add-group", "Flat"],
     "split-line": ["split-line", "1", "--mine", "5", "--share", "Anna:5"],
     "unsplit-line": ["unsplit-line", "1"],
+    "join-transfer": ["join-transfer", "2", "1"],
+    "unjoin-transfer": ["unjoin-transfer", "2"],
     "set-price-source": ["set-price-source", "IE00B4L5Y983", "alphavantage", "IWDA"],
     "fetch-prices": ["fetch-prices"],
     "set-sampling-rules": ["set-sampling-rules", "salary: last day"],

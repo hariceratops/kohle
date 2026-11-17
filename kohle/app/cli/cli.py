@@ -106,7 +106,11 @@ from kohle.use_cases.splitting import (
     WhoOwesWhat,
     WhoOwesWhatByGroup,
 )
-from kohle.use_cases.transfers import ListUnmirroredTransfers
+from kohle.use_cases.transfers import (
+    JoinTransfer,
+    ListUnmirroredTransfers,
+    UnjoinTransfer,
+)
 from kohle.use_cases.units import AddUnit, ListUnits
 
 
@@ -1035,6 +1039,29 @@ def list_unmirrored_transfers_cmd(make_session):
         for transfer in transfers
     ]
     click.echo(tabulate(rows, headers="keys", floatfmt=".2f"))
+
+
+@cli.command(writes=True)
+@click.argument("line_entry", type=int)
+@click.argument("transfer_entry", type=int)
+@click.pass_obj
+def join_transfer_cmd(make_session, line_entry: int, transfer_entry: int):
+    """Join a fall-through line to a transfer as its mirror."""
+    res = JoinTransfer(make_session()).execute(line_entry, transfer_entry)
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    click.echo(f"Joined entry {line_entry} to transfer {transfer_entry}")
+
+
+@cli.command(writes=True)
+@click.argument("line_entry", type=int)
+@click.pass_obj
+def unjoin_transfer_cmd(make_session, line_entry: int):
+    """Undo the join of a line to its transfer."""
+    res = UnjoinTransfer(make_session()).execute(line_entry)
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    click.echo(f"Unjoined entry {line_entry}")
 
 
 @cli.command(writes=True)
