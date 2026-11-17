@@ -1,14 +1,21 @@
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 from kohle.core.result import Result
-from kohle.domain.domain_errors import AccountError, ClassificationError, JournalError
+from kohle.domain.domain_errors import (
+    AccountError,
+    ClassificationError,
+    JournalError,
+    ListUnmirroredError,
+)
 from kohle.domain.models import Classification, JournalEntry
 from kohle.infrastructure.transaction_context import DbTransactionContext
+from kohle.infrastructure.uow import UnitOfWork
 from kohle.services.account_services import list_accounts_service
 from kohle.services.classification_services import (
+    first_statement_dates_service,
     open_transfers_service,
     rerun_candidates_service,
     set_mirror_service,
@@ -149,3 +156,54 @@ def absorb_counterpart_fall_through(
     if absorbed.is_err:
         return Result.err(absorbed.unwrap_err())
     return Result.ok(picked)
+
+
+@dataclass(frozen=True, slots=True)
+class UnmirroredTransfer:
+    entry_id: int
+    entry_date: date
+    description: str
+    amount: Decimal  # signed, on the statement the transfer was made from
+    account_name: str  # that statement's account
+    counterpart_name: str
+
+
+class ListUnmirroredTransfers(UnitOfWork[list[UnmirroredTransfer], ListUnmirroredError]):
+    """Transfers whose mirror has not arrived, so a late or missing row shows.
+
+    Only counterparts that have had a statement imported are considered, and
+    only transfers no earlier than that statement's first row minus the
+    window: a mirror dated before the first import will never arrive."""
+
+    def execute(self) -> Result[list[UnmirroredTransfer], ListUnmirroredError]:
+        def use_case(ctx: DbTransactionContext) -> Result[list[UnmirroredTransfer], ListUnmirroredError]:
+            open_res = open_transfers_service(ctx)
+            if open_res.is_err:
+                return Result.err(open_res.unwrap_err())
+            transfers = open_res.unwrap()
+            firsts_res = first_statement_dates_service(ctx, {t.final_account_id for t in transfers})
+            if firsts_res.is_err:
+                return Result.err(firsts_res.unwrap_err())
+            firsts = firsts_res.unwrap()
+            accounts_res = list_accounts_service(ctx)
+            if accounts_res.is_err:
+                return Result.err(accounts_res.unwrap_err())
+            names = {account.id: account.name for account in accounts_res.unwrap()}
+            window = timedelta(days=MIRROR_WINDOW_DAYS)
+            return Result.ok(
+                [
+                    UnmirroredTransfer(
+                        entry_id=transfer.entry.id,
+                        entry_date=transfer.entry.entry_date,
+                        description=transfer.entry.description,
+                        amount=statement_amount(transfer),
+                        account_name=names[statement_line(transfer).account_id],
+                        counterpart_name=names[transfer.final_account_id],
+                    )
+                    for transfer in transfers
+                    if transfer.final_account_id in firsts
+                    and transfer.entry.entry_date >= firsts[transfer.final_account_id] - window
+                ]
+            )
+
+        return self._run(use_case)

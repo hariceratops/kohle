@@ -543,6 +543,8 @@ BalanceError = AccountError | JournalError | LotError
 # rather than reaching here (design §6.2).
 ListUnclassifiedError = AccountError | ClassificationError
 
+ListUnmirroredError = AccountError | ClassificationError
+
 # JournalError surfaces PostingToNonLeafAccount from validate_lines inside
 # post_entry, unchanged and not re-implemented for the adjusting entry
 # (design §7.4). SplitError surfaces EntryAlreadySplit, the guard added so

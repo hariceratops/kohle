@@ -106,6 +106,7 @@ from kohle.use_cases.splitting import (
     WhoOwesWhat,
     WhoOwesWhatByGroup,
 )
+from kohle.use_cases.transfers import ListUnmirroredTransfers
 from kohle.use_cases.units import AddUnit, ListUnits
 
 
@@ -1007,6 +1008,31 @@ def list_unclassified_cmd(make_session):
             "account": line.account_name,
         }
         for line in lines
+    ]
+    click.echo(tabulate(rows, headers="keys", floatfmt=".2f"))
+
+
+@cli.command(writes=False)
+@click.pass_obj
+def list_unmirrored_transfers_cmd(make_session):
+    """List the transfers whose mirror has not arrived."""
+    res = ListUnmirroredTransfers(make_session()).execute()
+    if res.is_err:
+        raise click.ClickException(str(res.unwrap_err()))
+    transfers = res.unwrap()
+    if not transfers:
+        click.echo("No transfers awaiting a mirror")
+        return
+    rows = [
+        {
+            "entry_id": transfer.entry_id,
+            "date": transfer.entry_date,
+            "description": transfer.description,
+            "amount": transfer.amount,
+            "account": transfer.account_name,
+            "counterpart": transfer.counterpart_name,
+        }
+        for transfer in transfers
     ]
     click.echo(tabulate(rows, headers="keys", floatfmt=".2f"))
 

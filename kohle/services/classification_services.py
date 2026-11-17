@@ -1,6 +1,7 @@
 from collections.abc import Iterable
+from datetime import date
 
-from sqlalchemy import and_, exists, select
+from sqlalchemy import and_, exists, func, select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from kohle.core.result import Result
@@ -267,5 +268,34 @@ def open_transfers_service(
         if counterpart_id is not None:
             query = query.filter(Classification.final_account_id == counterpart_id)
         return query.order_by(JournalEntry.entry_date.asc(), Classification.journal_entry_id.asc()).all()
+
+    return ctx.run(op).map_err(lambda err: ClassificationError(str(err)))
+
+
+@crud_retrieve
+def first_statement_dates_service(
+    ctx: DbTransactionContext, account_ids: Iterable[int]
+) -> Result[dict[int, date], ClassificationError]:
+    """For each of `account_ids` that is the statement account of some
+    classification, the earliest entry date of such a row.
+
+    The statement account is the entry's line that is not on
+    proposed_account_id, so a transfer's counterpart is not mistaken for the
+    account the row was imported into.
+    """
+
+    def op(session: Session) -> dict[int, date]:
+        rows = (
+            session.query(JournalLine.account_id, func.min(JournalEntry.entry_date))
+            .join(JournalEntry, JournalLine.entry_id == JournalEntry.id)
+            .join(Classification, Classification.journal_entry_id == JournalEntry.id)
+            .filter(
+                JournalLine.account_id.in_(list(account_ids)),
+                JournalLine.account_id != Classification.proposed_account_id,
+            )
+            .group_by(JournalLine.account_id)
+            .all()
+        )
+        return {account_id: first for account_id, first in rows}
 
     return ctx.run(op).map_err(lambda err: ClassificationError(str(err)))

@@ -216,6 +216,8 @@ $ kohle-cli import-statement kohle-deutsche-bank Savings savings.csv
 Import succeeded, 1 entries imported
 $ kohle-cli list-unclassified
 No unclassified lines
+$ kohle-cli list-unmirrored-transfers
+No transfers awaiting a mirror
 $ kohle-cli balance Savings
 unit                     quantity  price    price date      market value  status      average cost
 ---------------------  ----------  -------  ------------  --------------  --------  --------------
@@ -235,6 +237,16 @@ so a rule never classifies such a row, and the two statements can be imported
 in either order: the move is dated by the statement that posted it. A row more
 than three days away is not recognised and falls through to its bucket like any
 other.
+
+`list-unmirrored-transfers` shows the transfers whose other side has not
+arrived, so a late or missing row stands out. It prints the entry id, date,
+description, signed amount, the account the transfer was made from and its
+counterpart. A transfer is listed only when its counterpart has had a statement
+imported, and only when it is dated no earlier than three days before that
+statement's first row, since a row older than the first import will never
+arrive. A transfer to an account that has never been imported is not listed,
+and neither is one whose mirror was absorbed. The command only reads: it writes
+nothing and records no operation group.
 
 Kohle never decides that a rule is a transfer from the type of its target: only
 the `transfer` key does. A rule written with `account = "Transfers"`, naming an
