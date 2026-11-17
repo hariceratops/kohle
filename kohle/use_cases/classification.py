@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
-from uuid import uuid4
 
 from kohle.core.result import Result
 from kohle.domain.domain_errors import (
@@ -9,7 +8,6 @@ from kohle.domain.domain_errors import (
     ClassifyPlanChanged,
     ClassifyRulesError,
     EntryAlreadySplit,
-    JournalError,
     ListUnclassifiedError,
     NoSplitForEntry,
     PostingToNonLeafAccount,
@@ -29,13 +27,10 @@ from kohle.services.classification_services import (
     set_rerun_outcome_service,
     unclassified_classifications_service,
 )
-from kohle.services.journal_services import Counterparty, LineSpec
+from kohle.services.journal_services import Counterparty
 from kohle.services.split_services import split_by_entry_service
-from kohle.use_cases.journal import (
-    UNCLASSIFIED_EXPENSE,
-    UNCLASSIFIED_INCOME,
-    post_entry,
-)
+from kohle.use_cases.accounts import UNCLASSIFIED_EXPENSE, UNCLASSIFIED_INCOME
+from kohle.use_cases.posting import post_correction, statement_amount
 from kohle.use_cases.rules import compile_rules, match_rule, stored_rules
 
 # classification.py may import from journal.py (post_entry, the bucket names)
@@ -108,34 +103,6 @@ class ListUnclassified(UnitOfWork[list[UnclassifiedLine], ListUnclassifiedError]
         return self._run(use_case)
 
 
-def _post_correction(
-    ctx: DbTransactionContext, classification: Classification, to_account_id: int, description: str
-) -> Result[JournalEntry, JournalError]:
-    """Reverse the line out of final_account_id and post it onto the target.
-
-    The one place a line moves between accounts after import. The original
-    counterpart line to mirror is located by proposed_account_id: after a
-    first move the original entry still carries its line there, not on the
-    final account.
-    """
-    entry = classification.entry
-    original_line = next(line for line in entry.lines if line.account_id == classification.proposed_account_id)
-    lines = [
-        LineSpec(
-            classification.final_account_id, original_line.unit_id, original_line.quantity,
-            original_line.unit_price, is_debit=not original_line.is_debit,
-        ),
-        LineSpec(
-            to_account_id, original_line.unit_id, original_line.quantity,
-            original_line.unit_price, is_debit=original_line.is_debit,
-        ),
-    ]
-    # Dated the original entry's date, not today: balance and
-    # entries-in-period are period queries, and dating the correction
-    # today would leave the original period permanently misreported.
-    return post_entry(ctx, entry.entry_date, uuid4().hex, description, lines)
-
-
 class Reclassify(UnitOfWork[JournalEntry, ReclassifyError]):
     """Corrects a classified line by posting a reversing pair, never by
     editing the original entry (design §7.1).
@@ -175,7 +142,7 @@ class Reclassify(UnitOfWork[JournalEntry, ReclassifyError]):
             right_account = account_res.unwrap()
 
             entry = classification.entry
-            adjusting_entry_res = _post_correction(
+            adjusting_entry_res = post_correction(
                 ctx, classification, right_account.id, f"Reclassify: {entry.description}"
             )
             if adjusting_entry_res.is_err:
@@ -208,13 +175,6 @@ class RerunMove:
         return (self.entry_id, self.rule_id, self.account_id)
 
 
-def _rule_amount(classification: Classification) -> Decimal:
-    """The signed amount the import gave the rules: the counterpart line is
-    debited exactly when the amount was negative."""
-    line = next(line for line in classification.entry.lines if line.account_id == classification.proposed_account_id)
-    return -line.value if line.is_debit else line.value
-
-
 def _plan_moves(ctx: DbTransactionContext) -> Result[list[RerunMove], ClassifyRulesError]:
     bucket_ids = []
     for bucket_name in (UNCLASSIFIED_EXPENSE, UNCLASSIFIED_INCOME):
@@ -242,7 +202,7 @@ def _plan_moves(ctx: DbTransactionContext) -> Result[list[RerunMove], ClassifyRu
     for classification in candidates_res.unwrap():
         entry = classification.entry
         counterparty = Counterparty(entry.counterparty_name, entry.counterparty_iban)
-        amount = _rule_amount(classification)
+        amount = statement_amount(classification)
         matched = match_rule(compiled, entry.description, counterparty, amount)
         # A rule aimed at the bucket the line is already in moves nothing.
         if matched is None or matched.account_id == classification.final_account_id:
@@ -288,7 +248,7 @@ class ApplyClassifyRules(UnitOfWork[list[RerunMove], ClassifyRulesError]):
                 if classification_res.is_err:
                     return Result.err(classification_res.unwrap_err())
                 classification = classification_res.unwrap()
-                posted = _post_correction(ctx, classification, move.account_id, f"Classify: {move.description}")
+                posted = post_correction(ctx, classification, move.account_id, f"Classify: {move.description}")
                 if posted.is_err:
                     return Result.err(posted.unwrap_err())
                 outcome = set_rerun_outcome_service(ctx, classification.id, move.account_id, move.rule_id)

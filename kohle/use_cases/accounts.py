@@ -21,6 +21,8 @@ from kohle.services.account_services import (
 )
 
 PEOPLE_ROOT = "People"
+UNCLASSIFIED_EXPENSE = "Unclassified Expense"
+UNCLASSIFIED_INCOME = "Unclassified Income"
 
 
 class AddAccount(UnitOfWork[Account, AccountError]):
@@ -116,3 +118,10 @@ def balance_sheet_accounts(ctx: DbTransactionContext) -> Result[BalanceSheetAcco
         own={a.id: a.name for a in accounts if own_account(a, people_ids)},
         people={a.id: a.name for a in accounts if a.id in people_ids},
     ))
+
+
+def get_or_create_account(ctx: DbTransactionContext, name: str, account_type: AccountType):
+    existing = get_account_by_name_service(ctx, name)
+    if existing.is_ok:
+        return existing
+    return add_account_service(ctx, name, account_type)
