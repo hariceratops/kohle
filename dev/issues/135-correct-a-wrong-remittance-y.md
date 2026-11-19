@@ -15,3 +15,6 @@ A completed remittance whose Y was mistyped is corrected by reversing the comple
 - The classification records distinguish the reversal from a human category correction.
 - `recording-entries.md` is updated.
 - Every existing test passes unchanged.
+
+## Review 2026-11-19
+- The incoming completion on a ledger whose lot replay already fails was untested. The reversal replays only for outgoing remittances, which matches the design (reversing an incoming completion restores lots and cannot starve a spend), so the criterion's wording is loose. Fix: test that the incoming completion refuses on such a ledger and writes nothing.

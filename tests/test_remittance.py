@@ -593,6 +593,22 @@ def test_an_incoming_completion_without_any_lot_fails_and_writes_nothing(session
     assert session.query(JournalEntry).count() == entries
 
 
+def test_an_incoming_completion_refuses_on_a_ledger_whose_replay_already_fails(
+    session: Session, cash_rows, statement_row
+) -> None:
+    entry_id = _pending_in(session, cash_rows, statement_row)
+    # Spent before any rupee was held: a shortfall the completion did not cause.
+    _record(session, "2000-01-01", "Early", "10", "--from", "IndianBank", "--to", "Checking", "--from-unit", "INR", "--total", "1")
+    entries, groups = session.query(JournalEntry).count(), session.query(OperationGroup).count()
+
+    assert CompleteRemittance(session).execute(entry_id, Decimal(90000)).is_err
+
+    assert session.query(JournalEntry).count() == entries
+    assert session.query(OperationGroup).count() == groups
+    record = session.query(Classification).filter(Classification.journal_entry_id == entry_id).one()
+    assert record.completion_entry_id is None
+
+
 # Correcting a wrong Y
 
 
