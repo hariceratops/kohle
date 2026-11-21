@@ -4,7 +4,7 @@ from datetime import date
 from decimal import Decimal
 
 from sqlalchemy import or_
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from kohle.core.result import Result
 from kohle.domain.domain_errors import (
@@ -55,9 +55,11 @@ def add_journal_entry_service(
     description: str,
     lines: Iterable[LineSpec],
     counterparty: Counterparty | None = None,
+    reverses_entry_id: int | None = None,
 ) -> Result[JournalEntry, JournalError]:
     def op(session: Session) -> JournalEntry:
         entry = JournalEntry(
+            reverses_entry_id=reverses_entry_id,
             entry_date=entry_date,
             reference=reference,
             description=description,
@@ -92,6 +94,23 @@ def add_journal_entry_service(
             )
             else JournalError(str(err))
         ))
+    )
+
+
+@crud_retrieve
+def entry_by_id_service(ctx: DbTransactionContext, entry_id: int) -> Result[JournalEntry, JournalError]:
+    def op(session: Session) -> JournalEntry | None:
+        return (
+            session.query(JournalEntry)
+            .options(selectinload(JournalEntry.lines))
+            .filter(JournalEntry.id == entry_id)
+            .one_or_none()
+        )
+
+    return (
+        ctx.run(op)
+        .map_err(lambda err: JournalError(str(err)))
+        .and_then(lambda entry: Result.ok(entry) if entry is not None else Result.err(JournalError(f"Entry {entry_id} not found")))
     )
 
 

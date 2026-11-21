@@ -4,17 +4,25 @@ from sqlalchemy.orm import Session, joinedload
 
 from kohle.core.result import Result
 from kohle.domain.domain_errors import RuleError, RuleNotFoundError
-from kohle.domain.models import Rule
+from kohle.domain.models import Rule, RuleKind
 from kohle.infrastructure.crud import crud_create, crud_delete, crud_retrieve, crud_update
 from kohle.infrastructure.transaction_context import DbTransactionContext
 
 
 @crud_create
 def add_rule_service(
-    ctx: DbTransactionContext, condition: str, account_id: int, priority: int, note: str | None = None
+    ctx: DbTransactionContext,
+    condition: str,
+    account_id: int,
+    priority: int,
+    note: str | None = None,
+    kind: RuleKind = RuleKind.category,
+    unit_id: int | None = None,
 ) -> Result[Rule, RuleError]:
     def op(session: Session) -> Rule:
-        rule = Rule(condition=condition, account_id=account_id, priority=priority, note=note)
+        rule = Rule(
+            condition=condition, account_id=account_id, priority=priority, note=note, kind=kind, unit_id=unit_id
+        )
         session.add(rule)
         return rule
 
@@ -25,7 +33,7 @@ def add_rule_service(
 def update_rule_service(
     ctx: DbTransactionContext, rule_id: int, priority: int, note: str | None
 ) -> Result[Rule, RuleError]:
-    """The only update path: condition and account_id are not arguments, so a
+    """The only update path: condition, account_id, kind and unit_id are not arguments, so a
     rule's immutability is structural rather than a convention."""
 
     def op(session: Session) -> Rule | None:
@@ -53,7 +61,7 @@ def list_rules_service(ctx: DbTransactionContext) -> Result[list[Rule], RuleErro
             session.query(Rule)
             # The unit of work closes the session before the caller sees these,
             # so anything the caller reads has to be loaded up front.
-            .options(joinedload(Rule.account))
+            .options(joinedload(Rule.account), joinedload(Rule.unit))
             .filter(Rule.deleted_at.is_(None))
             # This ordering is the evaluation contract, not presentation: the
             # matcher takes the first rule that hits and compiles the list

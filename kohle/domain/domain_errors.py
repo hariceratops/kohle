@@ -311,8 +311,123 @@ class NoClassificationForEntry(ClassificationError):
         )
 
 
+class NotAFallThrough(ClassificationError):
+    def __init__(self, entry_id: int) -> None:
+        super().__init__()
+        self.entry_id = entry_id
+
+    def __str__(self) -> str:
+        return f"Entry {self.entry_id} is not in an unclassified bucket; only a fall-through line can be joined"
+
+
+class NotATransfer(ClassificationError):
+    def __init__(self, entry_id: int) -> None:
+        super().__init__()
+        self.entry_id = entry_id
+
+    def __str__(self) -> str:
+        return f"Entry {self.entry_id} is not a transfer"
+
+
+class TransferHasMirror(ClassificationError):
+    def __init__(self, entry_id: int, mirror_id: int) -> None:
+        super().__init__()
+        self.entry_id = entry_id
+        self.mirror_id = mirror_id
+
+    def __str__(self) -> str:
+        return f"Transfer {self.entry_id} already has a mirror, entry {self.mirror_id}; unjoin-transfer {self.mirror_id} first"
+
+
+class NotTheMirror(ClassificationError):
+    def __init__(self, line_id: int, transfer_id: int, reason: str) -> None:
+        super().__init__()
+        self.line_id = line_id
+        self.transfer_id = transfer_id
+        self.reason = reason
+
+    def __str__(self) -> str:
+        return f"Entry {self.line_id} cannot be the mirror of transfer {self.transfer_id}: {self.reason}"
+
+
+class NotAMirror(ClassificationError):
+    def __init__(self, entry_id: int) -> None:
+        super().__init__()
+        self.entry_id = entry_id
+
+    def __str__(self) -> str:
+        return f"Entry {self.entry_id} is not the mirror of a transfer"
+
+
+class IsAMirror(ClassificationError):
+    def __init__(self, entry_id: int, transfer_id: int) -> None:
+        super().__init__()
+        self.entry_id = entry_id
+        self.transfer_id = transfer_id
+
+    def __str__(self) -> str:
+        return (
+            f"Entry {self.entry_id} is the mirror of transfer {self.transfer_id}; "
+            f"unjoin-transfer {self.entry_id} first"
+        )
+
+
+class InvalidTransferTarget(ClassificationError):
+    def __init__(self, account_name: str, reason: str) -> None:
+        super().__init__()
+        self.account_name = account_name
+        self.reason = reason
+
+    def __str__(self) -> str:
+        return f"Account {self.account_name!r} cannot be a transfer's counterpart: {self.reason}"
+
+
+class NotARemittance(ClassificationError):
+    def __init__(self, entry_id: int) -> None:
+        super().__init__()
+        self.entry_id = entry_id
+
+    def __str__(self) -> str:
+        return f"Entry {self.entry_id} is not a remittance"
+
+
+class RemittanceCompleted(ClassificationError):
+    def __init__(self, entry_id: int, completion_entry_id: int) -> None:
+        super().__init__()
+        self.entry_id = entry_id
+        self.completion_entry_id = completion_entry_id
+
+    def __str__(self) -> str:
+        return (
+            f"Remittance {self.entry_id} is completed by entry {self.completion_entry_id}; "
+            f"uncomplete-remittance {self.entry_id} first"
+        )
+
+
+class RemittanceNotCompleted(ClassificationError):
+    def __init__(self, entry_id: int) -> None:
+        super().__init__()
+        self.entry_id = entry_id
+
+    def __str__(self) -> str:
+        return f"Remittance {self.entry_id} is not completed"
+
+
 class SplitError(Exception):
     pass
+
+
+class NotSplittable(SplitError):
+    """A transfer, or the absorbed mirror of one, is a move between own accounts:
+    splitting it would take shares out of a balance the move already settled."""
+
+    def __init__(self, entry_id: int, reason: str) -> None:
+        super().__init__()
+        self.entry_id = entry_id
+        self.reason = reason
+
+    def __str__(self) -> str:
+        return f"Entry {self.entry_id} cannot be split: {self.reason}"
 
 
 class NotAPersonAccount(SplitError):
@@ -451,7 +566,7 @@ StatementError = MalformedStatementRow | DuplicateReferenceInStatement | Missing
 
 ImportStatementError = \
         StatementError | \
-        AccountNotFoundError | \
+        AccountError | \
         JournalError | \
         UnitError | \
         RuleError | \
@@ -459,7 +574,7 @@ ImportStatementError = \
 
 RecordEntryError = AccountError | UnitError | JournalError | BaseCurrencyAsCrossUnit
 
-ApplyRulesError = RuleError | AccountError
+ApplyRulesError = RuleError | AccountError | UnitError
 
 ClassifyRulesError = AccountError | JournalError | ClassificationError | RuleError
 
@@ -543,6 +658,14 @@ BalanceError = AccountError | JournalError | LotError
 # rather than reaching here (design §6.2).
 ListUnclassifiedError = AccountError | ClassificationError
 
+ListUnmirroredError = AccountError | ClassificationError
+
+ListPendingRemittancesError = ClassificationError
+
+# BalanceError carries the LotShortfall an incoming completion would cause
+# (design §9.4) and the JournalError from posting.
+RemittanceError = ClassificationError | BalanceError
+
 # JournalError surfaces PostingToNonLeafAccount from validate_lines inside
 # post_entry, unchanged and not re-implemented for the adjusting entry
 # (design §7.4). SplitError surfaces EntryAlreadySplit, the guard added so
@@ -554,6 +677,8 @@ ReclassifyError = AccountError | JournalError | ClassificationError | SplitError
 # post_entry for the adjusting entry, and DuplicateLineInEntry for two
 # persons named twice in one invocation (design §4.3).
 SplitImportedEntryError = AccountError | JournalError | ClassificationError | SplitError
+
+JoinTransferError = AccountError | JournalError | ClassificationError | SplitError
 
 
 class PriceError(Exception):

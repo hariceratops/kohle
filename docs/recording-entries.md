@@ -111,6 +111,33 @@ Recording reads no fetched rate: the cost comes from the entry alone, so a
 rate fetched later never changes it. The currency unit has to exist first, and
 is added like any other (see [Accounts and units](accounts-and-units.md#currencies)).
 
+When the euros left through an imported card payment and the rupees are only
+known later, a remittance rule parks the payment in a pending bucket and
+`complete-remittance ENTRY_ID AMOUNT` posts this same two-amount form once you
+have the amount received, dated at the original payment (see
+[Remittances](import-and-classification.md#remittances)).
+
+The same command completes a euro inflow from such a service, the rupees
+changed back. There `AMOUNT` is the rupees that left, and the completing entry
+is the reverse two-amount form described in
+[Changing a currency back into euros](#changing-a-currency-back-into-euros): it
+takes the rupees out of the account oldest lot first and clears the euros
+received from the pending bucket, dated at the original line. The gain over the
+lots' cost shows in `realised` under the currency's unit. If the account holds
+fewer rupees than `AMOUNT`, the command fails and writes nothing.
+
+If the amount was mistyped, `uncomplete-remittance ENTRY_ID` reverses the
+completion and puts the remittance back in pending, and `complete-remittance`
+then redoes it with the right amount. It works in both directions. The reversal
+is a new entry dated like the completion and linked to it, so nothing is
+edited or deleted and the audit trail keeps every step. The lot replay treats
+the completion and its reversal as if neither had been recorded: for an
+incoming remittance the consumed lots come back with their dates and costs and
+the gain disappears from `realised`, and for an outgoing one the lot is gone
+without any gain or loss being booked. Reversing an outgoing completion fails
+and writes nothing if a later spend of the currency would then be short, and a
+remittance that is not completed cannot be reversed.
+
 ## Opening balances
 
 Holdings you already have when you start enter as an opening entry, not as a

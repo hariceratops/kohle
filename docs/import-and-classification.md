@@ -174,6 +174,310 @@ If a rule's target has gained a child account since the rule was written, the
 import fails naming it, rather than quietly falling back to the bucket and
 leaving the rule disabled.
 
+## Transfers between your own accounts
+
+A rule that names an expense or income account describes spending or income. A
+payment between two of your own accounts is neither, so a rule can instead name
+the other own account with `transfer` in place of `account`. A line that
+matches becomes one move between the account it was imported into and that
+account, and leaves nothing in any expense, income or unclassified account:
+
+<!-- docs: file transfer-rules.toml -->
+```toml
+[[rule]]
+transfer = "Savings"
+note = "monthly savings"
+[rule.when]
+iban = "DE44500105175407324931"
+direction = "out"
+
+[[rule]]
+account = "Groceries"
+[rule.when]
+counterparty = "FRISCHMARKT"
+```
+
+<!-- docs: uses transfer-rules.toml -->
+```console
+$ kohle-cli add-account Checking --type asset
+Added account Checking (asset) with id 2
+$ kohle-cli add-account Savings --type asset
+Added account Savings (asset) with id 3
+$ kohle-cli add-account Groceries --type expense
+Added account Groceries (expense) with id 4
+$ kohle-cli apply-rules transfer-rules.toml --yes
+2 added, 0 retired, 0 reordered, 0 note changed, 0 unchanged
+  rule 1 (new) -> transfer Savings { iban = "DE44500105175407324931", direction = "out" }
+  rule 2 (new) -> Groceries { counterparty = "FRISCHMARKT" }
+Applied: 2 added, 0 retired, 0 reordered, 0 note changed, 0 unchanged
+$ kohle-cli import-statement kohle-deutsche-bank Checking transfers.csv
+Import succeeded, 2 entries imported
+$ kohle-cli import-statement kohle-deutsche-bank Savings savings.csv
+Import succeeded, 1 entries imported
+$ kohle-cli list-unclassified
+No unclassified lines
+$ kohle-cli list-unmirrored-transfers
+No transfers awaiting a mirror
+$ kohle-cli balance Savings
+unit                     quantity  price    price date      market value  status      average cost
+---------------------  ----------  -------  ------------  --------------  --------  --------------
+EUR                        500.00  -        -                     500.00  -                   1.00
+Total (base currency)      500.00  -        -                     500.00  -                   -
+```
+
+The second import is Savings' own statement, whose row for the same 500.00
+arrives a day later. Kohle recognises it as the other side of the move already
+posted and absorbs it: the transfer is counted once, nothing lands in an
+unclassified account, and the row needs no rule. A row is the other side of a
+transfer when it goes the opposite way for exactly the same amount and is dated
+within three calendar days of the move, inclusive. If both accounts have an
+IBAN, the row must also name the account the money came from. When several
+transfers could match, the nearest date wins. The check runs before the rules,
+so a rule never classifies such a row, and the two statements can be imported
+in either order: the move is dated by the statement that posted it. A row more
+than three days away is not recognised and falls through to its bucket like any
+other.
+
+`list-unmirrored-transfers` shows the transfers whose other side has not
+arrived, so a late or missing row stands out. It prints the entry id, date,
+description, signed amount, the account the transfer was made from and its
+counterpart. A transfer is listed only when its counterpart has had a statement
+imported, and only when it is dated no earlier than three days before that
+statement's first row, since a row older than the first import will never
+arrive. A transfer to an account that has never been imported is not listed,
+and neither is one whose mirror was absorbed. The command only reads: it writes
+nothing and records no operation group.
+
+### Joining a late mirror
+
+A row more than three days from its move is not recognised, and falls through
+to an unclassified bucket. `join-transfer LINE_ENTRY TRANSFER_ENTRY` corrects
+that one line by hand: it names the fall-through line and the transfer, and the
+line becomes the transfer's mirror. Here Savings' row arrives six days after
+the move:
+
+<!-- docs: uses transfer-rules.toml -->
+```console
+$ kohle-cli add-account Checking --type asset
+Added account Checking (asset) with id 2
+$ kohle-cli add-account Savings --type asset
+Added account Savings (asset) with id 3
+$ kohle-cli add-account Groceries --type expense
+Added account Groceries (expense) with id 4
+$ kohle-cli apply-rules transfer-rules.toml --yes
+2 added, 0 retired, 0 reordered, 0 note changed, 0 unchanged
+  rule 1 (new) -> transfer Savings { iban = "DE44500105175407324931", direction = "out" }
+  rule 2 (new) -> Groceries { counterparty = "FRISCHMARKT" }
+Applied: 2 added, 0 retired, 0 reordered, 0 note changed, 0 unchanged
+$ kohle-cli import-statement kohle-deutsche-bank Checking transfers.csv
+Import succeeded, 2 entries imported
+$ kohle-cli import-statement kohle-deutsche-bank Savings savings-late.csv
+Import succeeded, 1 entries imported
+$ kohle-cli list-unclassified
+  entry_id  date        description    counterparty      amount  account
+----------  ----------  -------------  --------------  --------  -------------------
+         3  2026-06-09  From checking  Erika Beispiel    500.00  Unclassified Income
+$ kohle-cli join-transfer 3 1
+Joined entry 3 to transfer 1
+$ kohle-cli list-unclassified
+No unclassified lines
+$ kohle-cli balance Savings
+unit                     quantity  price    price date      market value  status      average cost
+---------------------  ----------  -------  ------------  --------------  --------  --------------
+EUR                        500.00  -        -                     500.00  -                   1.00
+Total (base currency)      500.00  -        -                     500.00  -                   -
+$ kohle-cli unjoin-transfer 3
+Unjoined entry 3
+$ kohle-cli list-unclassified
+  entry_id  date        description    counterparty      amount  account
+----------  ----------  -------------  --------------  --------  -------------------
+         3  2026-06-09  From checking  Erika Beispiel    500.00  Unclassified Income
+```
+
+Joining refuses a line that is not a fall-through (one a rule or a correction
+has already placed), a transfer that already has a mirror, a line imported into
+an account other than the transfer's counterpart, a line for a different
+amount, and a line that goes the same way as the transfer. The window and the
+IBAN are not checked, since overriding them is the point. The line's own
+posting in the bucket is cancelled by an adjusting entry dated at the line, and
+the classification becomes a mirror of that transfer, marked as corrected by
+hand, which tells it apart from a mirror absorbed on import and from a
+category correction. The whole join is one operation group, and nothing is
+edited or deleted.
+
+`unjoin-transfer LINE_ENTRY` reverses it. It takes the line only: another
+adjusting entry puts the row's own posting back in the bucket of its direction,
+and the row is a fall-through again. Because a human made the call, it stays
+marked as corrected, so no later import or `classify-rules` run absorbs it
+again; `join-transfer` can join it afresh. A line that a rule first sent to
+another account and that was moved into the bucket by hand goes back to the
+bucket, not to that account.
+
+Kohle never decides that a rule is a transfer from the type of its target: only
+the `transfer` key does. A rule written with `account = "Transfers"`, naming an
+asset clearing account, keeps meaning what it always did, and a rule has exactly
+one of `account` and `transfer`. Changing a rule from one to the other, or to a
+different account, retires it and adds a new one, as any change to a rule does.
+
+A transfer's counterpart must be a leaf asset or liability account outside the
+`People` branch. Applying the file is refused, naming the rule, when it is an
+expense or income account (which includes the unclassified buckets) or a person:
+
+<!-- docs: file wrong-transfer.toml -->
+```toml
+[[rule]]
+transfer = "Groceries"
+[rule.when]
+iban = "DE44500105175407324931"
+```
+
+<!-- docs: uses wrong-transfer.toml -->
+```console
+$ kohle-cli add-account Groceries --type expense
+Added account Groceries (expense) with id 2
+$ kohle-cli apply-rules wrong-transfer.toml --yes
+Error: rule 1, transfer: 'Groceries' is an expense account; a transfer's counterpart must be an own asset or liability account
+```
+
+Rules are not tied to one account, so a transfer rule never matches a row
+imported into its own counterpart: that row skips the rule and the next one is
+tried. One rule file can therefore serve every statement.
+
+### Remittances
+
+A card payment to a money-transfer service sends euros abroad, but the other
+half, the rupees that arrive, is not known until the receiving bank's statement
+says so. A `remittance` rule names the account that will receive them and the
+currency, and until the amount is known the euros wait in a pending bucket:
+
+<!-- docs: file remittance-rules.toml -->
+```toml
+[[rule]]
+remittance = "IndianBank"
+unit = "INR"
+[rule.when]
+counterparty = "Fernweh Transfer"
+```
+
+`remittance` takes the place of `account` and `transfer`, and `unit` is required
+with it and refused with the other two. The unit must be a currency other than
+the base currency; kohle never assumes which. The counterpart follows the same
+rules as a transfer's: a leaf asset or liability account outside `People`, and
+never the pending bucket itself. A remittance rule never matches a row imported
+into its own counterpart, and the kind and the unit are part of the rule's
+identity, so changing either retires the rule and adds a new one.
+
+A matched line moves from the euro account into `Pending Remittances`, an asset
+account kohle creates when the first remittance is posted, so a ledger without
+remittance rules gains no account. Net worth counts the euros in transit at face
+value, because the pending bucket is an own account. A pending remittance is not
+an unclassified line: `list-unclassified` does not show it, and
+`list-pending-remittances` lists it instead, with its direction (from the sign
+of the line), counterpart and unit:
+
+<!-- docs: uses remittance-rules.toml -->
+```console
+$ kohle-cli add-account Checking --type asset
+Added account Checking (asset) with id 2
+$ kohle-cli add-account IndianBank --type asset
+Added account IndianBank (asset) with id 3
+$ kohle-cli add-unit INR "Indian rupee" --kind currency
+Added unit INR (currency) with id 1
+$ kohle-cli apply-rules remittance-rules.toml --yes
+1 added, 0 retired, 0 reordered, 0 note changed, 0 unchanged
+  rule 1 (new) -> remittance IndianBank INR { counterparty = "Fernweh Transfer" }
+Applied: 1 added, 0 retired, 0 reordered, 0 note changed, 0 unchanged
+$ kohle-cli import-statement kohle-deutsche-bank Checking remittance.csv
+Import succeeded, 1 entries imported
+$ kohle-cli list-unclassified
+No unclassified lines
+$ kohle-cli list-pending-remittances
+  entry_id  date        description                                                    direction      amount  account    counterpart    unit
+----------  ----------  -------------------------------------------------------------  -----------  --------  ---------  -------------  ------
+         1  2026-06-11  Card 0001 Fernweh Transfer 11-06-2026T09:14:02 money transfer  out           1012.00  Checking   IndianBank     INR
+$ kohle-cli complete-remittance 1 90000
+Completed remittance 1: 90000 INR for 1012.00 EUR
+$ kohle-cli list-pending-remittances
+No pending remittances
+```
+
+`complete-remittance ENTRY_ID AMOUNT` takes the entry id from that listing and
+the currency that arrived, here 90,000 INR. It takes the 1,012.00 euros out of
+`Pending Remittances` and puts the rupees into `IndianBank` as one lot costing
+exactly 1,012.00 euros; the rate is worked out from the two amounts and never
+typed. The completing entry is dated at the original line, so the lot counts
+from the day the euros left even when other entries were recorded in between or
+out of order. Completion is all or nothing and one step in the audit trail;
+completing a remittance that is already completed, or an entry that is not a
+remittance, fails and writes nothing. The classification record shows the
+remittance as completed, and `reclassify` and `split-line` refuse a completed
+remittance.
+
+`classify-rules` applies remittance rules to lines that fell through, as it does
+transfer rules, and shows the move as `Pending Remittances` with the counterpart
+and unit in its `kind` column. `reclassify` of a pending remittance reverses it
+out of the pending bucket onto the account you name, and the line then reads as
+a plain correction. `split-line` is refused on a remittance, because the money
+is not yet spent. Mirror recognition never absorbs a row into a pending
+remittance or a pending remittance into a row.
+
+Rupees changed back into euros work the same way in the other direction. The
+rule above has no `direction`, so it matches a euro inflow from the same service
+too; add `direction = "in"` or `direction = "out"` to the rule's `when` table to
+restrict it to one. An incoming remittance waits in `Pending Remittances` as a
+negative balance that offsets the euros received, so nothing is counted twice,
+and the rupees stay in `IndianBank` until you say how many were paid out. Here
+the 1,012.00 euros sent earlier have become one lot of 90,000 rupees, and
+1,100.00 euros come back for them:
+
+<!-- docs: uses remittance-rules.toml -->
+```console
+$ kohle-cli add-account Checking --type asset
+Added account Checking (asset) with id 2
+$ kohle-cli add-account IndianBank --type asset
+Added account IndianBank (asset) with id 3
+$ kohle-cli add-unit INR "Indian rupee" --kind currency
+Added unit INR (currency) with id 1
+$ kohle-cli apply-rules remittance-rules.toml --yes
+1 added, 0 retired, 0 reordered, 0 note changed, 0 unchanged
+  rule 1 (new) -> remittance IndianBank INR { counterparty = "Fernweh Transfer" }
+Applied: 1 added, 0 retired, 0 reordered, 0 note changed, 0 unchanged
+$ kohle-cli import-statement kohle-deutsche-bank Checking remittance.csv
+Import succeeded, 1 entries imported
+$ kohle-cli complete-remittance 1 90000
+Completed remittance 1: 90000 INR for 1012.00 EUR
+$ kohle-cli import-statement kohle-deutsche-bank Checking remittance-back.csv
+Import succeeded, 1 entries imported
+$ kohle-cli list-pending-remittances
+  entry_id  date        description                                       direction      amount  account    counterpart    unit
+----------  ----------  ------------------------------------------------  -----------  --------  ---------  -------------  ------
+         3  2026-06-20  Refund 0002 Fernweh Transfer rupees changed back  in            1100.00  Checking   IndianBank     INR
+$ kohle-cli complete-remittance 3 90000
+Completed remittance 3: 90000 INR for 1100.00 EUR
+$ kohle-cli realised
+date        account     unit      quantity    proceeds    FIFO cost    gain
+----------  ----------  ------  ----------  ----------  -----------  ------
+2026-06-20  IndianBank  INR       90000.00     1100.00      1012.00   88.00
+
+Realised gain: 88.00
+```
+
+`complete-remittance` takes the same entry id and amount, but now the amount is
+the rupees that left: 90,000 of them, taken out of `IndianBank` oldest lot
+first and dated at the original line, against the 1,100.00 euros cleared from
+`Pending Remittances`. The lot cost 1,012.00 euros, so `realised` shows a gain
+of 88.00 euros under the unit `INR`, and nothing remains pending. If
+`IndianBank` does not hold that many rupees, the command fails and writes
+nothing.
+
+A completion with a mistyped amount is corrected with
+`uncomplete-remittance ENTRY_ID`, which reverses it by a new entry, puts the
+remittance back in pending (it is listed by `list-pending-remittances` again)
+and lets `complete-remittance` redo it with the right amount. The record stays
+a remittance and is not marked as a human correction, since no category was
+changed. [Recording entries](recording-entries.md) explains what the reversal
+does to the lots and to `realised`.
+
 ## Conditions
 
 A rule's `when` table holds one or more of these keys, and **all** of them must
@@ -379,6 +683,28 @@ posts a reversing pair dated at the original entry, as `reclassify` does. The
 move is recorded against the rule that made it and does not count as a
 correction, so a rule's move is never mistaken for a human's.
 
+Transfer rules are ordinary entries in the same ordered list, so the first rule
+that matches a line wins, and `classify-rules` applies them to the lines left in
+the buckets as it does any other rule. A line that matches one becomes a move to
+the rule's account, and the same run absorbs the other side of that move: the
+untouched fall-through in the counterpart account that goes the opposite way for
+the same amount within three days. The preview lists both lines and gains a
+`kind` column, which is `transfer` for the move and `mirror of N` for the
+absorbed line, where N is the entry id of the move's statement line. A mirror
+shows `-` under `rule`, because no rule moved it. Plans made only of category
+moves have no `kind` column.
+
+Mirror recognition still runs before any rule: a fall-through that is the other
+side of a transfer already posted is absorbed even when a category rule would
+also match it, and with a transfer rule on each side the earlier line makes the
+move and absorbs the other. `Moved N line(s)` counts the mirrors as well.
+Lines a rule or a human has already classified are never touched, and the whole
+run is all or nothing and one audit-trail group.
+
+Retiring or editing a transfer rule never undoes a move already posted. Only
+`classify-rules` moves anything, so a changed rule file changes nothing until it
+is run.
+
 ## Correcting a line by hand
 
 `reclassify` moves a line onto a different account, whether a wrong rule put it
@@ -419,6 +745,33 @@ new one and the line is marked corrected, while the proposed account and the
 rule that matched stay as they were, because they record what the engine got
 wrong. Reclassifying a corrected line again reverses out of its current account,
 not its original proposal.
+
+### Correcting a transfer
+
+`reclassify` knows about transfers, so a correction never double counts and
+never leaves half of a pair undone. The target account decides the path: an
+asset or liability account outside People is an own account, so the line becomes
+a transfer to it, exactly as a transfer rule would have made it, and the
+fall-through of that account that mirrors it is absorbed. Any other target is a
+category, as before.
+
+- Reclassifying a transfer to a category, or to a different own account, first
+  puts its mirror back in its bucket, then moves the transfer. The mirror goes
+  back as an ordinary fall-through, and a mirror that a human joined stays
+  marked corrected. All of it is adjusting entries dated at each line's own
+  date, all or nothing, in one audit-trail group.
+- The mirror row of a transfer cannot be reclassified. Run `unjoin-transfer`
+  on it first; the error says so.
+- A transfer cannot target the pending bucket, or the account the line itself
+  was imported into.
+- The classification record shows what happened. A line reclassified onto an own
+  account is a `transfer` marked corrected, which tells it apart from a
+  rule-made transfer, and from a category correction.
+
+`split-line` is refused on a transfer and on the mirror row of one, with an
+error naming which it is. A transfer is a move between your own accounts, so
+there is nothing to share out. Reclassify the line to a category first if it
+really was a shared bill.
 
 An unknown entry id, an unknown target account or a target with sub-accounts
 fails with an error rather than a traceback:

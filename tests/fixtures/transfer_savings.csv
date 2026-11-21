@@ -1,0 +1,8 @@
+AktivKonto;987 654 32;DE44500105175407324931;EUR
+04/01/2026 - 04/30/2026
+Old balance;;;;200.00;EUR
+Transactions pending are not included in this report.
+Booking date;Value date;Transaction Type;Beneficiary / Originator;Payment Details;IBAN / Account Number;BIC;Customer Reference;Mandate Reference;Creditor ID;Compensation amount;Original Amount;Ultimate creditor;Number of transactions;Number of cheques;Debit;Credit;Currency
+04/04/2026;04/04/2026;Credit Transfer;Erika Beispiel;Move to savings;DE89370400440532013000;COBADEFFXXX;;;;;;;;;;500.00;EUR
+04/30/2026;04/30/2026;Credit Transfer;Sparkasse;Interest April;;;;;;;;;;;;0.40;EUR
+Account balance;04/30/2026;;;700.40;EUR

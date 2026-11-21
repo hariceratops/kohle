@@ -9,33 +9,28 @@ from kohle.core.result import Result
 from kohle.domain.domain_errors import (
     BalanceError,
     BaseCurrencyAsCrossUnit,
-    ConversionBetweenCurrencies,
-    CurrencyInflowWithoutRate,
-    CurrencyLineNotAtPar,
     DuplicateReferenceInStatement,
-    EmptyEntry,
     EndDatePrecedesStartDateError,
     ImportStatementError,
     InvalidDateError,
     JournalError,
     MalformedStatementRow,
     MissingInstrumentAccount,
-    NonPositiveQuantity,
     NotACurrencyUnit,
     NotASecurityUnit,
-    PostingToNonLeafAccount,
     QueryJournalByPeriodError,
     RecordEntryError,
     StatementError,
-    UnbalancedEntry,
     UnitNotFoundError,
     UnknownInstruments,
 )
 from kohle.domain.models import (
     BASE_CURRENCY,
     AccountType,
+    ClassificationKind,
     JournalEntry,
     JournalLine,
+    RuleKind,
     Unit,
     UnitKind,
 )
@@ -43,8 +38,6 @@ from kohle.infrastructure.transaction_context import DbTransactionContext
 from kohle.infrastructure.uow import UnitOfWork
 from kohle.plugin.importer_plugin import CashRow, SecurityRow, StatementRow
 from kohle.services.account_services import (
-    account_has_children_service,
-    add_account_service,
     descendant_account_ids_service,
     get_account_by_name_service,
     list_accounts_service,
@@ -54,22 +47,36 @@ from kohle.services.journal_services import (
     Counterparty,
     LineSpec,
     account_lines_service,
-    add_journal_entry_service,
     existing_references_service,
     query_lines_by_period_service,
 )
 from kohle.services.unit_services import (
     get_unit_by_identifier_service,
-    units_by_id_service,
 )
-from kohle.use_cases.accounts import balance_sheet_accounts
+from kohle.use_cases.accounts import (
+    PENDING_REMITTANCES,
+    UNCLASSIFIED_EXPENSE,
+    UNCLASSIFIED_INCOME,
+    balance_sheet_accounts,
+    get_or_create_account,
+)
 from kohle.use_cases.lots import line_costs
+from kohle.use_cases.posting import (
+    _PRICE_SCALE,
+    Total,
+    _cross_unit_lines,
+    post_entry,
+)
 from kohle.use_cases.rules import compile_rules, match_rule, stored_rules
+from kohle.use_cases.transfers import (
+    RowSide,
+    absorb,
+    absorb_counterpart_fall_through,
+    account_ibans,
+    nearest_transfer,
+    open_transfers_into,
+)
 from kohle.use_cases.units import get_or_create_unit
-
-_PRICE_SCALE = Decimal("0.00000001")
-UNCLASSIFIED_EXPENSE = "Unclassified Expense"
-UNCLASSIFIED_INCOME = "Unclassified Income"
 
 
 def parse_date(input_date: str) -> Result[date, InvalidDateError]:
@@ -87,96 +94,6 @@ def _optional_str(value: str | None) -> str | None:
     return value.strip() or None
 
 
-def _get_or_create_account(
-    ctx: DbTransactionContext, name: str, account_type: AccountType
-):
-    existing = get_account_by_name_service(ctx, name)
-    if existing.is_ok:
-        return existing
-    return add_account_service(ctx, name, account_type)
-
-
-def validate_lines(
-    ctx: DbTransactionContext, lines: list[LineSpec]
-) -> JournalError | None:
-    if len(lines) < 2:
-        return EmptyEntry()
-
-    invalid = _validate_price_currencies(ctx, lines)
-    if invalid:
-        return invalid
-
-    for line in lines:
-        has_children = account_has_children_service(ctx, line.account_id)
-        if has_children.is_err:
-            return JournalError(str(has_children.unwrap_err()))
-        if has_children.unwrap():
-            return PostingToNonLeafAccount(line.account_id)
-
-    return None
-
-
-def _validate_price_currencies(ctx: DbTransactionContext, lines: list[LineSpec]) -> JournalError | None:
-    """Balance within each price currency, the base currency first. The line
-    rules run, and the unit lookup is made, only when some line states a total
-    or names a price currency, so an entry in the base currency alone is
-    checked and refused exactly as it always was."""
-    for line in lines:
-        if (line.cost is not None or line.price_unit_id is not None) and line.quantity <= 0:
-            return NonPositiveQuantity(line.quantity)
-
-    priced = sorted({line.price_unit_id for line in lines if line.price_unit_id is not None})
-    units: dict[int, Unit] = {}
-    if priced:
-        units_res = units_by_id_service(ctx, priced + [line.unit_id for line in lines])
-        if units_res.is_err:
-            return JournalError(str(units_res.unwrap_err()))
-        units = units_res.unwrap()
-
-        for line in lines:
-            if line.price_unit_id is None:
-                continue
-            currency = units[line.price_unit_id].identifier
-            if line.unit_id == line.price_unit_id:
-                if line.unit_price != 1 or line.cost is not None:
-                    return CurrencyLineNotAtPar(currency)
-            elif units[line.unit_id].kind is UnitKind.currency:
-                return ConversionBetweenCurrencies(units[line.unit_id].identifier, currency)
-
-        credited = [(line, line.price_unit_id) for line in lines if line.price_unit_id is not None and not line.is_debit]
-        if credited:
-            accounts_res = list_accounts_service(ctx)
-            if accounts_res.is_err:
-                return JournalError(str(accounts_res.unwrap_err()))
-            accounts = {account.id: account for account in accounts_res.unwrap()}
-            for line, priced_in in credited:
-                account = accounts[line.account_id]
-                if line.unit_id != priced_in or account.type not in (AccountType.asset, AccountType.liability):
-                    return CurrencyInflowWithoutRate(account.name, units[priced_in].identifier)
-
-    for price_unit_id in [None, *priced]:
-        in_currency = [line for line in lines if line.price_unit_id == price_unit_id]
-        debits = sum((line.value for line in in_currency if line.is_debit), Decimal(0))
-        credits = sum((line.value for line in in_currency if not line.is_debit), Decimal(0))
-        if debits != credits:
-            return UnbalancedEntry(debits, credits, None if price_unit_id is None else units[price_unit_id].identifier)
-    return None
-
-
-def post_entry(
-    ctx: DbTransactionContext,
-    entry_date: date,
-    reference: str,
-    description: str,
-    lines: list[LineSpec],
-    counterparty: Counterparty | None = None,
-) -> Result[JournalEntry, JournalError]:
-    invalid = validate_lines(ctx, lines)
-    if invalid:
-        return Result.err(invalid)
-    return add_journal_entry_service(ctx, entry_date, reference, description, lines, counterparty)
-
-
 class RecordJournalEntry(UnitOfWork[JournalEntry, JournalError]):
     def execute(
         self,
@@ -189,17 +106,6 @@ class RecordJournalEntry(UnitOfWork[JournalEntry, JournalError]):
             return post_entry(ctx, entry_date, reference, description, list(lines))
 
         return self._run(use_case)
-
-
-@dataclass(frozen=True, slots=True)
-class Total:
-    """The whole euro value of a holding line, stated rather than derived.
-
-    A remittance of 90,000 INR for 1,000 EUR has no terminating per-unit
-    rate, so only the total is exact (design §2.1).
-    """
-
-    amount: Decimal
 
 
 @dataclass(frozen=True, slots=True)
@@ -229,42 +135,6 @@ class CrossUnitLine:
     identifier: str
     price: Decimal | Total
     is_debit: bool
-
-
-def _cross_unit_lines(
-    *,
-    holding_account_id: int,
-    holding_unit_id: int,
-    quantity: Decimal,
-    unit_price: Decimal | Total,
-    cash_account_id: int,
-    cash_unit_id: int,
-    into_holding: bool,
-    paid_in_currency: bool = False,
-) -> list[LineSpec]:
-    """Shared by `record` and imported trades so the cost fold sees one
-    definition of a trade. With `paid_in_currency`, `cash_unit_id` is the
-    currency paid, and both lines are priced in it: the euro value of the trade
-    is then the cost of the currency's lots, derived when the ledger is read."""
-    price_unit_id = cash_unit_id if paid_in_currency else None
-    if isinstance(unit_price, Total):
-        total = unit_price.amount
-        per_unit = (total / quantity).quantize(_PRICE_SCALE)
-        return [
-            LineSpec(holding_account_id, holding_unit_id, quantity, per_unit, is_debit=into_holding, cost=total, price_unit_id=price_unit_id),
-            LineSpec(cash_account_id, cash_unit_id, total, Decimal(1), is_debit=not into_holding, price_unit_id=price_unit_id),
-        ]
-    if paid_in_currency:
-        # Quantised so that what is validated is what is stored.
-        value = (quantity * unit_price).quantize(_PRICE_SCALE)
-        return [
-            LineSpec(holding_account_id, holding_unit_id, quantity, unit_price, is_debit=into_holding, cost=value, price_unit_id=price_unit_id),
-            LineSpec(cash_account_id, cash_unit_id, value, Decimal(1), is_debit=not into_holding, price_unit_id=price_unit_id),
-        ]
-    return [
-        LineSpec(holding_account_id, holding_unit_id, quantity, unit_price, is_debit=into_holding),
-        LineSpec(cash_account_id, cash_unit_id, quantity * unit_price, Decimal(1), is_debit=not into_holding),
-    ]
 
 
 class RecordSimpleEntry(UnitOfWork[JournalEntry, RecordEntryError]):
@@ -567,10 +437,10 @@ class ImportStatement(UnitOfWork[int, ImportStatementError]):
                 return Result.err(unit_res.unwrap_err())
             unit_id = unit_res.unwrap().id
 
-            expense_res = _get_or_create_account(ctx, UNCLASSIFIED_EXPENSE, AccountType.expense)
+            expense_res = get_or_create_account(ctx, UNCLASSIFIED_EXPENSE, AccountType.expense)
             if expense_res.is_err:
                 return Result.err(expense_res.unwrap_err())
-            income_res = _get_or_create_account(ctx, UNCLASSIFIED_INCOME, AccountType.income)
+            income_res = get_or_create_account(ctx, UNCLASSIFIED_INCOME, AccountType.income)
             if income_res.is_err:
                 return Result.err(income_res.unwrap_err())
             expense_id = expense_res.unwrap().id
@@ -583,6 +453,19 @@ class ImportStatement(UnitOfWork[int, ImportStatementError]):
                 return Result.err(rules_res.unwrap_err())
             compiled = compile_rules(rules_res.unwrap())
 
+            ibans_res = account_ibans(ctx)
+            if ibans_res.is_err:
+                return Result.err(ibans_res.unwrap_err())
+            ibans = ibans_res.unwrap()
+            open_transfers_res = open_transfers_into(ctx, account.id, ibans)
+            if open_transfers_res.is_err:
+                return Result.err(open_transfers_res.unwrap_err())
+            open_transfers = open_transfers_res.unwrap()
+
+            # Created on the first remittance only, so a ledger without
+            # remittance rules gains no account.
+            pending_id: int | None = None
+
             imported = 0
             for row, reference in new_rows:
                 match row:
@@ -593,14 +476,32 @@ class ImportStatement(UnitOfWork[int, ImportStatementError]):
                             _optional_str(row.counterparty_name),
                             _optional_str(row.counterparty_iban),
                         )
-                        matched = match_rule(compiled, row.description, counterparty, amount)
+                        side = RowSide(row.entry_date, amount, counterparty.iban)
+                        # Before the rules, so no rule can also classify a mirror.
+                        mirror_of = nearest_transfer(side, open_transfers)
+                        matched = (
+                            None
+                            if mirror_of is not None
+                            else match_rule(
+                                compiled, row.description, counterparty, amount, statement_account_id=account.id
+                            )
+                        )
                         # A matched rule whose account has since gained a child fails
                         # the import loudly through validate_lines, rather than falling
                         # back to the bucket: a silent fallback would leave the user's
                         # rules quietly disabled with nothing saying why.
-                        counterpart_id = matched.account_id if matched else (
-                            expense_id if amount < 0 else income_id
-                        )
+                        remittance = matched if matched and matched.kind is RuleKind.remittance else None
+                        if remittance is not None:
+                            if pending_id is None:
+                                pending_res = get_or_create_account(ctx, PENDING_REMITTANCES, AccountType.asset)
+                                if pending_res.is_err:
+                                    return Result.err(pending_res.unwrap_err())
+                                pending_id = pending_res.unwrap().id
+                            counterpart_id = pending_id
+                        elif matched is not None:
+                            counterpart_id = matched.account_id
+                        else:
+                            counterpart_id = expense_id if amount < 0 else income_id
                         lines = [
                             LineSpec(
                                 account_id=account.id,
@@ -633,9 +534,25 @@ class ImportStatement(UnitOfWork[int, ImportStatementError]):
                             proposed_account_id=counterpart_id,
                             matched_rule_id=matched.rule_id if matched else None,
                             final_account_id=counterpart_id,
+                            kind=ClassificationKind(matched.kind.value) if matched else ClassificationKind.category,
+                            remittance_account_id=remittance.account_id if remittance else None,
+                            remittance_unit_id=remittance.unit_id if remittance else None,
                         )
                         if classification_res.is_err:
                             return Result.err(classification_res.unwrap_err())
+                        classification = classification_res.unwrap()
+
+                        if mirror_of is not None:
+                            absorbed = absorb(ctx, classification, mirror_of.entry_id, by_human=False)
+                            if absorbed.is_err:
+                                return Result.err(absorbed.unwrap_err())
+                            open_transfers.remove(mirror_of)
+                        elif classification.kind is ClassificationKind.transfer:
+                            joined = absorb_counterpart_fall_through(
+                                ctx, classification, (expense_id, income_id), ibans
+                            )
+                            if joined.is_err:
+                                return Result.err(joined.unwrap_err())
                     case SecurityRow():
                         # Both accounts are named on the command line, so there
                         # is nothing for a rule to decide and no classification.
